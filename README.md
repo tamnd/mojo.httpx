@@ -2,7 +2,7 @@
 
 A full featured HTTP client for Mojo, with the same API and the same developer experience as [httpx2](https://github.com/pydantic/httpx2).
 
-**Status: pre-alpha.** Plain HTTP/1.1 requests work over TCP today. TLS, HTTP/2, redirects, auth, cookies and streaming do not exist yet, so in practice that means `http://` only. See the [roadmap](docs/roadmap.md) for what is landing and when. Do not use this in production.
+**Status: pre-alpha.** HTTP/1.1 requests work over TCP and over TLS today, so `http://` and `https://` both work. HTTP/2, redirects, auth, cookies and streaming do not exist yet. See the [roadmap](docs/roadmap.md) for what is landing and when. Do not use this in production.
 
 ## Why
 
@@ -16,9 +16,11 @@ The target is httpx2's API rather than something new, for a simple reason. Milli
 import httpx
 
 def main() raises:
-    var r = httpx.get("http://example.com/")
+    var r = httpx.get("https://example.com/")
     print(r.status_code, r.text())
 ```
+
+That request verifies the certificate chain, checks the hostname, sends SNI and refuses anything below TLS 1.2, with nothing to configure. See [TLS](docs/tls.md) for private CAs, client certificates, and what the failure messages mean.
 
 Keep a `Client` as soon as there is a second request, because a client holds its connections open and the one shot helpers do not.
 
@@ -33,7 +35,7 @@ def main() raises:
     var slow = Timeout.uniform(Optional[Float64](30.0))
 
     with Client(
-        base_url=URL("http://api.example.com"), headers=headers^, timeout=slow
+        base_url=URL("https://api.example.com"), headers=headers^, timeout=slow
     ) as client:
         var listing = client.get("/items")
         print(listing.status_code)
@@ -97,6 +99,8 @@ Mojo is not Python, and a few things cannot be copied directly. Every deviation 
 
 Mojo 1.0.0 or newer. The project pins the exact toolchain in `pixi.toml`, because the language is still moving fast enough that building against a different version is a real source of confusion.
 
+OpenSSL 3.0 or newer, for `https://`. It is loaded at runtime rather than linked, so there is no build step and no headers to install, and the copy that ships inside the Mojo toolchain's own environment is found first. Plain `http://` needs nothing.
+
 | Platform | Status |
 | --- | --- |
 | macOS arm64 | Supported, tested in CI |
@@ -121,6 +125,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. It lists 
 ## Documentation
 
 - [Architecture](docs/architecture.md) for the layer model and the design decisions behind it
+- [TLS](docs/tls.md) for the defaults, custom CA bundles, client certificates, and reading a handshake failure
 - [Roadmap](docs/roadmap.md) for milestones M0 through M9
 - [Testing](docs/testing.md) for the test layers, the CI matrix, and the local hardware fleet
 

@@ -15,7 +15,25 @@ CI runs on GitHub hosted runners and covers the three platforms Mojo supports: m
 
 A separate nightly workflow builds against the Mojo nightly toolchain. It is allowed to fail and it opens an issue when it does. Mojo still changes between releases in ways that break real code, so that job is the early warning rather than a gate.
 
-The rest of the matrix joins as the code that needs it lands: OpenSSL 3.0 and 3.6 from M3, h1 and h2 from M5, debug and release builds from M2.
+The rest of the matrix joins as the code that needs it lands: h1 and h2 from M5, debug and release builds from M2.
+
+Anything that needs the network stays out of CI. That covers the badssl suite below, because a job that goes red when somebody else's certificate expires trains people to ignore red jobs.
+
+## The badssl suite
+
+Every way of getting TLS wrong, one host per way.
+
+```bash
+pixi run badssl
+```
+
+Seventeen cases against badssl.com. Five have to be accepted and the rest have to be refused, and the refusals assert on the wording as well as on the refusal. That second part is the point. A client that rejects everything for the same vague reason is barely better than one that accepts everything, because the person reading the message still does not know which of a dozen problems they have. So an expired certificate has to say expired, a certificate issued to somebody else has to say hostname mismatch, and a server that skipped its intermediates has to say issuer.
+
+The accepted cases exist so the suite cannot pass on a client that refuses every certificate on earth, which is the failure mode a refusal only suite is blind to.
+
+Two things to know before believing a failure. badssl.com's own certificates expire and several of its hosts are broken in ways its operators did not intend, so check the host in a browser before changing any code. And `revoked.badssl.com` is expected to be accepted, because revocation is not checked here or in most non browser clients. [The TLS page](tls.md) says why.
+
+The offline half of the TLS testing is ordinary unit tests in `tests/unit/test_tls.mojo` and runs in `pixi run check` like everything else. It covers the ALPN wire encoding, the trust store search order and the key pair failure messages, against the throwaway certificates in `tests/fixtures/tls/`.
 
 ## The differential fuzzer
 
@@ -44,6 +62,7 @@ tools/fleet/run.sh                  # the test suite on every host
 tools/fleet/run.sh --host server3   # one host
 tools/fleet/run.sh --role fuzz      # every host with that role
 tools/fleet/run.sh -- pixi run bench
+tools/fleet/run.sh --role interop -- pixi run badssl
 ```
 
 The script copies the working tree over SSH, installs the pinned toolchain on the other end, and runs the task. It holds no credentials and needs no runner registered with GitHub. The only requirement is that `ssh <name>` already works.

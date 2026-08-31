@@ -218,6 +218,21 @@ struct TcpStream(Movable):
         )
         return n == 0
 
+    def wait_readable(mut self, deadline: Deadline) raises -> Bool:
+        """Block until a read would return something, or the deadline expires.
+
+        Public because TLS drives its own read loop. OpenSSL asks for more
+        socket data by returning WANT_READ rather than by blocking, so the
+        waiting has to happen one level above `read`, and a TLS layer that
+        polled the descriptor itself would be a second place where a deadline
+        turns into a timeout in milliseconds.
+        """
+        return self._wait(POLLIN, deadline)
+
+    def wait_writable(mut self, deadline: Deadline) raises -> Bool:
+        """The same for a write. See `wait_readable`."""
+        return self._wait(POLLOUT, deadline)
+
     def shutdown_write(mut self):
         """Send a FIN, leaving the socket readable.
 

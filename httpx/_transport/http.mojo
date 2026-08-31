@@ -16,6 +16,7 @@ from httpx._models.request import Request
 from httpx._models.response import Response
 from httpx._pool.limits import Limits
 from httpx._pool.pool import ConnectionPool
+from httpx._stream.config import TlsConfig
 from httpx._transport.base import Transport
 
 
@@ -33,8 +34,10 @@ struct HTTPTransport(Transport):
         """
         self.pool = ConnectionPool(Limits())
 
-    def __init__(out self, var limits: Limits) raises:
-        self.pool = ConnectionPool(limits^)
+    def __init__(
+        out self, var limits: Limits, var tls: TlsConfig = TlsConfig()
+    ) raises:
+        self.pool = ConnectionPool(limits^, tls=tls^)
 
     def handle_request(
         mut self, var request: Request, deadlines: Deadlines

@@ -48,6 +48,12 @@ The sync and async versions of an HTTP client are the same state machine driven 
 
 Instead every layer from L3 up is generic over a `ByteStream` trait. `TcpStream` and `AsyncTcpStream` both satisfy it, the protocol code compiles once, and it instantiates twice. Roughly ninety percent of the code is shared.
 
+## Plain and TLS streams are one type, not two
+
+`H1Connection` holds a `Stream`, which is either a plain socket or a TLS session over one, and nothing in the protocol code branches on which. `http://` and `https://` differ in how the bytes are carried and in nothing the state machine cares about, so that is the only place the difference should live.
+
+`Stream` is a tagged union of the two concrete stream types rather than a vtable, which is the opposite of the choice at L4. The reason is that the two sets are different shapes. The set of transports is open, because users pass their own, so it needs runtime dispatch. The set of streams is closed and always will be, because a stream is either a socket or TLS over a socket, and adding a third would be our change to make and not a user's. A closed set gets a union, an open one gets a vtable, and paying for indirection on every read of every byte to support an implementation nobody can write is not a trade worth making.
+
 ## Parsing rule
 
 `len()` on a `String` is a hard compile error in Mojo 1.0, on the grounds that the byte count and the character count are different answers and the caller should say which one they want. That is a good decision by the language, and for this project it points somewhere useful: every parser works on `Span[UInt8]` and never touches `String` at all. Strings only appear at the boundary where a user sees a value.
