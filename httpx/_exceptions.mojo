@@ -100,6 +100,7 @@ struct ErrorKind(Equatable, ImplicitlyCopyable, Movable):
     # Usage errors, also outside HTTPError in httpx2.
     comptime COOKIE_CONFLICT = ErrorKind(0x30000)
     comptime INVALID_HEADER = ErrorKind(0x31000)
+    comptime INVALID_ARGUMENT = ErrorKind(0x32000)
 
     def __eq__(self, other: Self) -> Bool:
         return self.value == other.value
@@ -209,6 +210,8 @@ def _name_of(value: UInt32) -> StaticString:
         return "CookieConflict"
     if value == 0x31000:
         return "InvalidHeader"
+    if value == 0x32000:
+        return "InvalidArgument"
     return "UnknownError"
 
 
@@ -276,6 +279,8 @@ def kind_from_name(name: StringSpan) -> ErrorKind:
         return ErrorKind.COOKIE_CONFLICT
     if name == "InvalidHeader":
         return ErrorKind.INVALID_HEADER
+    if name == "InvalidArgument":
+        return ErrorKind.INVALID_ARGUMENT
     return ErrorKind.UNKNOWN
 
 
@@ -378,6 +383,17 @@ def is_proxy_error(imm e: Error) -> Bool:
     return kind_of(e).matches(ErrorKind.PROXY_ERROR)
 
 
+def is_unsupported_protocol(imm e: Error) -> Bool:
+    """Whether the URL asked for a scheme this library does not speak.
+
+    A transport error rather than a URL error, because the URL is fine and it is
+    the routing of it that cannot be done. That also means a caller catching
+    transport failures catches this one, which is what someone passing user
+    supplied URLs wants.
+    """
+    return kind_of(e).matches(ErrorKind.UNSUPPORTED_PROTOCOL)
+
+
 def is_decoding_error(imm e: Error) -> Bool:
     return kind_of(e).matches(ErrorKind.DECODING_ERROR)
 
@@ -420,6 +436,16 @@ def is_invalid_url(imm e: Error) -> Bool:
 
 def is_invalid_header(imm e: Error) -> Bool:
     return kind_of(e) == ErrorKind.INVALID_HEADER
+
+
+def is_invalid_argument(imm e: Error) -> Bool:
+    """Whether a value handed to this library was one it cannot work with.
+
+    Outside `HTTPError` on purpose, alongside the other usage errors. A caller
+    catching request failures should not also catch its own bad configuration,
+    because the two need entirely different fixes.
+    """
+    return kind_of(e) == ErrorKind.INVALID_ARGUMENT
 
 
 def is_cookie_conflict(imm e: Error) -> Bool:

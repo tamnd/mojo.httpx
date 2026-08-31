@@ -171,7 +171,7 @@ struct H1Connection(Movable):
         deserve different limits: a slow upload is not the same problem as a
         server that never answers.
         """
-        self.send_request(request, write_at, form)
+        self.send_request(request^, write_at, form)
         return self.read_response(read_at)
 
     def send_request(
@@ -182,6 +182,15 @@ struct H1Connection(Movable):
     ) raises:
         """Write the head and, unless the server is being asked first, the body.
         """
+        if self.state == H1State.DONE:
+            # A connection that finished one exchange cleanly starts the next
+            # one from here. Clearing back to `IDLE` rather than adding a second
+            # entry state keeps the rest of the machine unaware that reuse
+            # exists, and the leftovers of the previous exchange are cleared
+            # with it so nothing from it can be read as part of this one.
+            self.state = H1State.IDLE
+            self._method = String()
+            self._pending = None
         if self.state != H1State.IDLE:
             raise _local(
                 "a request cannot be sent while this connection is busy"

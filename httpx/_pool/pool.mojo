@@ -1,0 +1,283 @@
+"""Keeping connections around, and knowing when not to.
+
+Connection reuse is most of what makes an HTTP client fast. A fresh TCP
+connection to a server across the country costs a round trip before a byte of
+request goes out, and a TLS handshake on top of that costs one or two more, so
+a second request that reuses the first request's connection can easily be three
+times quicker than one that does not.
+
+The hard part is not the keeping, it is the discarding. A pooled connection is a
+guess that the server has not closed its end, and the guess is wrong often
+enough that a pool which never checks produces a client that fails one request
+in a few hundred for no reason the user can see. So every connection is checked
+for both age and liveness on the way out of the pool, and anything that has been
+sitting long enough to be doubtful is closed rather than handed to a request.
+
+The pool runs the exchange itself rather than lending a connection out and
+trusting the caller to give it back. A borrowed connection that is dropped on an
+error path is a descriptor leak in the best case and a connection returned to the
+pool in an unknown state in the worst, and the second one hands somebody else's
+response to the wrong caller. Doing the exchange here makes both impossible.
+"""
+
+from httpx._exceptions import ErrorKind, new_error
+from httpx._io.connect import connect_to_host
+from httpx._io.deadline import (
+    NANOS_PER_SECOND,
+    Deadline,
+    Deadlines,
+    now_ns,
+)
+from httpx._io.dns import Resolver
+from httpx._models.request import Request
+from httpx._models.response import Response
+from httpx._pool.limits import Limits
+from httpx._pool.origin import Origin, origin_for
+from httpx._proto.h1.connection import H1Connection
+from httpx._proto.h1.writer import TargetForm
+
+
+struct PooledConnection(Movable):
+    """One idle connection, with what the pool needs to judge it by."""
+
+    var origin: Origin
+    var idle_since_ns: UInt64
+    """When it last finished an exchange. Age is measured from here rather than
+    from when it was opened, because a connection carrying requests back to back
+    is not the one a server is about to close."""
+
+    var _conn: Optional[H1Connection]
+    """An optional so that the connection can be taken back out again.
+
+    Mojo will not move a field whose type has a destructor out of a value that
+    still has to be destroyed, and a pooled connection exists precisely to be
+    handed back later. The optional is the seam that makes the handing back a
+    move rather than a copy of a socket.
+    """
+
+    def __init__(out self, var origin: Origin, var conn: H1Connection):
+        self.origin = origin^
+        self.idle_since_ns = now_ns()
+        self._conn = Optional[H1Connection](conn^)
+
+    def idle_seconds(self) -> Float64:
+        var elapsed = now_ns() - self.idle_since_ns
+        return Float64(elapsed) / Float64(NANOS_PER_SECOND)
+
+    def take(mut self) -> H1Connection:
+        return self._conn.take()
+
+    def is_stale(self, expiry: Optional[Float64]) -> Bool:
+        """Whether this connection is too doubtful to hand to a request.
+
+        Two checks, and both of them matter. Age is the cheap one: a connection
+        idle for longer than the keepalive expiry is one the server has probably
+        already closed, and finding that out by sending a request means the
+        request fails for a reason the user cannot act on. Liveness is the
+        honest one: a peer that closed cleanly leaves the socket readable at end
+        of file, and asking about that costs one non blocking call.
+
+        Neither check can be skipped for being unlikely. On a busy client the
+        unlikely case happens continuously.
+        """
+        if expiry and self.idle_seconds() >= expiry.value():
+            return True
+        if not self._conn:
+            return True
+        try:
+            return not self._conn.value().is_reusable()
+        except:
+            # A connection we cannot even ask about is one we cannot trust.
+            return True
+
+
+struct ConnectionPool(Movable):
+    """Connections to reuse, keyed by origin, with limits kept honestly.
+
+    There is no lock. The library is single threaded today, and a lock that
+    nothing contends is a lie about what has been thought through. The place a
+    lock will go is where `_leased` is adjusted, and that is deliberately the
+    only mutable count in the type, so that adding one later is a small change
+    rather than an audit.
+    """
+
+    var limits: Limits
+    var resolver: Resolver
+
+    var _idle: List[PooledConnection]
+    """Idle connections, oldest first.
+
+    A list rather than a map from origin to connections. The scan is linear in
+    the number of idle connections, which the limits cap at a couple of dozen,
+    and a linear scan of twenty entries is faster than hashing a string. Oldest
+    first is what makes eviction and expiry both a walk from the front.
+    """
+
+    var _leased: Int
+    """Connections currently carrying an exchange, so not in `_idle`.
+
+    Counted rather than held, because the value has been moved out to whoever is
+    using it. This is what makes the total limit cover connections in use as
+    well as connections waiting.
+    """
+
+    def __init__(out self, var limits: Limits, ttl_seconds: Int = 60):
+        self.limits = limits^
+        self.resolver = Resolver(ttl_seconds)
+        self._idle = List[PooledConnection]()
+        self._leased = 0
+
+    def idle_count(self) -> Int:
+        return len(self._idle)
+
+    def leased_count(self) -> Int:
+        return self._leased
+
+    def total_count(self) -> Int:
+        return len(self._idle) + self._leased
+
+    def close(mut self):
+        """Close every idle connection.
+
+        Says nothing about leased ones, because they are not here to close. A
+        connection in the middle of an exchange is closed by whoever is running
+        it, when it ends.
+        """
+        while len(self._idle) > 0:
+            self._evict_oldest()
+
+    def handle_request(
+        mut self,
+        var request: Request,
+        deadlines: Deadlines,
+        form: TargetForm = TargetForm.ORIGIN,
+    ) raises -> Response:
+        """Send `request` on a pooled or new connection and read the answer.
+
+        The connection is taken out of the pool for the whole exchange and put
+        back only if it finished in a state that can carry another request. An
+        exchange that raised takes its connection with it, because a connection
+        whose framing went wrong cannot be told apart from one whose next byte
+        is somebody else's response.
+        """
+        var origin = origin_for(request.url)
+        var conn = self._acquire(origin, deadlines)
+        self._leased += 1
+
+        var response: Response
+        try:
+            response = conn.exchange(
+                request^, deadlines.write, deadlines.read, form
+            )
+        except e:
+            self._leased -= 1
+            conn.close()
+            raise e
+
+        self._leased -= 1
+        self._release(origin, conn^)
+        return response^
+
+    def _acquire(
+        mut self, origin: Origin, deadlines: Deadlines
+    ) raises -> H1Connection:
+        """A connection to `origin`, reused if there is a sound one to reuse."""
+        var found = self._take_idle(origin)
+        if found:
+            return found.take()
+
+        self._make_room(origin, deadlines)
+        return H1Connection(
+            connect_to_host(
+                self.resolver, origin.host, origin.port, deadlines.connect
+            )
+        )
+
+    def _take_idle(mut self, origin: Origin) -> Optional[H1Connection]:
+        """The oldest sound idle connection to `origin`, closing any that are
+        not.
+
+        The candidate leaves the list before it is judged. Judging it in place
+        and then removing it would mean two passes over the same entry, and the
+        entry is a socket rather than a number, so the shorter path is the one
+        with fewer chances to leave a descriptor behind.
+        """
+        var i = 0
+        while i < len(self._idle):
+            if self._idle[i].origin != origin:
+                i += 1
+                continue
+            var candidate = self._idle.pop(i)
+            var stale = candidate.is_stale(self.limits.keepalive_expiry)
+            var conn = candidate.take()
+            if stale:
+                conn.close()
+                continue
+            return Optional[H1Connection](conn^)
+        return None
+
+    def _make_room(mut self, origin: Origin, deadlines: Deadlines) raises:
+        """Get under the total limit, or explain why that is not possible.
+
+        Evicting an idle connection to some other origin is the right trade when
+        the pool is full: the connection being evicted is doing nothing, and the
+        request being served is real. Only when every connection is leased is
+        there nothing to give up, and then the wait is on the program itself
+        rather than on the network, which is what `PoolTimeout` says.
+        """
+        if not self.limits.max_connections:
+            return
+        var allowed = self.limits.max_connections.value()
+        while self.total_count() >= allowed and len(self._idle) > 0:
+            self._evict_oldest()
+        if self.total_count() >= allowed:
+            raise new_error(
+                ErrorKind.POOL_TIMEOUT,
+                String(
+                    "all ",
+                    allowed,
+                    (
+                        " connections are in use and none can be freed, so"
+                        " there is"
+                    ),
+                    " no way to reach ",
+                    origin,
+                ),
+            )
+        # Only reached when a slot was found, so the pool wait is over. Checked
+        # afterwards rather than before because a deadline that passed while
+        # nothing was being waited for is not a pool timeout.
+        deadlines.pool.check(String("get a connection to ", origin))
+
+    def _release(mut self, var origin: Origin, var conn: H1Connection):
+        """Put a finished connection back, or close it.
+
+        A connection only goes back if it says it can carry another request. The
+        question is asked of the connection rather than answered here, because
+        the state machine that ran the exchange is the only thing that knows how
+        it ended.
+        """
+        var reusable: Bool
+        try:
+            reusable = conn.is_reusable()
+        except:
+            reusable = False
+        if not reusable:
+            conn.close()
+            return
+
+        var allowance = self.limits.keepalive_allowance()
+        if allowance == 0:
+            conn.close()
+            return
+
+        self._idle.append(PooledConnection(origin^, conn^))
+        while allowance > 0 and len(self._idle) > allowance:
+            # The oldest idle connection is the one closest to being closed by
+            # the server anyway, so it is the one worth the least.
+            self._evict_oldest()
+
+    def _evict_oldest(mut self):
+        var oldest = self._idle.pop(0)
+        var conn = oldest.take()
+        conn.close()

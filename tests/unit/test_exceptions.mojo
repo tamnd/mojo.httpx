@@ -179,6 +179,7 @@ def test_names_round_trip() raises:
         ErrorKind.REQUEST_NOT_READ,
         ErrorKind.COOKIE_CONFLICT,
         ErrorKind.INVALID_HEADER,
+        ErrorKind.INVALID_ARGUMENT,
     ]
     for k in kinds:
         # Every kind has a distinct name, and that name maps back to it. If two

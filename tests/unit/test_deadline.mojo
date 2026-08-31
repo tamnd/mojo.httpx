@@ -22,6 +22,7 @@ from httpx._exceptions import (
 from httpx._io.deadline import (
     MAX_SLICE_MS,
     Deadline,
+    Deadlines,
     connect_deadline,
     now_ns,
     pool_deadline,
@@ -163,3 +164,42 @@ def test_a_generic_timeout_is_still_a_timeout() raises:
         assert_true(is_timeout(e))
         assert_true(kind_of(e) == ErrorKind.TIMEOUT)
     assert_true(raised)
+
+
+def test_a_bundle_labels_each_phase_with_its_own_error() raises:
+    # The reason the four are a bundle rather than one number. A request that
+    # times out has to say which part of it did.
+    var bundle = Deadlines.uniform(Optional[Float64](0.0))
+    assert_true(bundle.connect.kind == ErrorKind.CONNECT_TIMEOUT)
+    assert_true(bundle.read.kind == ErrorKind.READ_TIMEOUT)
+    assert_true(bundle.write.kind == ErrorKind.WRITE_TIMEOUT)
+    assert_true(bundle.pool.kind == ErrorKind.POOL_TIMEOUT)
+
+
+def test_a_bundle_starts_all_four_clocks_together() raises:
+    # The point of making them in one place. Four deadlines created wherever
+    # each phase happened to begin would each get the whole budget, so a request
+    # that spent a second in the pool would silently get a second longer to
+    # connect.
+    var bundle = Deadlines.uniform(Optional[Float64](30.0))
+    # The pool deadline is made last, so it is the one furthest out.
+    var spread = bundle.pool.at_ns - bundle.connect.at_ns
+    assert_true(spread < UInt64(1_000_000))
+
+
+def test_a_bundle_can_leave_a_phase_unlimited() raises:
+    var bundle = Deadlines.after(
+        Optional[Float64](5.0), None, Optional[Float64](5.0), None
+    )
+    assert_true(bundle.connect.limited)
+    assert_false(bundle.read.limited)
+    assert_true(bundle.write.limited)
+    assert_false(bundle.pool.limited)
+
+
+def test_a_bundle_with_no_limits_at_all_never_expires() raises:
+    var bundle = Deadlines.never()
+    assert_false(bundle.connect.expired())
+    assert_false(bundle.read.expired())
+    assert_false(bundle.write.expired())
+    assert_false(bundle.pool.expired())

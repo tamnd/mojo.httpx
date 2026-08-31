@@ -250,6 +250,34 @@ def test_a_clean_exchange_leaves_the_connection_reusable() raises:
     assert_true(peer.fd() >= 0)
 
 
+def test_a_second_exchange_runs_on_the_same_connection() raises:
+    # Reuse is the whole reason a pool exists, so a connection that finished one
+    # exchange cleanly has to accept the next request rather than call itself
+    # busy. The paths are different so that the second response cannot be
+    # mistaken for a replay of the first.
+    var listener = Loopback()
+    var conn = _connect(listener)
+    var peer = listener.accept_within()
+
+    conn.send_request(
+        Request("GET", URL("http://example.com/one")), Deadline.after(5.0)
+    )
+    _ = peer.recv_until("\r\n\r\n")
+    peer.send_text("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\none")
+    assert_equal(conn.read_response(Deadline.after(5.0)).text(), "one")
+
+    conn.send_request(
+        Request("GET", URL("http://example.com/two")), Deadline.after(5.0)
+    )
+    assert_true("GET /two HTTP/1.1" in peer.recv_until("\r\n\r\n"))
+    peer.send_text("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\ntwo")
+    assert_equal(conn.read_response(Deadline.after(5.0)).text(), "two")
+    assert_true(conn.is_reusable())
+    # Keeps the server end alive to here, so that "reusable" is about the
+    # framing rather than about a peer that has already gone.
+    assert_true(peer.fd() >= 0)
+
+
 def test_connection_close_leaves_the_connection_unusable() raises:
     var response = _exchange(
         "GET",

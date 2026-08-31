@@ -213,3 +213,63 @@ def _phase(seconds: Optional[Float64], kind: ErrorKind) -> Deadline:
     if not seconds:
         return Deadline.never(kind)
     return Deadline.after(seconds.value(), kind)
+
+
+struct Deadlines(ImplicitlyCopyable, Movable):
+    """The four phase deadlines for one request, started together.
+
+    They are made in one place because they have to start at the same instant.
+    Four separate calls spread across the transport would each start their clock
+    whenever that part of the code happened to run, so a request that spent a
+    second in the pool would silently get a second longer to connect.
+
+    Layered here rather than with the rest of the configuration because the pool
+    and the transport need it and neither can see the configuration layer.
+    """
+
+    var connect: Deadline
+    var read: Deadline
+    var write: Deadline
+    var pool: Deadline
+
+    def __init__(
+        out self,
+        connect_at: Deadline,
+        read_at: Deadline,
+        write_at: Deadline,
+        pool_at: Deadline,
+    ):
+        self.connect = connect_at
+        self.read = read_at
+        self.write = write_at
+        self.pool = pool_at
+
+    @staticmethod
+    def never() -> Self:
+        """No limits at all, which is only ever right in a test."""
+        return Self(
+            Deadline.never(ErrorKind.CONNECT_TIMEOUT),
+            Deadline.never(ErrorKind.READ_TIMEOUT),
+            Deadline.never(ErrorKind.WRITE_TIMEOUT),
+            Deadline.never(ErrorKind.POOL_TIMEOUT),
+        )
+
+    @staticmethod
+    def after(
+        connect_seconds: Optional[Float64],
+        read_seconds: Optional[Float64],
+        write_seconds: Optional[Float64],
+        pool_seconds: Optional[Float64],
+    ) -> Self:
+        """Start all four now, from a timeout given in seconds per phase."""
+        return Self(
+            connect_deadline(connect_seconds),
+            read_deadline(read_seconds),
+            write_deadline(write_seconds),
+            pool_deadline(pool_seconds),
+        )
+
+    @staticmethod
+    def uniform(seconds: Optional[Float64]) -> Self:
+        """The same budget for every phase, which is what one number means."""
+        return Self.after(seconds, seconds, seconds, seconds)
