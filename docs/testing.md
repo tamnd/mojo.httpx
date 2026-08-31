@@ -17,6 +17,22 @@ A separate nightly workflow builds against the Mojo nightly toolchain. It is all
 
 The rest of the matrix joins as the code that needs it lands: OpenSSL 3.0 and 3.6 from M3, h1 and h2 from M5, debug and release builds from M2.
 
+## The differential fuzzer
+
+The response parser is compared against h11, one case at a time, on generated and randomly damaged input.
+
+```bash
+pixi run -e fuzz fuzz                                # a short default run
+pixi run -e fuzz fuzz --cases 40000 --seed 777       # a long one
+pixi run -e fuzz fuzz --cases 3000 --show 6          # print the first six disagreements
+```
+
+h11 is the reference because it is the parser httpx itself uses, so a disagreement is a real difference in what the two clients would do with the same bytes rather than a difference of opinion between two libraries nobody runs. The driver generates status lines, header sets, bodies and terminators, mutates a share of them, and hands the whole batch to one Mojo process that reports what it made of each case.
+
+The comparison is deliberately asymmetric. Being stricter than h11 is recorded and allowed, because most of the rules in the parser are stricter on purpose and a run typically ends up stricter on a few percent of cases. Being looser is a failure with no allowlist, since accepting a message h11 rejects is precisely the position where this client and the hop in front of it disagree about where a response ends. Producing a different status or a different body from the same bytes is a failure too.
+
+It is not part of `pixi run check`. A fuzzer with a fixed seed and a fixed case count is a slow unit test, and one without them is not something a commit can wait for, so it runs nightly with a fresh seed and on the fleet.
+
 ## The local fleet
 
 Some testing does not belong in CI. Interop against real servers needs Docker and several minutes of wall clock, fuzzing needs hours, and benchmarks need a machine that nobody else is sharing. A hosted runner is bad at all three.

@@ -192,6 +192,27 @@ def test_a_four_digit_status_code_is_rejected() raises:
     _ = _rejected("HTTP/1.1 2000 OK\r\n\r\n")
 
 
+def test_a_status_code_with_no_class_is_rejected() raises:
+    # Three digits that do not name any of the five classes RFC 9110 defines.
+    # Worth its own rule because the framing decision asks whether the code is
+    # under 200, so a `000` that got through would be treated as informational
+    # and its body would be left on the connection for the next response to
+    # find.
+    _ = _rejected("HTTP/1.1 000 OK\r\n\r\n")
+    _ = _rejected("HTTP/1.1 099 OK\r\n\r\n")
+    _ = _rejected("HTTP/1.1 600 OK\r\n\r\n")
+    _ = _rejected("HTTP/1.1 999 OK\r\n\r\n")
+
+
+def test_an_unregistered_code_inside_a_real_class_is_accepted() raises:
+    # Only the class has to exist. A client that refused codes it did not know
+    # would break every time a server or a CDN invented one, and RFC 9110 says
+    # to treat an unrecognised code as the generic member of its class.
+    var buf = _buffer("HTTP/1.1 599 Something New\r\n\r\n")
+    var head = _must(parse_head(buf))
+    assert_equal(head.status_code, 599)
+
+
 def test_a_status_code_that_is_not_a_number_is_rejected() raises:
     _ = _rejected("HTTP/1.1 2x0 OK\r\n\r\n")
 

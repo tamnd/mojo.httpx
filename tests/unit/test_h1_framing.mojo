@@ -86,6 +86,29 @@ def test_a_304_has_no_body() raises:
     assert_true(framing.mode == BodyMode.NONE)
 
 
+def test_a_bodiless_response_is_still_judged_on_its_framing_headers() raises:
+    # Having no body is not a reason to stop reading the headers that describe
+    # one. A response that would be rejected after a GET has to be rejected
+    # after a HEAD as well, or the same bytes mean two different things
+    # depending on the method, which is the split smuggling is built out of.
+    _framing_rejected(
+        "HEAD",
+        "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\n",
+    )
+    _framing_rejected("HEAD", "HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n")
+    _framing_rejected(
+        "GET",
+        (
+            "HTTP/1.1 304 Not Modified\r\nContent-Length:"
+            " 5\r\nTransfer-Encoding: chunked\r\n\r\n"
+        ),
+    )
+    _framing_rejected(
+        "GET",
+        "HTTP/1.1 204 No Content\r\nTransfer-Encoding: gzip\r\n\r\n",
+    )
+
+
 def test_a_205_does_have_a_body_slot() raises:
     # Only 204 and 304 are bodiless. 205 is next to 204 in the register and is
     # framed like anything else, which is the sort of thing an off by one in a
@@ -133,25 +156,29 @@ def test_chunked_is_matched_without_regard_to_case() raises:
     assert_true(framing.mode == BodyMode.CHUNKED)
 
 
-def test_chunked_last_in_a_list_of_codings_is_chunked() raises:
-    var framing = _framing(
+def test_a_coding_under_the_chunking_is_rejected() raises:
+    # The RFC allows this and a browser might unwrap it. This client cannot: it
+    # never sends a `TE` header, so it never offered to accept `gzip` as a
+    # transfer coding, and a body it cannot undo is a body it would hand back
+    # wrong. h11 refuses it too, and being the lenient parser on a path is how
+    # one message ends up framed two ways.
+    _framing_rejected(
         "GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n"
     )
-    assert_true(framing.mode == BodyMode.CHUNKED)
 
 
 def test_codings_split_across_two_field_lines_are_one_list() raises:
     # A sender may use commas or repeat the field, and the two spellings mean
-    # the same thing. A parser that only looked at the last line would call this
-    # unframeable and drop a perfectly ordinary response.
-    var framing = _framing(
+    # the same thing. Chunked twice is chunks inside chunks, and a parser that
+    # only looked at the last field line would see one `chunked`, unwrap one
+    # layer, and leave chunk headers sitting in the body.
+    _framing_rejected(
         "GET",
         (
-            "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\nTransfer-Encoding:"
-            " chunked\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding:"
+            " chunked\r\nTransfer-Encoding: chunked\r\n\r\n"
         ),
     )
-    assert_true(framing.mode == BodyMode.CHUNKED)
 
 
 def test_chunked_not_last_is_rejected() raises:
@@ -251,6 +278,29 @@ def test_a_content_length_with_a_leading_plus_is_rejected() raises:
     # Accepted by some parsers, rejected by others, and a value two hops read
     # differently is a value that frames the body differently.
     _framing_rejected("GET", "HTTP/1.1 200 OK\r\nContent-Length: +5\r\n\r\n")
+
+
+def test_a_content_length_padded_with_zeros_is_rejected() raises:
+    # `05` and `5` are one number and two strings. This client compares the
+    # numbers when it checks duplicates for agreement and h11 compares the
+    # strings, so a server sending both spellings would look consistent to one
+    # and self contradictory to the other. Refusing the padded spelling removes
+    # the question rather than answering it.
+    _framing_rejected("GET", "HTTP/1.1 200 OK\r\nContent-Length: 05\r\n\r\n")
+    _framing_rejected(
+        "GET",
+        "HTTP/1.1 200 OK\r\nContent-Length: 05\r\nContent-Length: 5\r\n\r\n",
+    )
+
+
+def test_a_single_zero_content_length_is_still_a_number() raises:
+    # The leading zero rule has to stop at one digit, because `0` is how every
+    # server on earth says the body is empty.
+    var framing = _framing(
+        "GET", "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+    )
+    assert_true(framing.mode == BodyMode.LENGTH)
+    assert_equal(framing.length, 0)
 
 
 def test_a_hex_looking_content_length_is_rejected() raises:

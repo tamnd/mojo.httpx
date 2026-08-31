@@ -248,11 +248,20 @@ def _parse_version[o: ImmOrigin](status: Span[UInt8, o]) raises -> String:
 
 
 def _parse_status_code[o: ImmOrigin](status: Span[UInt8, o]) raises -> Int:
-    """Exactly three digits after exactly one space.
+    """Exactly three digits after exactly one space, in a class that exists.
 
     Two digits or four is not a status code that got mangled, it is a message
     whose shape we do not recognise, and a client that guessed would be
     guessing about how to frame the body.
+
+    Three digits is not enough on its own either. RFC 9110 section 15 says the
+    first digit names the class and defines five of them, so `000` and `700` are
+    not codes this side has never heard of, they are codes nobody has. That
+    matters here rather than later because the framing rules ask whether the
+    code is below 200, and a `000` would be read as informational and therefore
+    as having no body, while the hop upstream that rejected the whole message
+    would have gone on reading. h11 refuses these, so httpx refuses them, and
+    the parser that agrees with the reference is the one that does not desync.
     """
     if status.__len__() < 12 or status[8] != _SPACE:
         raise _remote("the server did not send a status code")
@@ -261,11 +270,14 @@ def _parse_status_code[o: ImmOrigin](status: Span[UInt8, o]) raises -> Int:
             raise _remote("the server sent a status code that is not a number")
     if status.__len__() > 12 and status[12] != _SPACE:
         raise _remote("the server sent a status code that is not three digits")
-    return (
+    var code = (
         Int(status[9] - UInt8(ord("0"))) * 100
         + Int(status[10] - UInt8(ord("0"))) * 10
         + Int(status[11] - UInt8(ord("0")))
     )
+    if code < 100 or code > 599:
+        raise _remote("the server sent a status code outside every class")
+    return code
 
 
 def _parse_reason[o: ImmOrigin](status: Span[UInt8, o]) raises -> String:
@@ -275,10 +287,32 @@ def _parse_reason[o: ImmOrigin](status: Span[UInt8, o]) raises -> String:
     shown to a person. Kept as sent because a server that answered
     `200 Totally Fine` said that, and reporting `200 OK` instead would make the
     logs disagree with the wire for no benefit.
+
+    Kept as sent, but not kept unread. RFC 9112 section 4 allows tabs, spaces,
+    visible characters and obs-text here and nothing else, and a control
+    character in a reason phrase is not a server being expressive. It is a byte
+    that some parser on the path will treat as the end of something, and the
+    phrase ends up in logs and terminals where a stray escape or carriage
+    return is the whole of the trick.
     """
     if status.__len__() <= 13:
         return String()
-    return String(StringSpan(from_utf8=status[13:]))
+    var reason = status[13:]
+    for i in range(reason.__len__()):
+        if not _is_reason_byte(reason[i]):
+            raise _remote(
+                "the server sent a control character in the reason phrase"
+            )
+    return String(StringSpan(from_utf8=reason))
+
+
+def _is_reason_byte(byte: UInt8) -> Bool:
+    """HTAB, SP, a visible character, or obs-text."""
+    if byte == _HTAB or byte == _SPACE:
+        return True
+    if byte >= UInt8(0x21) and byte != UInt8(0x7F):
+        return True
+    return False
 
 
 def append_field_line[

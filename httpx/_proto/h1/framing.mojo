@@ -94,6 +94,24 @@ def framing_for(method: StringSpan, head: ResponseHead) raises -> Framing:
     alone. The same bytes mean a body after `GET` and no body after `HEAD`, and
     a parser that only looked at the response would hang on every `HEAD`.
     """
+    # The framing headers are judged before anything decides there is no body.
+    # A `HEAD` response and a 304 carry the headers of the body they are not
+    # sending, and headers that contradict each other say the server is broken
+    # whether or not the bytes they describe are on the way. Deciding "no body"
+    # first and skipping the checks would mean a response with two conflicting
+    # `Content-Length` values was accepted from a `HEAD` and rejected from a
+    # `GET`, which is the kind of split that smuggling is made of.
+    var chunked = _transfer_encoding_is_chunked(head.headers)
+    var length = _content_length(head.headers)
+
+    # Both. RFC 9112 allows a recipient to drop the `Content-Length` and carry
+    # on, and this is exactly the shape a CL.TE desync takes: the attacker is
+    # counting on the proxy and the origin dropping different ones.
+    if chunked and length:
+        raise _remote(
+            "the server sent both Transfer-Encoding and Content-Length"
+        )
+
     # 1. No body, whatever the headers say. A `HEAD` response describes a body
     # it is not sending, and 204 and 304 are defined as having none. Reading a
     # `Content-Length` here is how a client ends up waiting on a body the server
@@ -114,28 +132,9 @@ def framing_for(method: StringSpan, head: ResponseHead) raises -> Framing:
     ):
         return Framing(BodyMode.TUNNEL)
 
-    var chunked = _transfer_encoding_is_chunked(head.headers)
-    var length = _content_length(head.headers)
-
-    # Both. RFC 9112 allows a recipient to drop the `Content-Length` and carry
-    # on, and this is exactly the shape a CL.TE desync takes: the attacker is
-    # counting on the proxy and the origin dropping different ones. Checked
-    # before the chunked case rather than after it, because after it the check
-    # would never run on the combination that matters.
-    if chunked and length:
-        raise _remote(
-            "the server sent both Transfer-Encoding and Content-Length"
-        )
-
-    # 3 and 4. `chunked` has to be the last coding, because anything applied
-    # after it would change where the chunks are, and then nobody can find the
-    # end of the body.
-    if head.headers.__contains__("transfer-encoding"):
-        if not chunked:
-            raise _remote(
-                "the server sent a Transfer-Encoding that does not end with"
-                " chunked"
-            )
+    # 3 and 4. Chunked framing, which by the time the code gets here is the only
+    # transfer coding that can still be present.
+    if chunked:
         return Framing(BodyMode.CHUNKED)
 
     # 5 through 7.
@@ -148,22 +147,47 @@ def framing_for(method: StringSpan, head: ResponseHead) raises -> Framing:
 
 
 def _transfer_encoding_is_chunked(headers: Headers) raises -> Bool:
-    """Whether the final transfer coding is `chunked`.
+    """Whether this response is chunked, refusing every other coding.
+
+    `chunked` alone, or nothing. The RFC would allow other codings underneath a
+    final `chunked`, and a browser might unwrap them, but this client never
+    offers to accept one: there is no `TE` header on anything it sends, so a
+    server that applies `gzip` as a transfer coding has answered a request
+    nobody made. Reading such a body as if it were plain would hand the caller
+    bytes that are not what the server meant, and guessing at the coding is how
+    two parsers on one path end up with two different bodies.
 
     A sender may split the list across several field lines or put it on one with
-    commas, and both mean the same thing, so the codings are gathered before the
-    last one is looked at.
+    commas, and both mean the same thing, so the codings are gathered before
+    they are counted.
     """
+    if not headers.__contains__("transfer-encoding"):
+        return False
+
     var codings = headers.get_list("transfer-encoding", split_commas=True)
+    var kept = 0
     var last = -1
     for i in range(len(codings)):
         # An empty element comes from a trailing or doubled comma. Skipping it
         # is not leniency about the framing, only about the punctuation.
         if codings[i].byte_length() > 0:
+            kept += 1
             last = i
-    if last < 0:
-        return False
-    return equal_ascii_ci(codings[last].as_bytes(), "chunked".as_bytes())
+
+    if kept == 0:
+        raise _remote("the server sent an empty Transfer-Encoding")
+    if not equal_ascii_ci(codings[last].as_bytes(), "chunked".as_bytes()):
+        raise _remote(
+            "the server sent a Transfer-Encoding that does not end with chunked"
+        )
+    if kept > 1:
+        # Either another coding under the chunking, or chunked twice. The second
+        # one is chunks inside chunks, and unwrapping only the outer layer would
+        # leave chunk headers in the body.
+        raise _remote(
+            "the server sent a Transfer-Encoding this client cannot decode"
+        )
+    return True
 
 
 def _content_length(headers: Headers) raises -> Optional[Int]:
@@ -196,6 +220,13 @@ def parse_content_length[o: ImmOrigin](text: Span[UInt8, o]) raises -> Int:
     var trimmed = trim_ows(text)
     if trimmed.__len__() == 0:
         raise _remote("the server sent an empty Content-Length")
+    if trimmed.__len__() > 1 and trimmed[0] == UInt8(ord("0")):
+        # `05` and `5` are the same number and two different strings, and the
+        # duplicate check below compares numbers while h11 compares the strings.
+        # A server that sent both spellings would look consistent to this client
+        # and inconsistent to the hop in front of it, so the padded spelling is
+        # refused outright and there is nothing left to disagree about.
+        raise _remote("the server sent a Content-Length with a leading zero")
     try:
         var value = parse_decimal(trimmed)
         return value

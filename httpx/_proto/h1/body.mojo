@@ -10,9 +10,16 @@ The framing decision is made once, before any of this runs, and is not revisited
 while the body is being read. A body whose end is redecided halfway through is
 the other way a smuggling bug gets in, so `BodyReader` takes a `Framing` and
 never looks at a header again.
+
+Chunked framing is read strictly, with `\\r\\n` required everywhere RFC 9112
+section 7.1 asks for it. The head parser accepts a bare newline because real
+servers write heads by hand and get it wrong; chunk framing is emitted by
+machines that all get it right, so a bare newline in it is either damage or
+somebody counting on this end and the next one splitting the stream in different
+places.
 """
 
-from httpx._bytes import _CR, _LF, parse_hex, trim_ows
+from httpx._bytes import _CR, _LF, parse_hex
 from httpx._exceptions import ErrorKind, new_error
 from httpx._io.buffer import ByteBuffer
 from httpx._models.headers import Headers
@@ -186,6 +193,7 @@ struct BodyReader(Movable):
                 var line_end = self._line_end(buf, MAX_CHUNK_LINE)
                 if line_end < 0:
                     return True
+                _require_crlf(buf, line_end)
                 var line = line_without_terminator(buf.unread(), 0, line_end)
                 self._remaining = _parse_chunk_size(line)
                 buf.consume(line_end + 1)
@@ -216,20 +224,17 @@ struct BodyReader(Movable):
                 # would happily read an attacker's bytes as the next chunk.
                 if len(buf) == 0:
                     return True
-                if buf.peek(0) == _CR:
-                    if len(buf) < 2:
-                        return True
-                    if buf.peek(1) != _LF:
-                        raise _remote(
-                            "the server sent a chunk longer than its size"
-                        )
-                    buf.consume(2)
-                elif buf.peek(0) == _LF:
-                    buf.consume(1)
-                else:
+                if buf.peek(0) != _CR:
                     raise _remote(
                         "the server sent a chunk longer than its size"
                     )
+                if len(buf) < 2:
+                    return True
+                if buf.peek(1) != _LF:
+                    raise _remote(
+                        "the server sent a chunk longer than its size"
+                    )
+                buf.consume(2)
                 self._step = _Step.SIZE
                 continue
 
@@ -237,6 +242,7 @@ struct BodyReader(Movable):
                 var line_end = self._line_end(buf, MAX_CHUNK_LINE)
                 if line_end < 0:
                     return True
+                _require_crlf(buf, line_end)
                 var line = line_without_terminator(buf.unread(), 0, line_end)
                 if line.__len__() == 0:
                     buf.consume(line_end + 1)
@@ -287,19 +293,41 @@ struct BodyReader(Movable):
         return found
 
 
+def _require_crlf(buf: ByteBuffer, line_end: Int) raises:
+    """A chunked framing line has to end with `\\r\\n` and nothing shorter.
+
+    The leniency the head parser allows is not extended down here. In a head a
+    bare newline is a server that was written by a person. In chunk framing it
+    is a line whose end this parser and the reference one disagree about, and
+    every byte of that disagreement is body to one of them and framing to the
+    other.
+    """
+    if line_end == 0 or buf.peek(line_end - 1) != _CR:
+        raise _remote(
+            "the server ended a chunked framing line with a bare newline"
+        )
+
+
 def _parse_chunk_size[o: ImmOrigin](line: Span[UInt8, o]) raises -> Int:
     """The size at the front of a chunk header line.
 
     Extensions after a semicolon are allowed by RFC 9112 section 7.1.1 and are
     discarded. Nothing in the wild uses them, and a client that tried to act on
     one would be acting on something the server has no reason to think it read.
+
+    Nothing else is allowed around the size, not even a space. The grammar in
+    section 7.1 is `1*HEXDIG` and the chunk extension rule permits some bad
+    whitespace before the semicolon, but a size line with a stray space is not a
+    server being sloppy in a way that has one meaning. It is a line that one
+    parser reads as a size and another reads as an error, and on a chunked body
+    that disagreement is where the next request goes.
     """
     var end = line.__len__()
     for i in range(line.__len__()):
         if line[i] == UInt8(ord(";")):
             end = i
             break
-    var digits = trim_ows(line[:end])
+    var digits = line[:end]
     if digits.__len__() == 0:
         raise _remote("the server sent a chunk with no size")
     try:

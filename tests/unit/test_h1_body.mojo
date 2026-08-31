@@ -245,6 +245,35 @@ def test_an_empty_chunk_size_is_rejected() raises:
     _chunked_rejected("\r\nhello\r\n0\r\n\r\n")
 
 
+def test_a_chunk_size_with_whitespace_around_it_is_rejected() raises:
+    # A space is not a typo here, it is a fork in the road. h11 and this parser
+    # stop, several proxies trim and carry on, and a body whose first chunk is a
+    # size to one hop and nonsense to the next is a body with two endings.
+    _chunked_rejected("5 \r\nhello\r\n0\r\n\r\n")
+    _chunked_rejected(" 5\r\nhello\r\n0\r\n\r\n")
+    _chunked_rejected("5\t\r\nhello\r\n0\r\n\r\n")
+
+
+def test_a_bare_newline_in_chunk_framing_is_rejected() raises:
+    # The head parser takes a bare newline because servers really do send heads
+    # that way. Nothing generating chunks does, and here the cost of accepting
+    # one is a byte that is framing to this parser and body to the next: with
+    # `5\r\nhelo\r\n0\r\n\r\n` the fifth data byte is the carriage return, and a
+    # reader that then took the bare newline as the end of the chunk would carry
+    # on happily while a strict one is already reporting an error.
+    _chunked_rejected("5\nhello\r\n0\r\n\r\n")
+    _chunked_rejected("5\r\nhelo\r\n0\r\n\r\n")
+    _chunked_rejected("5\r\nhello\r\n0\n\r\n")
+    _chunked_rejected("5\r\nhello\r\n0\r\nX-Sum: abc\n\r\n")
+
+
+def test_whitespace_before_a_chunk_extension_is_rejected() raises:
+    # The grammar in RFC 9112 section 7.1.1 does allow this one, under the name
+    # bad whitespace. Taking the permission would mean the size line has two
+    # spellings and only one of them is what the strict parser next door reads.
+    _chunked_rejected("5 ;name=value\r\nhello\r\n0\r\n\r\n")
+
+
 def test_a_chunk_longer_than_its_size_is_rejected() raises:
     # What a size line and the data disagreeing looks like on the wire, and the
     # smuggling shape a decoder that resynchronised on the next `\r\n` would let

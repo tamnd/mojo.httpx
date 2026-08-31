@@ -1,0 +1,96 @@
+name: Differential fuzz
+
+# The response parser against h11, on a fresh seed every night. This is the one
+# suite where a green run today says nothing about tomorrow, because the value
+# is in the cases nobody has generated yet. It is out of the pull request path
+# on purpose: a run long enough to find anything takes longer than a commit
+# should wait, and a run short enough to gate on would only ever re-find what
+# the last one already fixed.
+
+on:
+  schedule:
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+    inputs:
+      cases:
+        description: How many cases to generate
+        required: false
+        default: "200000"
+      seed:
+        description: The seed to use, or empty for the run number
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: parser against h11
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@194d461b21b6c5717c722ffc597fa91ed2ff29fa # v0.9.1
+        with:
+          pixi-version: v0.78.0
+          environments: fuzz
+          locked: true
+      - name: Run
+        id: run
+        env:
+          CASES: ${{ inputs.cases || '200000' }}
+          # The run number rather than the clock, so a failing night can be
+          # reproduced exactly by dispatching the same seed by hand.
+          SEED: ${{ inputs.seed || github.run_number }}
+        run: |
+          pixi run -e fuzz fuzz --cases "$CASES" --seed "$SEED" --show 20 2>&1 | tee fuzz.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: fuzz-log
+          path: fuzz.log
+          retention-days: 30
+
+  report:
+    name: open an issue on a disagreement
+    runs-on: ubuntu-24.04
+    needs: fuzz
+    if: failure()
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: Write the issue body
+        run: |
+          {
+            echo "The differential fuzzer found a case where this parser and h11 do not agree."
+            echo
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "Seed: ${{ github.run_number }}"
+            echo
+            echo "The failing cases are printed in the log and in the fuzz-log artifact, as"
+            echo "the method and the response bytes in hex. Reproduce one with the same seed,"
+            echo "then turn it into a unit test before changing the parser, because the fix"
+            echo "belongs next to the rule it is about and not in the fuzzer."
+            echo
+            echo "Accepting something h11 rejects is the direction that matters. Being"
+            echo "stricter than h11 is expected and is not reported as a failure."
+          } > issue.md
+      - uses: peter-evans/create-issue-from-file@e8ef132d6df98ed982188e460ebb3b5d4ef3a9cd # v5.0.1
+        with:
+          title: "Differential fuzzer found a parser disagreement"
+          content-filepath: issue.md
+          # Quoted because the area label has a colon in it and YAML would take
+          # that as the start of another key.
+          labels: "security, area: testing"
