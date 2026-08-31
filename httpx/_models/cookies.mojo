@@ -322,9 +322,12 @@ def parse_set_cookie(
     An unrecognised attribute is skipped, not an error, which is what lets new
     attributes be deployed without breaking old clients.
 
-    An attribute whose value is unusable, a `Path` that does not start with a
-    slash or a `Max-Age` that is not a number, is dropped on its own. The cookie
-    still gets stored, with that attribute's default.
+    An attribute whose value is unusable does not reject the cookie, it falls
+    back to that attribute's default. The two cases differ in a way worth
+    knowing: a `Max-Age` that is not a number is skipped entirely, so an earlier
+    `Max-Age` still stands, while a `Path` that does not start with a slash
+    resets the path to the default and overwrites an earlier `Path` that was
+    perfectly good. Both are what section 5.2 says.
 
     The name and value are split at the first equals sign and nothing else is
     inspected, so quotes stay part of the value and a value may contain further
@@ -349,7 +352,10 @@ def parse_set_cookie(
         return None
 
     var domain = String()
-    var cookie_path = String()
+    # Seeded with the default rather than left empty, because a `Path` whose
+    # value is unusable resets to the default rather than being skipped, and
+    # that has to overwrite an earlier `Path` that was fine.
+    var cookie_path = default_path(path)
     var expires = Optional[Int]()
     var max_age = Optional[Int]()
     var secure = False
@@ -397,6 +403,8 @@ def parse_set_cookie(
         elif _ci(key_text, "path"):
             if raw.__len__() > 0 and raw[0] == _SLASH:
                 cookie_path = raw_text^
+            else:
+                cookie_path = default_path(path)
         elif _ci(key_text, "secure"):
             secure = True
         elif _ci(key_text, "httponly"):
@@ -418,15 +426,12 @@ def parse_set_cookie(
 
     var host_only = domain.byte_length() == 0
     var scope = String(host) if host_only else domain^
-    var final_path = default_path(path) if cookie_path.byte_length() == 0 else (
-        cookie_path^
-    )
 
     return Cookie(
         name=StringSpan(unsafe_from_utf8=name),
         value=StringSpan(unsafe_from_utf8=value),
         domain=scope,
-        path=final_path,
+        path=cookie_path^,
         host_only=host_only,
         expires=expires,
         secure=secure,

@@ -51,11 +51,11 @@ format-check = "python tools/fmt/check.py"
 # `python tools/vendor/fetch.py --update`.
 vendor-check = "python tools/vendor/check.py"
 
-# The Public Suffix List is checked in twice: once as the vendored file and once
-# as the Mojo table generated from it. This is what catches the second drifting
+# Some vendored data is checked in twice: once as the file itself and once as
+# the Mojo the generator makes of it. This is what catches the second drifting
 # from the first, which would otherwise show up as a cookie scoping bug nobody
-# is looking for.
-generated-check = "python tools/gen_psl.py --check"
+# is looking for, or as a conformance suite quietly testing last year's cases.
+generated-check = "python tools/gen_psl.py --check && python tools/gen_cookie_cases.py --check"
 
 # Layering, unsafe operations and deadlines. See tools/lint/run.py for why each
 # one exists.
