@@ -36,6 +36,25 @@ jobs:
           cache: true
       - run: pixi run format-check
 
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@194d461b21b6c5717c722ffc597fa91ed2ff29fa # v0.9.1
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          environments: default
+          locked: true
+          cache: true
+      - run: pixi run lint
+      # A lint that has stopped matching anything reports success forever, so
+      # the lints are themselves checked against known violations.
+      - run: pixi run lint-selftest
+
   test:
     name: test ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
@@ -62,6 +81,9 @@ jobs:
           cache: true
       - name: Record the toolchain
         run: pixi run mojo --version
+      # The errno table is platform specific and this is the only place it can
+      # be checked against the platform that will use it.
+      - run: pixi run baseline
       - run: pixi run test
 
   # The rest of the matrix in docs/roadmap.md joins as the code that needs it
@@ -86,7 +108,7 @@ jobs:
   ci-ok:
     name: ci ok
     runs-on: ubuntu-24.04
-    needs: [format, test]
+    needs: [format, lint, test]
     if: always()
     timeout-minutes: 5
     steps:

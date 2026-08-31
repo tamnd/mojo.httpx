@@ -39,17 +39,29 @@ nightly = { features = ["nightly"], no-default-feature = true }
 parity = { features = ["dev", "parity"] }
 
 [tasks]
-test = "mojo run -I . tests/run.mojo"
+test = "python tools/mojotest/run.py"
 format = "mojo format httpx/ tests/"
 # `mojo format` has no --check flag, so CI formats and then asks git whether
 # anything moved.
 format-check = "mojo format -q httpx/ tests/ && git diff --exit-code -- httpx/ tests/"
 
+# Layering, unsafe operations and deadlines. See tools/lint/run.py for why each
+# one exists.
+lint = "python tools/lint/run.py"
+lint-selftest = "python tools/lint/run.py --selftest"
+
+# The platform tables that cannot be checked from Mojo, because checking them
+# means asking the host what the right answer is. Everything that can be
+# checked from Mojo is a test instead, so that it runs on every platform on
+# every run. See tests/unit/test_abi.mojo.
+baseline = "python tools/baseline/check_errno.py"
+
+# Everything, in the order a failure is cheapest to read.
+check = { depends-on = ["format-check", "lint", "lint-selftest", "baseline", "test"] }
+
 # Tasks below land with the milestone that needs them. See docs/roadmap.md.
 #   build         M8   mojo build httpx/cli/__main__.mojo -o build/httpx
-#   lint          M0   the layering, unsafe and deadline checks
 #   bench         M2   the benchmark suite
 #   parity        M4   the httpx2 comparison suite
 #   docs          M8   render the mojo doc JSON into the API reference
-#   baseline      M0   re-run the toolchain probes against the current Mojo
 #   vendor-check  M1   verify the recorded provenance of tests/data/
