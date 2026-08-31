@@ -25,6 +25,12 @@ from std.hashlib import Hasher
 from httpx._bytes import Bytes, _quote, equal_ascii_ci, to_lower
 from httpx._exceptions import ErrorKind, new_error
 from httpx._util.idna import decode_host, encode_host
+from httpx._util.ip import (
+    format_ipv6,
+    looks_like_ipv4,
+    parse_ipv4,
+    parse_ipv6,
+)
 from httpx._util.percent import (
     FRAGMENT,
     PATH,
@@ -36,6 +42,8 @@ from httpx._util.percent import (
     percent_encode,
     percent_normalize,
 )
+
+comptime _SLASH = UInt8(ord("/"))
 
 
 struct Range(Equatable, ImplicitlyCopyable, Movable):
@@ -108,53 +116,76 @@ def remove_dot_segments(path: StringSpan) raises -> String:
     The output can never climb above the root: a `..` with nothing left to pop is
     discarded rather than escaping, which is what stops a relative reference in a
     redirect from reaching outside the base path.
+
+    An empty segment is a segment. `/a//b` keeps both slashes, because `/a//b`
+    and `/a/b` are two different resources and collapsing them is the kind of
+    rewrite that makes a client and a server disagree about what was requested.
+    Only `.` and `..` are removed, and a trailing one of either leaves the slash
+    it was standing after.
     """
-    var out = List[String]()
-    var input = String(path)
-    var trailing_slash = False
+    var bytes = path.as_bytes()
+    var length = bytes.__len__()
+    var absolute = length > 0 and bytes[0] == _SLASH
 
-    var segments = List[String]()
-    var current = String()
-    var bytes = input.as_bytes()
-    for i in range(bytes.__len__()):
-        if bytes[i] == UInt8(ord("/")):
-            segments.append(current)
-            current = String()
-        else:
-            current += chr(Int(bytes[i]))
-    segments.append(current)
+    # Segments are held as ranges into the input rather than copied out. This
+    # runs on every URL and on every join, and a `..` should be a pop of two
+    # integers rather than the freeing of a string.
+    var segments = List[Range]()
+    var at = 1 if absolute else 0
+    while True:
+        var stop = at
+        while stop < length and bytes[stop] != _SLASH:
+            stop += 1
+        segments.append(Range(at, stop))
+        if stop >= length:
+            break
+        at = stop + 1
 
-    var leading_slash = bytes.__len__() > 0 and bytes[0] == UInt8(ord("/"))
-
+    var kept = List[Range]()
     for index in range(len(segments)):
         var segment = segments[index]
         var last = index == len(segments) - 1
-        if segment == ".":
-            trailing_slash = True
+        # A `.` or `..` in final position still ends the path in a slash, which
+        # the empty segment appended here is what produces. `/a/b/..` is `/a/`
+        # and not `/a`, and the difference decides what the next relative
+        # reference resolves against.
+        if _is_segment(bytes, segment, "."):
+            if last:
+                kept.append(Range(Int(segment.end), Int(segment.end)))
             continue
-        if segment == "..":
-            if len(out) > 0:
-                _ = out.pop()
-            trailing_slash = True
+        if _is_segment(bytes, segment, ".."):
+            if len(kept) > 0:
+                _ = kept.pop()
+            if last:
+                kept.append(Range(Int(segment.end), Int(segment.end)))
             continue
-        if segment == "" and not last:
-            continue
-        if segment == "" and last:
-            trailing_slash = True
-            continue
-        out.append(segment)
-        trailing_slash = False
+        kept.append(segment)
 
-    var result = String()
-    for index in range(len(out)):
-        if index > 0 or leading_slash:
-            result += "/"
-        result += out[index]
-    if trailing_slash and (len(out) > 0 or leading_slash):
-        result += "/"
-    if result.byte_length() == 0 and leading_slash:
-        result = String("/")
-    return result^
+    var result = Bytes()
+    if absolute:
+        result.append(_SLASH)
+    for index in range(len(kept)):
+        if index > 0:
+            result.append(_SLASH)
+        var segment = kept[index]
+        for i in range(Int(segment.start), Int(segment.end)):
+            result.append(bytes[i])
+    # Sound without a UTF-8 check because every byte of the result was copied
+    # from the input, so the result is valid exactly when the input was, and the
+    # input arrived as a `StringSpan`.
+    return String(StringSpan(unsafe_from_utf8=result.as_span()))
+
+
+def _is_segment[
+    o: ImmOrigin
+](bytes: Span[UInt8, o], segment: Range, expected: StaticString) -> Bool:
+    var wanted = expected.as_bytes()
+    if segment.length() != wanted.__len__():
+        return False
+    for i in range(wanted.__len__()):
+        if bytes[Int(segment.start) + i] != wanted[i]:
+            return False
+    return True
 
 
 struct _Parts(Movable):
@@ -300,6 +331,16 @@ def _split_authority(authority: StringSpan, mut parts: _Parts) raises:
     else:
         parts.host = String(authority[byte=host_start:n])
 
+    # An authority that names credentials or a port but no host does not
+    # describe anywhere. `http://user:pass@/` in particular is worth refusing
+    # rather than quietly reading as a path, because what a reader takes from it
+    # is a host called `user`, and that is the whole trick.
+    if parts.host.byte_length() == 0 and (at >= 0 or colon >= 0):
+        raise new_error(
+            ErrorKind.INVALID_URL,
+            String("the authority ", _quote(bytes), " has no host"),
+        )
+
 
 def _parse_port(text: StringSpan) raises -> Optional[UInt16]:
     """A port, or nothing when the field was empty.
@@ -329,23 +370,38 @@ def _parse_port(text: StringSpan) raises -> Optional[UInt16]:
 
 
 def _normalize_host(host: StringSpan) raises -> String:
-    """Lowercase and IDNA encode a host, leaving an IPv6 literal alone.
+    """Lowercase and IDNA encode a host, or canonicalize an IPv6 literal.
 
     A bracketed literal is not a name and must not go through IDNA, which would
-    reject the colons. It is lowercased because hex digits are case insensitive
-    and one spelling is what makes two URLs comparable.
+    reject the colons. It goes through the address parser instead, which both
+    refuses the ones that are not addresses and settles on the single RFC 5952
+    spelling, so two ways of writing one address compare equal here rather than
+    becoming two hosts, two connections and two certificate checks.
     """
     if host.byte_length() == 0:
         return String("")
     var bytes = host.as_bytes()
     if bytes[0] == UInt8(ord("[")):
-        var out = String()
-        for i in range(bytes.__len__()):
-            out += chr(Int(to_lower(bytes[i])))
-        return out^
+        var last = bytes.__len__() - 1
+        if bytes[last] != UInt8(ord("]")):
+            raise new_error(
+                ErrorKind.INVALID_URL,
+                String(
+                    "the host ",
+                    _quote(bytes),
+                    " opens a bracket it does not close",
+                ),
+            )
+        return String("[", format_ipv6(parse_ipv6(bytes[1:last])), "]")
     # A host may arrive percent encoded, and the escapes have to come out before
     # IDNA sees it, or a label is encoded as the literal text `%C3%BC`.
     var decoded = percent_decode(bytes)
+    # An address is not a name, so it never goes to IDNA and never gets looked
+    # up. Deciding which one this is on the last label is what makes `foo.09` an
+    # error instead of a domain, and what makes `0x7f.1` come out as the address
+    # it will actually connect to rather than as a string that reads like a name.
+    if looks_like_ipv4(decoded.as_span()):
+        return parse_ipv4(decoded.as_span())
     return encode_host(decoded.to_string())
 
 
@@ -637,12 +693,14 @@ struct URL(Equatable, Movable, Writable):
     def _from_parts(parts: _Parts) raises -> Self:
         """Normalize the pieces and lay them out as one string.
 
-        The order here is the order in section 5 of `03-url.md` and it matters.
+        The order here is the order in RFC 3986 section 6.2.2 and it matters.
         The host is IDNA encoded before the port is compared against the scheme
-        default, and dot segments come out before the path is percent normalized,
-        because normalizing first could produce a `%2E` that then fails to be
-        recognised as a dot segment. That last one is the difference between
-        removing a `/../` and leaving it in for the next hop to act on.
+        default, and the path is percent normalized before dot segments come
+        out, not after. Doing it the other way leaves a `%2E` to decode into a
+        literal `.` that is then sitting in the output as a dot segment nobody
+        removed, so normalizing twice gives a different answer than normalizing
+        once. It also means this agrees with what a server does with `/a/%2e./b`
+        rather than handing it on and hoping.
         """
         var out = Self()
 
@@ -653,6 +711,15 @@ struct URL(Equatable, Movable, Writable):
         var host = _normalize_host(parts.host)
         var port = _parse_port(parts.port)
         var default = default_port_for(scheme)
+        # A scheme this library speaks names a server to connect to, and an
+        # authority with no host names nothing. `http://?x` and `http:///a` are
+        # both refused here rather than becoming a URL whose host is the empty
+        # string, which every later layer would have to check for separately.
+        if parts.has_authority and default and host.byte_length() == 0:
+            raise new_error(
+                ErrorKind.INVALID_URL,
+                String("a ", scheme, " url has to name a host"),
+            )
         if port and default and port.value() == default.value():
             port = Optional[UInt16]()
 
@@ -671,14 +738,25 @@ struct URL(Equatable, Movable, Writable):
                 if info[i] == UInt8(ord(":")):
                     sep = i
                     break
-            if sep < 0:
-                userinfo = percent_normalize(info, USERINFO).to_string()
-            else:
-                userinfo = percent_normalize(info[0:sep], USERINFO).to_string()
-                userinfo += ":"
-                userinfo += percent_normalize(
+            var stop = info.__len__() if sep < 0 else sep
+            var user = percent_normalize(info[0:stop], USERINFO).to_string()
+            var password = String()
+            if sep >= 0:
+                password = percent_normalize(
                     info[sep + 1 : info.__len__()], USERINFO
                 ).to_string()
+            userinfo = user^
+            # An empty password is no password. Keeping the colon would make
+            # `http://a:@h` and `http://a@h` two URLs that connect to the same
+            # place with the same credentials, which breaks comparison and
+            # caching and buys nothing.
+            if password.byte_length() > 0:
+                userinfo += ":"
+                userinfo += password
+
+        # No user and no password is no userinfo at all, so `http://:@h` and
+        # `http://h` come out as the same URL rather than as two.
+        var has_userinfo = parts.has_userinfo and userinfo.byte_length() > 0
 
         var path = String(parts.path)
         # An absolute URL addresses the root when no path is written, and saying
@@ -686,8 +764,8 @@ struct URL(Equatable, Movable, Writable):
         if parts.has_authority and path.byte_length() == 0:
             path = String("/")
         if path.byte_length() > 0:
-            path = remove_dot_segments(path)
             path = percent_normalize(path.as_bytes(), PATH).to_string()
+            path = remove_dot_segments(path)
 
         var query = String()
         if parts.has_query:
@@ -708,7 +786,7 @@ struct URL(Equatable, Movable, Writable):
         out._has_authority = parts.has_authority
         if parts.has_authority:
             raw += "//"
-            if parts.has_userinfo:
+            if has_userinfo:
                 out._userinfo = Range(
                     raw.byte_length(),
                     raw.byte_length() + userinfo.byte_length(),

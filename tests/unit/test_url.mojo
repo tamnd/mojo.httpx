@@ -128,6 +128,41 @@ def test_an_unclosed_bracket_is_rejected() raises:
         _ = URL("https://[2001:db8::1/x")
 
 
+def test_an_ipv6_host_is_canonicalized() raises:
+    # Three spellings of one address have to reach one url, or the connection
+    # pool opens three connections and the certificate is checked three ways.
+    assert_equal(String(URL("https://[::1]/")), "https://[::1]/")
+    assert_equal(String(URL("https://[0:0:0:0:0:0:0:1]/")), "https://[::1]/")
+    assert_equal(String(URL("https://[::0001]/")), "https://[::1]/")
+    assert_equal(
+        String(URL("https://[2001:0DB8:0000:0000:0000:0000:1428:57AB]/")),
+        "https://[2001:db8::1428:57ab]/",
+    )
+
+
+def test_a_host_that_is_an_address_in_disguise_is_written_as_the_address() raises:
+    # The point of this is that the host a check reads is the host that gets
+    # dialled. `0x7f.1` resolves to localhost whether or not this library says
+    # so, and the only thing refusing to recognise it would change is whether
+    # anything looking at the url can tell.
+    assert_equal(String(URL("http://0177.0.0.1/")), "http://127.0.0.1/")
+    assert_equal(String(URL("http://0x7f.1/")), "http://127.0.0.1/")
+    assert_equal(String(URL("http://2130706433/")), "http://127.0.0.1/")
+    assert_equal(String(URL("http://127.0.0.1./")), "http://127.0.0.1/")
+
+
+def test_a_host_that_ends_in_a_number_but_is_not_an_address_is_rejected() raises:
+    # Not resolved as a name. Somebody who writes a host ending in a number is
+    # writing an address, and quietly looking it up is where the two readings
+    # of the same string come apart.
+    with assert_raises():
+        _ = URL("http://1.2.3.4.5/")
+    with assert_raises():
+        _ = URL("http://256.1.1.1/")
+    with assert_raises():
+        _ = URL("http://0xffffffff1/")
+
+
 def test_a_unicode_host_is_stored_as_a_labels() raises:
     # This is the distinction the whole host handling exists for. What goes on
     # the wire is ASCII; what is shown to a person is not.
@@ -156,11 +191,31 @@ def test_the_rfc_dot_segment_examples() raises:
     assert_equal(remove_dot_segments(""), "")
 
 
-def test_an_encoded_dot_is_not_a_dot_segment() raises:
-    # Dot segments come out before the path is percent normalized, so a `%2E`
-    # that decodes to a dot is still a name and not a step upward. Doing it the
-    # other way round removes a segment the server would have kept.
-    assert_equal(URL("https://example.com/a/%2E%2E/b").path(), "/a/../b")
+def test_an_empty_segment_is_a_segment() raises:
+    # `/a//b` and `/a/b` are different resources, so the empty segment survives.
+    # Only `.` and `..` are removed. The last two are the cases where collapsing
+    # empty segments and popping them are easy to confuse.
+    assert_equal(remove_dot_segments("/a//b"), "/a//b")
+    assert_equal(remove_dot_segments("//"), "//")
+    assert_equal(remove_dot_segments("/a/b//../.."), "/a/")
+    assert_equal(remove_dot_segments("////../.."), "//")
+
+
+def test_an_encoded_dot_decodes_before_dot_segments_come_out() raises:
+    # RFC 3986 section 6.2.2 normalizes percent encoding first and removes dot
+    # segments second, and `.` is unreserved so `%2E` decodes. The result is
+    # what the server would have done with the same path anyway, which is the
+    # point: normalizing to something a server reads differently is worse than
+    # not normalizing.
+    assert_equal(URL("https://example.com/a/%2E%2E/b").path(), "/b")
+    assert_equal(URL("https://example.com/a/%2E/b").path(), "/a/b")
+    # An encoded slash is reserved and stays encoded, so this is one segment
+    # whose name contains a slash, not two segments. Compared in its encoded
+    # form, because `path()` decodes and the decoding is what hides it.
+    assert_equal(
+        String(URL("https://example.com/a/%2E%2E%2Fb")),
+        "https://example.com/a/..%2Fb",
+    )
 
 
 def test_percent_encoding_is_normalized() raises:

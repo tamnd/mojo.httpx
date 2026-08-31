@@ -55,7 +55,7 @@ vendor-check = "python tools/vendor/check.py"
 # the Mojo the generator makes of it. This is what catches the second drifting
 # from the first, which would otherwise show up as a cookie scoping bug nobody
 # is looking for, or as a conformance suite quietly testing last year's cases.
-generated-check = "python tools/gen_psl.py --check && python tools/gen_cookie_cases.py --check"
+generated-check = "python tools/gen_psl.py --check && python tools/gen_cookie_cases.py --check && python tools/gen_url_cases.py --check"
 
 # Layering, unsafe operations and deadlines. See tools/lint/run.py for why each
 # one exists.
