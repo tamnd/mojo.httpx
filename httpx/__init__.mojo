@@ -27,6 +27,7 @@ from httpx._models.response import Response
 from httpx._models.url import URL, QueryParams
 from httpx._pool.limits import Limits
 from httpx._stream.config import ClientCert, SSLVerify
+from httpx._util.charset import DefaultEncoding
 
 comptime __version__ = "0.0.1"
 

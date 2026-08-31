@@ -78,6 +78,16 @@ Each encoder returns bytes plus the content type that describes them, and touche
 
 `content=` produces no content type at all. Bytes with no further description are `application/octet-stream` as far as HTTP is concerned, but guessing that on the caller's behalf means silently labelling every hand built body, including ones that are already JSON or already form encoded. httpx2 sets nothing here and neither does this.
 
+## Decoding a body never fails
+
+`response.text()` cannot raise on the bytes. Every undecodable sequence becomes U+FFFD, one per maximal subpart, which is what Python's `errors="replace"` produces and therefore what httpx2 gives back. The reasoning is that a body which does not decode still deserves to be shown: a client that threw here would turn a mislabelled response into one the caller cannot inspect at all, at exactly the moment they most want to look at it.
+
+The strict reading has not gone anywhere. `response.json()` refuses invalid UTF-8, `Bytes.to_string` refuses it, and `response.content` is always there for a caller who wants to decode it themselves. So a body that lies about its encoding fails where failing is useful and gets shown where showing is useful.
+
+Which encoding gets used is three checks in order. The `charset` parameter of the content type, if it names something we can decode. Then `default_encoding`, which is either a fixed name or a detector function the caller supplied. Then UTF-8. An unknown label falls back rather than failing, the same way a missing one does, because a server that names an encoding nobody implements has still sent a body and that body is almost always UTF-8 anyway.
+
+The set of encodings is smaller than Python's, and `utf-16` with no byte order mark is read little endian where httpx2 raises. Both are written up in [deviations](deviations.md).
+
 ## Parsing rule
 
 `len()` on a `String` is a hard compile error in Mojo 1.0, on the grounds that the byte count and the character count are different answers and the caller should say which one they want. That is a good decision by the language, and for this project it points somewhere useful: every parser works on `Span[UInt8]` and never touches `String` at all. Strings only appear at the boundary where a user sees a value.
