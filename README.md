@@ -87,13 +87,15 @@ Mojo is not Python, and a few things cannot be copied directly. Every deviation 
 
 | httpx2 | mojo.httpx | Reason |
 | --- | --- | --- |
-| `r.json()` returns `Any` | returns a typed `JSON` value with accessors | Mojo has no dynamic `Any` |
+| `r.json()` returns `Any` | returns a typed `Json` value with accessors | Mojo has no dynamic `Any` |
 | `except httpx.TimeoutException` | `if httpx.is_timeout(e)` | Mojo has one error type and no exception subclassing |
 | duck typed transports | a generic transport plus an erased vtable | Mojo has no trait objects |
 | `async with AsyncClient()` | explicit `await client.aclose()` | Mojo has no async context managers |
 | generator based iterators | iterator structs | Mojo has no generators |
 | `**kwargs` config | typed builders | Mojo has no keyword argument packing |
 | `timedelta` | `Duration` | no stdlib equivalent |
+
+That is the short list. [Deviations](docs/deviations.md) has the full one, including the handful of places where copying httpx2 exactly was possible and we chose not to, and what the alternative was in each case.
 
 ## Requirements
 
@@ -127,6 +129,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. It lists 
 - [Architecture](docs/architecture.md) for the layer model and the design decisions behind it
 - [TLS](docs/tls.md) for the defaults, custom CA bundles, client certificates, and reading a handshake failure
 - [JSON](docs/json.md) for reading a body, building one, and what the parser refuses
+- [Deviations](docs/deviations.md) for every place this behaves differently from httpx2, and why
 - [Roadmap](docs/roadmap.md) for milestones M0 through M9
 - [Testing](docs/testing.md) for the test layers, the CI matrix, and the local hardware fleet
 

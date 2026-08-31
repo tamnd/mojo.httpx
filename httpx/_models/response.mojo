@@ -13,6 +13,12 @@ purpose.
 
 from httpx._models.headers import Headers
 from httpx._models.json import Json, parse_json
+from httpx._util.charset import (
+    DefaultEncoding,
+    decode_charset,
+    is_known_charset,
+)
+from httpx._util.media import parse_media_type
 
 
 def status_text(code: Int) -> StaticString:
@@ -111,6 +117,14 @@ struct Response(Movable, Writable):
     already answered.
     """
 
+    var default_encoding: DefaultEncoding
+    """What to read the body as when the response does not say.
+
+    UTF-8 unless the caller changes it. Set on the client and carried down to
+    every response it produces, which is the only place a caller can express
+    knowledge about a service that mislabels its bodies.
+    """
+
     def __init__(
         out self,
         status_code: Int,
@@ -119,6 +133,7 @@ struct Response(Movable, Writable):
         var headers: Headers = Headers(),
         var content: List[UInt8] = List[UInt8](),
         var trailers: Headers = Headers(),
+        var default_encoding: DefaultEncoding = DefaultEncoding(),
     ):
         self.status_code = status_code
         self.reason_phrase = reason_phrase^
@@ -126,6 +141,7 @@ struct Response(Movable, Writable):
         self.headers = headers^
         self.content = content^
         self.trailers = trailers^
+        self.default_encoding = default_encoding^
 
     def copy(self) -> Self:
         var out = Self(
@@ -136,16 +152,56 @@ struct Response(Movable, Writable):
         )
         out.content = self.content.copy()
         out.trailers = self.trailers.copy()
+        out.default_encoding = self.default_encoding.copy()
         return out^
 
-    def text(self) raises -> String:
-        """The body decoded as text.
+    def charset_encoding(self) -> Optional[String]:
+        """The `charset` parameter of the content type, or nothing.
 
-        UTF-8 for now. Working out the encoding from the content type, the byte
-        order mark and the bytes themselves is its own piece of work and belongs
-        with the rest of the content handling.
+        Lowercased, because charset labels are case insensitive and a caller
+        comparing the result against a literal should not have to know that.
+        Nothing is returned when there is no content type, no `charset`, or an
+        empty one, and all three mean the same thing to `encoding`.
         """
-        return String(StringSpan(from_utf8=Span(self.content)))
+        var raw = self.headers.get_span("content-type")
+        if not raw:
+            return None
+        var media = parse_media_type(raw.value())
+        var found = media.param("charset")
+        if not found or found.value() == "":
+            return None
+        return found.value().lower()
+
+    def encoding(self) raises -> String:
+        """The encoding the body will be read as.
+
+        The charset from the content type when it names something this can
+        decode, and `default_encoding` otherwise. An unknown label falls back
+        rather than failing, which is what httpx2 does with a label Python has no
+        codec for and is the only sensible answer: a server that names an
+        encoding nobody implements has still sent a body, and it is almost always
+        UTF-8.
+        """
+        var declared = self.charset_encoding()
+        if declared and is_known_charset(declared.value()):
+            return declared.value()
+        return self.default_encoding.resolve(self.content)
+
+    def text(self) raises -> String:
+        """The body decoded as text, with anything undecodable replaced.
+
+        Never fails on the bytes. A body that does not decode still deserves to
+        be shown, and every undecodable sequence becomes U+FFFD, which is what
+        httpx2 gives back because Python's incremental decoder is asked for
+        `errors="replace"`. The `raises` is for the detector hook on
+        `default_encoding`, which is the caller's own code and may fail.
+
+        A caller who needs to know whether the body really was the encoding it
+        claimed reads `content` and decodes that strictly. `r.json()` already
+        does, so a body that lies about its encoding fails there rather than
+        arriving as replacement characters.
+        """
+        return decode_charset(Span(self.content), self.encoding())
 
     def json(self) raises -> Json:
         """The body parsed as JSON.
