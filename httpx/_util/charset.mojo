@@ -247,6 +247,136 @@ def decode_by_id[o: ImmOrigin](bytes: Span[UInt8, o], id: Int) -> String:
     return _decode_utf8(bytes)
 
 
+def resolved_id[o: ImmOrigin](bytes: Span[UInt8, o], id: Int) -> Int:
+    """Which byte order a stream is in, decided once from its opening bytes.
+
+    Only `utf-16` and `utf-32` have anything to decide. Everything else comes
+    back unchanged.
+
+    This exists for the streaming path. Decoding a whole body at once can look
+    at the mark and the body in the same call, but decoding it in pieces cannot:
+    the mark is only in the first chunk, and a later chunk decoded as `utf-16`
+    on its own would fall back to little endian and read a big endian document
+    backwards. So the order is settled once, at the front, and every chunk after
+    that is decoded with the answer.
+    """
+    if id == UTF_16:
+        if bytes.__len__() >= 2:
+            if bytes[0] == 0xFF and bytes[1] == 0xFE:
+                return UTF_16LE
+            if bytes[0] == 0xFE and bytes[1] == 0xFF:
+                return UTF_16BE
+        return UTF_16LE
+    if id == UTF_32:
+        if bytes.__len__() >= 4:
+            var le = (
+                bytes[0] == 0xFF
+                and bytes[1] == 0xFE
+                and bytes[2] == 0x00
+                and bytes[3] == 0x00
+            )
+            if le:
+                return UTF_32LE
+            var be = (
+                bytes[0] == 0x00
+                and bytes[1] == 0x00
+                and bytes[2] == 0xFE
+                and bytes[3] == 0xFF
+            )
+            if be:
+                return UTF_32BE
+        return UTF_32LE
+    return id
+
+
+def mark_length[o: ImmOrigin](bytes: Span[UInt8, o], id: Int) -> Int:
+    """How many opening bytes are a byte order mark rather than content.
+
+    Zero for everything except a `utf-16` or `utf-32` stream that actually
+    starts with one. A mark on a UTF-8 body is not counted, because Python's
+    `utf-8` codec keeps it as U+FEFF and httpx2 therefore hands it back.
+    """
+    if id == UTF_16:
+        if bytes.__len__() >= 2:
+            var mark = (bytes[0] == 0xFF and bytes[1] == 0xFE) or (
+                bytes[0] == 0xFE and bytes[1] == 0xFF
+            )
+            if mark:
+                return 2
+        return 0
+    if id == UTF_32:
+        if bytes.__len__() >= 4:
+            var le = (
+                bytes[0] == 0xFF
+                and bytes[1] == 0xFE
+                and bytes[2] == 0x00
+                and bytes[3] == 0x00
+            )
+            var be = (
+                bytes[0] == 0x00
+                and bytes[1] == 0x00
+                and bytes[2] == 0xFE
+                and bytes[3] == 0xFF
+            )
+            if le or be:
+                return 4
+        return 0
+    return 0
+
+
+def complete_prefix[o: ImmOrigin](bytes: Span[UInt8, o], id: Int) -> Int:
+    """How much of `bytes` can be decoded now without cutting a character.
+
+    The whole point of the text iterator. A chunk boundary lands wherever the
+    network put it, and a decoder that took each chunk on its own would turn
+    every multi byte character unlucky enough to straddle one into two
+    replacement characters. Holding the tail back until its rest arrives is what
+    makes `iter_text` produce the same string as `text` no matter how the body
+    was split up.
+
+    Never holds back more than a character's worth. A tail that is not the start
+    of anything valid is handed over rather than kept, because keeping it would
+    mean waiting forever for bytes that are not coming.
+    """
+    var n = bytes.__len__()
+    if n == 0:
+        return 0
+
+    if id == UTF_16 or id == UTF_16LE or id == UTF_16BE:
+        var whole = n - (n % 2)
+        if whole >= 2:
+            # A high surrogate is half a character, and its partner is the next
+            # two bytes. Decoding it alone would emit a replacement for a
+            # character that was encoded perfectly well.
+            var big = id == UTF_16BE
+            var last = _unit16(bytes, whole - 2, big)
+            if last >= 0xD800 and last <= 0xDBFF:
+                return whole - 2
+        return whole
+
+    if id == UTF_32 or id == UTF_32LE or id == UTF_32BE:
+        return n - (n % 4)
+
+    if id == LATIN_1 or id == WINDOWS_1252 or id == ASCII:
+        # Every byte is its own character, so there is never a partial one.
+        return n
+
+    # UTF-8. Walk back to the nearest lead byte and ask whether its sequence
+    # finished. Four steps is enough, because no sequence is longer than that,
+    # and a run of continuation bytes with no lead is malformed anyway and gets
+    # handed over to be replaced rather than waited on.
+    var back = 0
+    while back < 4 and back < n:
+        var at = n - 1 - back
+        var width = Int(utf8_width(bytes[at]))
+        if width > 0:
+            if at + width > n:
+                return at
+            return n
+        back += 1
+    return n
+
+
 def _finish(var out: List[UInt8]) -> String:
     """Wrap bytes this module built into a `String`.
 

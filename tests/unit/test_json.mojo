@@ -572,9 +572,9 @@ def response_with(
 ) raises -> Response:
     var headers = Headers()
     headers.append("content-type", content_type)
-    var r = Response(200, String("OK"), String("HTTP/1.1"), headers^)
-    r.content.extend(body.as_bytes())
-    return r^
+    var content = List[UInt8]()
+    content.extend(body.as_bytes())
+    return Response(200, String("OK"), String("HTTP/1.1"), headers^, content^)
 
 
 def test_response_json_reads_the_body() raises:

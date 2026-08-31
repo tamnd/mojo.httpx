@@ -2,7 +2,7 @@
 
 A full featured HTTP client for Mojo, with the same API and the same developer experience as [httpx2](https://github.com/pydantic/httpx2).
 
-**Status: pre-alpha.** HTTP/1.1 requests work over TCP and over TLS today, so `http://` and `https://` both work. HTTP/2, redirects, auth, cookies and streaming do not exist yet. See the [roadmap](docs/roadmap.md) for what is landing and when. Do not use this in production.
+**Status: pre-alpha.** HTTP/1.1 requests work over TCP and over TLS today, so `http://` and `https://` both work. HTTP/2, redirects, auth and cookies do not exist yet. A response can be walked a chunk at a time with `iter_bytes`, `iter_text` and `iter_lines`, but the transport still reads the whole body before handing the response back, so nothing is streamed off the wire yet. See the [roadmap](docs/roadmap.md) for what is landing and when. Do not use this in production.
 
 ## Why
 

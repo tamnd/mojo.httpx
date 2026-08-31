@@ -23,9 +23,9 @@ def response_with(
     var headers = Headers()
     if content_type.byte_length() > 0:
         headers.append("content-type", content_type)
-    var r = Response(200, String("OK"), String("HTTP/1.1"), headers^)
-    r.content = body.copy()
-    return r^
+    return Response(
+        200, String("OK"), String("HTTP/1.1"), headers^, body.copy()
+    )
 
 
 def bytes_of(*values: Int) -> List[UInt8]:

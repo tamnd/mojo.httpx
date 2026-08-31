@@ -80,7 +80,7 @@ def test_a_slow_but_steady_response_beats_the_read_timeout() raises:
     var timeout = Timeout.uniform(Optional[Float64](0.4))
     var response = _send(transport, server, "/drip/20?delay=0.05", timeout)
     assert_equal(response.status_code, 200)
-    assert_equal(len(response.content), 20)
+    assert_equal(len(response.content()), 20)
 
 
 def test_a_spent_connect_budget_is_reported_as_a_connect_timeout() raises:

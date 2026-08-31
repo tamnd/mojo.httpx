@@ -238,7 +238,7 @@ def test_a_trailer_cannot_reframe_a_body_that_has_already_been_read() raises:
         ),
     )
     assert_equal(response.status_code, 200)
-    assert_equal(len(response.content), 5)
+    assert_equal(len(response.content()), 5)
     assert_true("content-length" not in response.headers)
     assert_equal(response.trailers["content-length"], "99")
 
