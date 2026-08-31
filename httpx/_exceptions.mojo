@@ -30,7 +30,7 @@ parsing it back is exact.
 """
 
 
-struct ErrorKind(Equatable, ImplicitlyCopyable, Movable, Writable):
+struct ErrorKind(Equatable, ImplicitlyCopyable, Movable):
     """A node in the httpx2 error hierarchy.
 
     The value is read as a sequence of nibbles from the most significant end,
@@ -119,11 +119,17 @@ struct ErrorKind(Equatable, ImplicitlyCopyable, Movable, Writable):
 
     def name(self) -> String:
         """The httpx2 name for this kind, which is also how it is spelled in a
-        message."""
-        return String(_name_of(self.value))
+        message.
 
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(self.name())
+        This is deliberately the only way to render a kind. Conforming to
+        `Writable` would also make an `ErrorKind` implicitly convertible to an
+        `Error`, and then `is_invalid_url(kind_of(e))` would compile: it would
+        build an `Error` whose whole text is `InvalidURL`, find no colon to read
+        a name from, and answer `False` for every kind. Every predicate below
+        takes an `Error`, so that mistake is easy to make and returns a plausible
+        answer. Without the conformance it does not compile.
+        """
+        return String(_name_of(self.value))
 
 
 comptime _COLON = UInt8(ord(":"))
