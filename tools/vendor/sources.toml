@@ -1,0 +1,68 @@
+# The test corpora this library is checked against, and where each one came from.
+#
+# They are vendored rather than downloaded during a test run for three reasons.
+# A test that reaches the network fails for reasons that have nothing to do with
+# the change being tested. These files change upstream on their own schedule, so
+# a run that fetches them is not reproducible and a bisect over it is not
+# meaningful. And a fetch during the build is a supply chain hole: whatever is
+# served at that moment gets to decide what the tests assert.
+#
+# Refreshing one is deliberate. `python tools/vendor/fetch.py --update` downloads
+# every source again and rewrites tests/data/LOCK.toml, and the resulting diff is
+# reviewed like any other. `pixi run vendor-check` verifies that what is on disk
+# is what the lock says, and nothing else.
+
+[[source]]
+name = "public-suffix-list"
+url = "https://raw.githubusercontent.com/publicsuffix/list/master/public_suffix_list.dat"
+path = "tests/data/psl/public_suffix_list.dat"
+license = "MPL-2.0"
+purpose = """
+The list of domain suffixes under which anyone may register a name. Rejecting a
+Set-Cookie whose Domain is one of these is what stops a site setting a cookie for
+every site under a whole TLD, so this is a security control and not a nicety.
+httpx2 gets it from the standard library; we have to supply it.
+"""
+
+[[source]]
+name = "public-suffix-tests"
+url = "https://raw.githubusercontent.com/publicsuffix/list/master/tests/test_psl.txt"
+path = "tests/data/psl/test_psl.txt"
+license = "MPL-2.0"
+purpose = """
+The reference cases for the lookup algorithm, including the wildcard and
+exception rules that are the part everybody gets wrong.
+"""
+
+[[source]]
+name = "whatwg-url"
+url = "https://raw.githubusercontent.com/web-platform-tests/wpt/master/url/resources/urltestdata.json"
+path = "tests/data/url/urltestdata.json"
+license = "BSD-3-Clause"
+purpose = """
+Every URL parsing case the browsers agree on. Much of it covers behaviour a
+client library deliberately does not copy, so the harness records which cases are
+skipped and why rather than quietly passing a subset.
+"""
+
+[[source]]
+name = "unicode-idna"
+url = "https://www.unicode.org/Public/idna/latest/IdnaTestV2.txt"
+path = "tests/data/idna/IdnaTestV2.txt"
+license = "Unicode-3.0"
+purpose = """
+The UTS-46 conformance cases. A hostname that maps to a different name than the
+user typed sends the request somewhere else entirely, so this is the corpus that
+decides whether the IDNA layer is trustworthy.
+"""
+
+[[source]]
+name = "http-state-cookies"
+url = "https://raw.githubusercontent.com/abarth/http-state/master/tests/data/parser.json"
+path = "tests/data/cookies/parser.json"
+license = "MIT"
+purpose = """
+The cookie parsing suite the web platform tests are derived from, in a form that
+can be read without a browser. RFC 6265 section 5.2 is quirky enough that reading
+it and implementing what it appears to say produces something that fails here.
+"""

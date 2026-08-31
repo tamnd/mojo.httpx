@@ -45,6 +45,18 @@ format = "mojo format httpx/ tests/"
 # anything moved.
 format-check = "python tools/fmt/check.py"
 
+# The test corpora under tests/data/ are vendored, so this checks they are the
+# bytes tests/data/LOCK.toml says they are and that nothing undeclared has been
+# dropped in beside them. Fetching is a separate, deliberate step:
+# `python tools/vendor/fetch.py --update`.
+vendor-check = "python tools/vendor/check.py"
+
+# The Public Suffix List is checked in twice: once as the vendored file and once
+# as the Mojo table generated from it. This is what catches the second drifting
+# from the first, which would otherwise show up as a cookie scoping bug nobody
+# is looking for.
+generated-check = "python tools/gen_psl.py --check"
+
 # Layering, unsafe operations and deadlines. See tools/lint/run.py for why each
 # one exists.
 lint = "python tools/lint/run.py"
@@ -57,11 +69,18 @@ lint-selftest = "python tools/lint/run.py --selftest"
 baseline = "python tools/baseline/check_errno.py"
 
 # Everything, in the order a failure is cheapest to read.
-check = { depends-on = ["format-check", "lint", "lint-selftest", "baseline", "test"] }
+check = { depends-on = [
+  "format-check",
+  "lint",
+  "lint-selftest",
+  "vendor-check",
+  "generated-check",
+  "baseline",
+  "test",
+] }
 
 # Tasks below land with the milestone that needs them. See docs/roadmap.md.
 #   build         M8   mojo build httpx/cli/__main__.mojo -o build/httpx
 #   bench         M2   the benchmark suite
 #   parity        M4   the httpx2 comparison suite
 #   docs          M8   render the mojo doc JSON into the API reference
-#   vendor-check  M1   verify the recorded provenance of tests/data/
