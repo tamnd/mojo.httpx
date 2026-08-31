@@ -20,6 +20,7 @@ from httpx._client import Client
 from httpx._config import Timeout
 from httpx._exceptions import ErrorKind
 from httpx._models.headers import Headers
+from httpx._models.json import Json, JsonValue, parse_json
 from httpx._models.request import Request
 from httpx._models.response import Response
 from httpx._models.url import URL, QueryParams

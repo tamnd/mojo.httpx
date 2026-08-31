@@ -54,6 +54,16 @@ Instead every layer from L3 up is generic over a `ByteStream` trait. `TcpStream`
 
 `Stream` is a tagged union of the two concrete stream types rather than a vtable, which is the opposite of the choice at L4. The reason is that the two sets are different shapes. The set of transports is open, because users pass their own, so it needs runtime dispatch. The set of streams is closed and always will be, because a stream is either a socket or TLS over a socket, and adding a third would be our change to make and not a user's. A closed set gets a union, an open one gets a vtable, and paying for indirection on every read of every byte to support an implementation nobody can write is not a trade worth making.
 
+## JSON is an arena, and the parser has its own stack
+
+A JSON value is normally a struct that holds a list of itself. Mojo 1.0 will not compile that: a struct cannot be `Deinitable` while one of its fields needs the struct to already be `Deinitable`, and the only way out is a raw pointer, which is not allowed above L2.
+
+So a document is two flat lists instead. One node per value, holding offsets and the indices of its first child and next sibling, and one byte buffer holding every decoded string and every number as the server wrote it. `Json` owns those two lists and `JsonValue` is a borrowed view of one node in them, which is two spans and an integer. Because the two spans come from two different fields, and Mojo tracks each field's origin separately, the view carries two origin parameters rather than one.
+
+The constraint produced a better design than the one it ruled out. Parsing a body is two allocations that grow rather than one per value, indexing walks integers and copies nothing, and a value provably cannot outlive the document it came from.
+
+The parser is iterative with an explicit stack on the heap, and refuses anything nested deeper than two hundred. A response body is attacker controlled, and a recursive descent parser handed a few hundred thousand open brackets exhausts the machine stack, which is not an exception the caller can catch. That is a one line denial of service against anything that calls `r.json()`, so the recursion had to go. The serializer is still a plain recursion, which is sound because the depth limit is enforced on built documents too, not only on parsed ones.
+
 ## Parsing rule
 
 `len()` on a `String` is a hard compile error in Mojo 1.0, on the grounds that the byte count and the character count are different answers and the caller should say which one they want. That is a good decision by the language, and for this project it points somewhere useful: every parser works on `Span[UInt8]` and never touches `String` at all. Strings only appear at the boundary where a user sees a value.

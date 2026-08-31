@@ -270,6 +270,118 @@ def is_digit(byte: UInt8) -> Bool:
     return byte >= _ZERO and byte <= _NINE
 
 
+def utf8_width(lead: UInt8) -> Int:
+    """How many bytes a sequence starting with `lead` occupies, or zero.
+
+    Zero for a continuation byte and for the lead bytes no valid sequence uses,
+    which are `0xC0` and `0xC1`, always overlong, and `0xF5` upwards, always
+    past U+10FFFF. A caller that treats zero as "not a start" therefore never
+    walks into the middle of a character.
+
+    This is the length the lead byte claims, not a promise that the bytes after
+    it are there or are valid. `utf8_length` is the one that checks.
+    """
+    if lead < 0x80:
+        return 1
+    if lead >= 0xC2 and lead <= 0xDF:
+        return 2
+    if lead >= 0xE0 and lead <= 0xEF:
+        return 3
+    if lead >= 0xF0 and lead <= 0xF4:
+        return 4
+    return 0
+
+
+def utf8_length[o: ImmOrigin](bytes: Span[UInt8, o], at: Int) -> Int:
+    """The length of the valid UTF-8 sequence at `at`, or zero if there is none.
+
+    Full RFC 3629 validation rather than a continuation byte count. The three
+    extra rules are the ones that matter and the ones a naive decoder skips.
+
+    Overlong forms are rejected, because `0xC0 0x80` decoding to a nul is how a
+    filter that scans the encoded bytes and a consumer that scans the decoded
+    ones are made to disagree.
+
+    Surrogates, U+D800 to U+DFFF, are rejected. They are not characters, they
+    only exist to let UTF-16 address the astral planes, and a UTF-8 encoded one
+    is exactly the thing that turns into a replacement character somewhere and
+    a crash somewhere else.
+
+    Anything above U+10FFFF is rejected, since it is not a code point.
+    """
+    var n = bytes.__len__()
+    if at < 0 or at >= n:
+        return 0
+    var lead = bytes[at]
+    var width = utf8_width(lead)
+    if width == 0 or at + width > n:
+        return 0
+    if width == 1:
+        return 1
+
+    # The second byte carries the range checks. Every later byte only has to be
+    # a continuation, because by then the code point is already pinned down to
+    # a range that cannot be overlong or out of bounds.
+    var low = UInt8(0x80)
+    var high = UInt8(0xBF)
+    if lead == 0xE0:
+        low = 0xA0
+    elif lead == 0xED:
+        high = 0x9F
+    elif lead == 0xF0:
+        low = 0x90
+    elif lead == 0xF4:
+        high = 0x8F
+    var second = bytes[at + 1]
+    if second < low or second > high:
+        return 0
+    for i in range(at + 2, at + width):
+        if (bytes[i] & 0xC0) != 0x80:
+            return 0
+    return width
+
+
+def is_valid_utf8[o: ImmOrigin](bytes: Span[UInt8, o]) -> Bool:
+    var at = 0
+    var n = bytes.__len__()
+    while at < n:
+        var width = utf8_length(bytes, at)
+        if width == 0:
+            return False
+        at += width
+    return True
+
+
+def append_codepoint(mut out: List[UInt8], point: UInt32):
+    """Encode one code point as UTF-8 onto the end of `out`.
+
+    Surrogates and values above U+10FFFF are not encodable and are the caller's
+    job to reject, because the caller is the one that knows where the number
+    came from and can say so in the error. Passing one here writes a
+    replacement character rather than corrupt bytes, so a missed check degrades
+    the text instead of producing something `String` would later refuse.
+    """
+    var value = point
+    if (value >= 0xD800 and value <= 0xDFFF) or value > 0x10FFFF:
+        value = 0xFFFD
+    if value < 0x80:
+        out.append(UInt8(value))
+        return
+    if value < 0x800:
+        out.append(UInt8(0xC0 | (value >> 6)))
+        out.append(UInt8(0x80 | (value & 0x3F)))
+        return
+    if value < 0x10000:
+        out.append(UInt8(0xE0 | (value >> 12)))
+        out.append(UInt8(0x80 | ((value >> 6) & 0x3F)))
+        out.append(UInt8(0x80 | (value & 0x3F)))
+        return
+    out.append(UInt8(0xF0 | (value >> 18)))
+    out.append(UInt8(0x80 | ((value >> 12) & 0x3F)))
+    out.append(UInt8(0x80 | ((value >> 6) & 0x3F)))
+    out.append(UInt8(0x80 | (value & 0x3F)))
+
+
 def parse_decimal[o: ImmOrigin](text: Span[UInt8, o]) raises -> Int:
     """Parse an unsigned decimal integer, strictly.
 

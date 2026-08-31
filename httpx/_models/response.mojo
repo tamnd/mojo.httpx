@@ -12,6 +12,7 @@ purpose.
 """
 
 from httpx._models.headers import Headers
+from httpx._models.json import Json, parse_json
 
 
 def status_text(code: Int) -> StaticString:
@@ -145,6 +146,17 @@ struct Response(Movable, Writable):
         with the rest of the content handling.
         """
         return String(StringSpan(from_utf8=Span(self.content)))
+
+    def json(self) raises -> Json:
+        """The body parsed as JSON.
+
+        The content type is not consulted. Plenty of real services send JSON
+        labelled `text/plain` or with no type at all, and refusing to parse a
+        body that is obviously JSON because of a header the caller cannot
+        change would only mean the caller reaches past this to `parse_json`.
+        A body that is not JSON raises either way.
+        """
+        return parse_json(Span(self.content))
 
     def is_informational(self) -> Bool:
         return 100 <= self.status_code and self.status_code < 200

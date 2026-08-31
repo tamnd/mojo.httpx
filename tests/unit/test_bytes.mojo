@@ -12,6 +12,7 @@ from std.testing import assert_equal, assert_false, assert_raises, assert_true
 
 from httpx._bytes import (
     Bytes,
+    append_codepoint,
     ends_with,
     equal_ascii_ci,
     index_of,
@@ -19,9 +20,12 @@ from httpx._bytes import (
     is_ows,
     parse_decimal,
     parse_hex,
+    is_valid_utf8,
     starts_with,
     to_lower,
     trim_ows,
+    utf8_length,
+    utf8_width,
 )
 
 
@@ -244,3 +248,126 @@ def test_error_messages_are_length_limited() raises:
         assert_true(String(e).byte_length() < 200)
         assert_true("500 bytes" in String(e))
     assert_true(raised)
+
+
+def bytes_of(*values: Int) -> List[UInt8]:
+    var out = List[UInt8]()
+    for value in values:
+        out.append(UInt8(value))
+    return out^
+
+
+def test_utf8_width_reads_the_lead_byte() raises:
+    assert_equal(utf8_width(0x41), 1)
+    assert_equal(utf8_width(0x7F), 1)
+    assert_equal(utf8_width(0xC2), 2)
+    assert_equal(utf8_width(0xDF), 2)
+    assert_equal(utf8_width(0xE0), 3)
+    assert_equal(utf8_width(0xEF), 3)
+    assert_equal(utf8_width(0xF0), 4)
+    assert_equal(utf8_width(0xF4), 4)
+
+
+def test_utf8_width_is_zero_for_bytes_that_start_nothing() raises:
+    # A continuation byte, the two lead bytes that are always overlong, and
+    # everything above the largest code point. Treating any of these as a
+    # start is how a decoder walks into the middle of a character.
+    assert_equal(utf8_width(0x80), 0)
+    assert_equal(utf8_width(0xBF), 0)
+    assert_equal(utf8_width(0xC0), 0)
+    assert_equal(utf8_width(0xC1), 0)
+    assert_equal(utf8_width(0xF5), 0)
+    assert_equal(utf8_width(0xFF), 0)
+
+
+def test_utf8_length_accepts_real_sequences() raises:
+    var ascii = bytes_of(0x41)
+    assert_equal(utf8_length(Span(ascii), 0), 1)
+    var two = bytes_of(0xC3, 0xA9)
+    assert_equal(utf8_length(Span(two), 0), 2)
+    var three = bytes_of(0xE2, 0x82, 0xAC)
+    assert_equal(utf8_length(Span(three), 0), 3)
+    var four = bytes_of(0xF0, 0x9F, 0x98, 0x80)
+    assert_equal(utf8_length(Span(four), 0), 4)
+
+
+def test_utf8_length_rejects_overlong_forms() raises:
+    # A nul written the long way. Accepting it is how a filter that scans the
+    # encoded bytes and a consumer that scans the decoded ones are made to
+    # disagree about what a string contains.
+    var overlong_nul = bytes_of(0xC0, 0x80)
+    assert_equal(utf8_length(Span(overlong_nul), 0), 0)
+    var overlong_three = bytes_of(0xE0, 0x80, 0xAF)
+    assert_equal(utf8_length(Span(overlong_three), 0), 0)
+    var overlong_four = bytes_of(0xF0, 0x80, 0x80, 0xAF)
+    assert_equal(utf8_length(Span(overlong_four), 0), 0)
+
+
+def test_utf8_length_rejects_encoded_surrogates() raises:
+    # U+D800 through U+DFFF are not characters. They exist so UTF-16 can reach
+    # the astral planes, and an encoded one turns into a replacement character
+    # in one place and a crash in another.
+    var high = bytes_of(0xED, 0xA0, 0x80)
+    assert_equal(utf8_length(Span(high), 0), 0)
+    var low = bytes_of(0xED, 0xBF, 0xBF)
+    assert_equal(utf8_length(Span(low), 0), 0)
+    # U+D7FF and U+E000, either side of the hole, stay valid.
+    var below = bytes_of(0xED, 0x9F, 0xBF)
+    assert_equal(utf8_length(Span(below), 0), 3)
+    var above = bytes_of(0xEE, 0x80, 0x80)
+    assert_equal(utf8_length(Span(above), 0), 3)
+
+
+def test_utf8_length_rejects_anything_past_the_last_code_point() raises:
+    var too_big = bytes_of(0xF4, 0x90, 0x80, 0x80)
+    assert_equal(utf8_length(Span(too_big), 0), 0)
+    var largest = bytes_of(0xF4, 0x8F, 0xBF, 0xBF)
+    assert_equal(utf8_length(Span(largest), 0), 4)
+
+
+def test_utf8_length_rejects_truncated_sequences() raises:
+    var cut = bytes_of(0xE2, 0x82)
+    assert_equal(utf8_length(Span(cut), 0), 0)
+    var missing_continuation = bytes_of(0xE2, 0x82, 0x41)
+    assert_equal(utf8_length(Span(missing_continuation), 0), 0)
+
+
+def test_utf8_length_is_zero_outside_the_span() raises:
+    var one = bytes_of(0x41)
+    assert_equal(utf8_length(Span(one), -1), 0)
+    assert_equal(utf8_length(Span(one), 1), 0)
+
+
+def test_is_valid_utf8() raises:
+    var good = List[UInt8]()
+    good.extend(String("héllo wörld 😀").as_bytes())
+    assert_true(is_valid_utf8(Span(good)))
+    var empty = List[UInt8]()
+    assert_true(is_valid_utf8(Span(empty)))
+    var bad = bytes_of(0x41, 0xFF, 0x42)
+    assert_false(is_valid_utf8(Span(bad)))
+    var trailing = bytes_of(0x41, 0xE2, 0x82)
+    assert_false(is_valid_utf8(Span(trailing)))
+
+
+def test_append_codepoint_encodes_each_width() raises:
+    var out = List[UInt8]()
+    append_codepoint(out, 0x41)
+    append_codepoint(out, 0xE9)
+    append_codepoint(out, 0x20AC)
+    append_codepoint(out, 0x1F600)
+    assert_equal(len(out), 1 + 2 + 3 + 4)
+    assert_true(is_valid_utf8(Span(out)))
+    assert_equal(String(StringSpan(from_utf8=Span(out))), "Aé€😀")
+
+
+def test_append_codepoint_writes_a_replacement_for_what_it_cannot_encode() raises:
+    # Rejecting these is the caller's job, because the caller knows where the
+    # number came from and can say so. Degrading the text rather than writing
+    # corrupt bytes means a missed check is a wrong character and not a String
+    # that refuses to exist.
+    var out = List[UInt8]()
+    append_codepoint(out, 0xD800)
+    append_codepoint(out, 0x110000)
+    assert_true(is_valid_utf8(Span(out)))
+    assert_equal(String(StringSpan(from_utf8=Span(out))), "\ufffd\ufffd")

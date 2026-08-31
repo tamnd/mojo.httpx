@@ -131,6 +131,13 @@ def test_a_closed_peer_is_noticed_without_consuming_anything() raises:
     assert_false(stream.is_closed_by_peer())
     assert_equal(_read_text(stream, 64), "HTTP/1.1 200 OK\r\n")
     peer.close()
+    # Wait for the FIN rather than asking straight away. `close` hands the
+    # segment to the kernel and returns, and on a loaded machine it can take a
+    # moment to come back round the loopback, so asking immediately is a race
+    # that fails a few times in a thousand and only on whichever runner is
+    # busiest. The wait costs nothing when the FIN is already there, which is
+    # every run on an idle machine.
+    _ = stream.wait_readable(Deadline.after(5.0))
     assert_true(stream.is_closed_by_peer())
 
 
