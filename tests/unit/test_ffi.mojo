@@ -38,6 +38,7 @@ from httpx._ffi.netdb import (
     bind_addr,
     connect_addr,
     getsockname,
+    is_ip_literal,
     resolve,
 )
 from httpx._ffi.socket import (
@@ -157,6 +158,27 @@ def test_ipv6_loopback_renders_bracketed() raises:
     # A logged address should be pasteable back into a URL.
     assert_equal(String(a), "[::1]")
     assert_equal(Int(a.port()), 443)
+
+
+def test_an_address_written_out_is_told_apart_from_a_name() raises:
+    """Which one it is decides whether AI_ADDRCONFIG is used.
+
+    Getting it wrong is not academic. glibc treats a machine whose only IPv6
+    address is the loopback as having no IPv6 configured, so AI_ADDRCONFIG makes
+    it refuse to parse `::1` on a machine where connecting to `::1` works. That
+    is exactly what happened on the Linux hosts before this existed.
+    """
+    assert_true(is_ip_literal("127.0.0.1"))
+    assert_true(is_ip_literal("0.0.0.0"))
+    assert_true(is_ip_literal("::1"))
+    assert_true(is_ip_literal("2001:db8::1"))
+    assert_true(is_ip_literal("fe80::1%en0"))
+    assert_false(is_ip_literal("example.com"))
+    assert_false(is_ip_literal("localhost"))
+    assert_false(is_ip_literal(""))
+    # A name whose last label is all digits is not registrable, so reading this
+    # as a literal costs nothing and keeps the check to one pass.
+    assert_true(is_ip_literal("1.2.3.4.5.6"))
 
 
 def test_resolution_failure_is_a_connect_error() raises:

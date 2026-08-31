@@ -43,7 +43,7 @@ test = "python tools/mojotest/run.py"
 format = "mojo format httpx/ tests/"
 # `mojo format` has no --check flag, so CI formats and then asks git whether
 # anything moved.
-format-check = "mojo format -q httpx/ tests/ && git diff --exit-code -- httpx/ tests/"
+format-check = "python tools/fmt/check.py"
 
 # Layering, unsafe operations and deadlines. See tools/lint/run.py for why each
 # one exists.

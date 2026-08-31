@@ -263,6 +263,36 @@ def gai_strerror(code: c_int) -> String:
     return cstr_to_string(external_call["gai_strerror", CStr](code))
 
 
+def is_ip_literal(host: StringSpan) -> Bool:
+    """True when `host` is an address written out rather than a name to look up.
+
+    A colon anywhere means IPv6, because a colon cannot appear in a hostname.
+    The whole string has to be scanned for it rather than stopped at the first
+    unexpected byte, since an IPv6 literal starts with hex digits and a zone id
+    ends with whatever the interface is called. Failing that, it is IPv4 only if
+    every byte is a digit or a dot, which no registrable name can be, since the
+    last label of a name may not be all digits.
+
+    This only decides which resolver flags to use, so being conservative is
+    safe: a literal misread as a name still resolves, just with a flag that does
+    not apply to it.
+    """
+    var bytes = host.as_bytes()
+    if bytes.__len__() == 0:
+        return False
+    for i in range(bytes.__len__()):
+        if bytes[i] == UInt8(ord(":")):
+            return True
+    for i in range(bytes.__len__()):
+        var byte = bytes[i]
+        if not (
+            (byte >= UInt8(ord("0")) and byte <= UInt8(ord("9")))
+            or byte == UInt8(ord("."))
+        ):
+            return False
+    return True
+
+
 def resolve(
     host: StringSpan, port: UInt16, family: c_int = AF_UNSPEC
 ) raises -> List[SockAddr]:
@@ -281,9 +311,21 @@ def resolve(
     var h = Ptr[UInt8](unsafe_from_address=Int(hints.unsafe_ptr()))
     h.unsafe_offset(_OFF_FAMILY).unsafe_bitcast[c_int]()[] = family
     h.unsafe_offset(_OFF_SOCKTYPE).unsafe_bitcast[c_int]()[] = SOCK_STREAM
-    # Do not offer AAAA records on a machine with no IPv6 route, or every
-    # connection pays a failed attempt before falling back.
-    h.unsafe_offset(_OFF_FLAGS).unsafe_bitcast[c_int]()[] = AI_ADDRCONFIG
+
+    # The port is always a number here, so there is no reason to let the
+    # resolver open /etc/services and look for a name it will not find.
+    var flags = AI_NUMERICSERV
+    if not is_ip_literal(host):
+        # Do not offer AAAA records on a machine with no IPv6 route, or every
+        # connection pays a failed attempt before falling back.
+        #
+        # Only for names. glibc counts a host whose only IPv6 address is the
+        # loopback as having no IPv6 configured, so AI_ADDRCONFIG makes it
+        # refuse to parse `::1` at all, on a machine where connecting to `::1`
+        # works perfectly. RFC 3493 defines the flag in terms of what a lookup
+        # should return, and a literal is not a lookup.
+        flags |= AI_ADDRCONFIG
+    h.unsafe_offset(_OFF_FLAGS).unsafe_bitcast[c_int]()[] = flags
 
     # Both of these must outlive the call, so they are named rather than built
     # inline in the argument list.

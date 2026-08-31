@@ -8,7 +8,7 @@
 #
 #   tools/fleet/run.sh                 run `pixi run test` on every host
 #   tools/fleet/run.sh --role fuzz     only hosts with that role
-#   tools/fleet/run.sh --host server3  one host
+#   tools/fleet/run.sh --host server3  one host, repeat the flag for more
 #   tools/fleet/run.sh -- pixi run bench
 #
 # Written for bash 3.2 so it works on a stock macOS shell.
@@ -19,13 +19,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOSTS_FILE="$ROOT/tools/fleet/hosts.toml"
 
 role=""
-only_host=""
+# Space delimited on both ends so a name can be matched whole, which is what
+# keeps `--host server1` from also selecting a host called server10. Host names
+# are ssh aliases and cannot contain a space, so there is nothing to quote.
+only_hosts=""
 cmd="pixi run test"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --role) role="$2"; shift 2 ;;
-    --host) only_host="$2"; shift 2 ;;
+    --host) only_hosts="$only_hosts $2 "; shift 2 ;;
     --) shift; cmd="$*"; break ;;
     -h|--help) sed -n '3,14p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -46,13 +49,20 @@ entries="$(
 
 status=0
 matched=0
+seen=""
 
 # Loop over fd 3 so that ssh inside the body cannot eat the host list.
 while IFS="$(printf '\t')" read -r name shell roles <&3; do
   [ -z "$name" ] && continue
-  if [ -n "$only_host" ] && [ "$name" != "$only_host" ]; then continue; fi
+  if [ -n "$only_hosts" ]; then
+    case "$only_hosts" in
+      *" $name "*) ;;
+      *) continue ;;
+    esac
+  fi
   if [ -n "$role" ] && [ "${roles#*"$role"}" = "$roles" ]; then continue; fi
   matched=$((matched + 1))
+  seen="$seen $name "
 
   echo
   echo "=== $name"
@@ -110,6 +120,16 @@ if [ "$matched" -eq 0 ]; then
   echo "no hosts matched" >&2
   exit 2
 fi
+
+# A name that is not in the table has to be an error rather than a skip. The
+# whole point of the script is to say which machines a change was proven on, and
+# a typo that silently drops a host would let it claim more than it checked.
+for want in $only_hosts; do
+  case "$seen" in
+    *" $want "*) ;;
+    *) echo "no host called $want in $HOSTS_FILE" >&2; exit 2 ;;
+  esac
+done
 
 echo
 if [ "$status" -eq 0 ]; then
