@@ -355,6 +355,25 @@ def is_protocol_error(imm e: Error) -> Bool:
     return kind_of(e).matches(ErrorKind.PROTOCOL_ERROR)
 
 
+def is_local_protocol_error(imm e: Error) -> Bool:
+    """Whether we produced a message the protocol does not allow.
+
+    Worth separating from the remote case because the two need different
+    reactions. This one is a bug in the calling code and no amount of retrying
+    will help.
+    """
+    return kind_of(e) == ErrorKind.LOCAL_PROTOCOL_ERROR
+
+
+def is_remote_protocol_error(imm e: Error) -> Bool:
+    """Whether the server sent something the protocol does not allow.
+
+    The connection cannot be reused after one of these, because not knowing
+    where the message ended means not knowing where the next one starts.
+    """
+    return kind_of(e) == ErrorKind.REMOTE_PROTOCOL_ERROR
+
+
 def is_proxy_error(imm e: Error) -> Bool:
     return kind_of(e).matches(ErrorKind.PROXY_ERROR)
 
