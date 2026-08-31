@@ -2,13 +2,49 @@
 
 A full featured HTTP client for Mojo, with the same API and the same developer experience as [httpx2](https://github.com/pydantic/httpx2).
 
-**Status: pre-alpha.** The design is complete and the toolchain work is done, but the library does not do anything useful yet. See the [roadmap](docs/roadmap.md) for what is landing and when. Do not use this in production.
+**Status: pre-alpha.** Plain HTTP/1.1 requests work over TCP today. TLS, HTTP/2, redirects, auth, cookies and streaming do not exist yet, so in practice that means `http://` only. See the [roadmap](docs/roadmap.md) for what is landing and when. Do not use this in production.
 
 ## Why
 
 Mojo has no HTTP client and no networking in the standard library. There is no socket module, no TLS module, no async runtime. So this project is not a thin wrapper over something that already exists. It is the whole stack: sockets over libc FFI, TLS over the OpenSSL that already ships inside the Mojo distribution, HTTP/1.1 and HTTP/2 framing, connection pooling, and the client API on top.
 
 The target is httpx2's API rather than something new, for a simple reason. Millions of developers already know that API from `requests` and `httpx`, the design has had ten years of real use behind it, and copying it means people can move code between Python and Mojo without relearning anything.
+
+## What works today
+
+```mojo
+import httpx
+
+def main() raises:
+    var r = httpx.get("http://example.com/")
+    print(r.status_code, r.text())
+```
+
+Keep a `Client` as soon as there is a second request, because a client holds its connections open and the one shot helpers do not.
+
+```mojo
+import httpx
+from httpx import Client, Headers, Timeout, URL
+
+def main() raises:
+    var headers = Headers()
+    headers["Authorization"] = "Bearer hunter2"
+
+    var slow = Timeout.uniform(Optional[Float64](30.0))
+
+    with Client(
+        base_url=URL("http://api.example.com"), headers=headers^, timeout=slow
+    ) as client:
+        var listing = client.get("/items")
+        print(listing.status_code)
+
+        var content = List[UInt8]()
+        content.extend('{"name": "widget"}'.as_bytes())
+        var created = client.post("/items", content=content^)
+        print(created.status_code)
+```
+
+Both requests in that block go over one connection. `Timeout` holds a separate limit for connect, read, write and pool, because those four fail for different reasons and deserve different answers, and every one of them is a deadline that is checked all the way down to the socket call.
 
 ## What it will look like
 
