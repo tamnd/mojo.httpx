@@ -152,7 +152,7 @@ def test_a_head_response_has_no_body_and_does_not_hang() raises:
     var client = Client()
     var response = _head(client, server, "/get")
     assert_equal(response.status_code, 200)
-    assert_equal(len(response.content), 0)
+    assert_equal(len(response.content()), 0)
     assert_true(response.headers["content-length"].byte_length() > 0)
     client.close()
 
@@ -288,7 +288,7 @@ def test_a_chunked_response_is_read_whole() raises:
     var client = Client()
     var response = _get(client, server, "/chunked")
     assert_equal(response.status_code, 200)
-    assert_true(len(response.content) > 0)
+    assert_true(len(response.content()) > 0)
     client.close()
 
 

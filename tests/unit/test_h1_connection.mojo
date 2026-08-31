@@ -126,7 +126,7 @@ def test_a_head_response_does_not_wait_for_a_body() raises:
         "HEAD", Headers(), "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n"
     )
     assert_equal(response.status_code, 200)
-    assert_equal(len(response.content), 0)
+    assert_equal(len(response.content()), 0)
 
 
 def test_a_204_does_not_wait_for_a_body() raises:
@@ -134,7 +134,7 @@ def test_a_204_does_not_wait_for_a_body() raises:
         "GET", Headers(), "HTTP/1.1 204 No Content\r\n\r\n"
     )
     assert_equal(response.status_code, 204)
-    assert_equal(len(response.content), 0)
+    assert_equal(len(response.content()), 0)
 
 
 def test_a_response_arriving_in_pieces_is_read() raises:

@@ -278,7 +278,7 @@ def test_a_head_response_through_the_pool_does_not_wait_for_a_body() raises:
     var pool = _pool(Limits())
     var response = _request(pool, server, "HEAD", "/get")
     assert_equal(response.status_code, 200)
-    assert_equal(len(response.content), 0)
+    assert_equal(len(response.content()), 0)
     assert_true(Int(response.headers["content-length"]) > 0)
 
 
@@ -287,7 +287,7 @@ def test_a_204_through_the_pool_does_not_wait_for_a_body() raises:
     var pool = _pool(Limits())
     var response = _get(pool, server, "/status/204")
     assert_equal(response.status_code, 204)
-    assert_equal(len(response.content), 0)
+    assert_equal(len(response.content()), 0)
     assert_equal(pool.idle_count(), 1)
 
 

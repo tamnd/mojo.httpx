@@ -21,9 +21,11 @@ from httpx._config import Timeout
 from httpx._content.multipart import FileUpload, MultipartData
 from httpx._exceptions import ErrorKind
 from httpx._models.headers import Headers
+from httpx._models.iterators import ByteChunks, LineChunks, TextChunks
 from httpx._models.json import Json, JsonValue, parse_json
 from httpx._models.request import Request
 from httpx._models.response import Response
+from httpx._models.stream import ByteSource, ByteStream, erase_source
 from httpx._models.url import URL, QueryParams
 from httpx._pool.limits import Limits
 from httpx._stream.config import ClientCert, SSLVerify

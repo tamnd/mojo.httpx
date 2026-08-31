@@ -82,11 +82,23 @@ Each encoder returns bytes plus the content type that describes them, and touche
 
 `response.text()` cannot raise on the bytes. Every undecodable sequence becomes U+FFFD, one per maximal subpart, which is what Python's `errors="replace"` produces and therefore what httpx2 gives back. The reasoning is that a body which does not decode still deserves to be shown: a client that threw here would turn a mislabelled response into one the caller cannot inspect at all, at exactly the moment they most want to look at it.
 
-The strict reading has not gone anywhere. `response.json()` refuses invalid UTF-8, `Bytes.to_string` refuses it, and `response.content` is always there for a caller who wants to decode it themselves. So a body that lies about its encoding fails where failing is useful and gets shown where showing is useful.
+The strict reading has not gone anywhere. `response.json()` refuses invalid UTF-8, `Bytes.to_string` refuses it, and `response.content()` is always there for a caller who wants to decode it themselves. So a body that lies about its encoding fails where failing is useful and gets shown where showing is useful.
 
 Which encoding gets used is three checks in order. The `charset` parameter of the content type, if it names something we can decode. Then `default_encoding`, which is either a fixed name or a detector function the caller supplied. Then UTF-8. An unknown label falls back rather than failing, the same way a missing one does, because a server that names an encoding nobody implements has still sent a body and that body is almost always UTF-8 anyway.
 
 The set of encodings is smaller than Python's, and `utf-16` with no byte order mark is read little endian where httpx2 raises. Both are written up in [deviations](deviations.md).
+
+## A body can only be read once, and the response says so
+
+A response body is either sitting in memory or still arriving on a socket, and everything that walks one goes through a single interface, `ByteStream`: pull a chunk, get bytes, get an empty chunk when there is no more. A body that came back with the response is a buffered source, a body still on the wire is a connection, and neither `read` nor any of the four iterators can tell the difference.
+
+Three flags describe where a response is. `_read` is whether the whole body is in memory, which is what decides whether `content()` answers or raises. `is_stream_consumed` is whether the stream has been handed to somebody, and `is_closed` is whether anything more can come out. The first is private because a caller who wanted it should be calling `content()` and getting a real answer or a real error. The other two are public because httpx2 exposes them and because they are what a caller wants to know after catching a `StreamConsumed`.
+
+Handing the stream out is a one way door. `iter_raw`, `iter_text` and `iter_lines` set both public flags before returning anything, so the second caller is turned away rather than getting a half body that starts wherever the first caller stopped. `iter_bytes` is the exception, and deliberately so: on a response whose body is already in memory it re-reads what is there, which costs nothing and asks nothing of the connection. That is httpx2's behaviour too.
+
+An empty chunk always means the end and never means "nothing yet". A source with no bytes available blocks until it has some or until its deadline runs out. This matters more than it looks: a client that read a pause as an ending would report a truncated body as a complete one, and the caller would have no way to find out.
+
+The three iterators stack. `LineChunks` pulls from `TextChunks` pulls from `ByteChunks` pulls from the stream, so the buffering that makes each step safe is written once. Each step has one thing it holds back. `ByteChunks` holds bytes until it has a full chunk of the size that was asked for. `TextChunks` holds the tail of a character whose remaining bytes have not arrived, which is the whole reason it is not `decode(chunk)` in a loop: without it every multibyte character that straddled a network boundary would come out as replacement characters, and which ones broke would depend on how the server sized its writes. `LineChunks` holds a trailing carriage return, because its newline may be the first byte of the next read.
 
 ## Parsing rule
 
