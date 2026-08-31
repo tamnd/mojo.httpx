@@ -83,6 +83,15 @@ struct TestServer(Movable):
             pass
 
     def url(self, path: StringSpan) -> String:
+        """The address of `path` on this server.
+
+        Watch where the last use of the server falls. Mojo ends a value's life
+        at its last use, so a test that calls this and then makes the request
+        has already shut the server down by the time the request goes out, and
+        the failure is a connection refused on a port that existed a moment
+        ago. Pass the server into whatever makes the request, so that it stays
+        borrowed until the call returns.
+        """
         return String("http://", self.host, ":", self.port, path)
 
     def authority(self) -> String:

@@ -71,6 +71,14 @@ LAYERS: dict[str, int] = {
 # Only these layers may hold a raw pointer or call into C.
 UNSAFE_LAYERS = {1, 2}
 
+# And this one module, which is not I/O at all. Storing a user's transport in a
+# client means holding a value whose type has been forgotten, Mojo 1.0 has no
+# trait objects, and the only way to do it is a pointer plus a function that
+# remembers how to destroy what is on the end of it. Named here file by file
+# rather than opened up for the whole layer, and every site in it still has to
+# carry its invariant like any other unsafe code.
+UNSAFE_MODULES = {"_util/erase.mojo"}
+
 IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+(httpx[\w.]*)", re.MULTILINE)
 
 # Every construct that can corrupt memory if the invariant behind it is wrong.
@@ -228,6 +236,8 @@ def check_unsafe(files: list[Path]) -> bool:
     found = Findings()
     for path in files:
         layer = layer_of(path)
+        module = path.relative_to(PACKAGE).as_posix()
+        allowed = layer in UNSAFE_LAYERS or module in UNSAFE_MODULES
         lines = path.read_text().splitlines()
         for index, line in enumerate(lines):
             if line.lstrip().startswith("#"):
@@ -235,12 +245,13 @@ def check_unsafe(files: list[Path]) -> bool:
             match = UNSAFE_RE.search(line)
             if not match:
                 continue
-            if layer not in UNSAFE_LAYERS and not _is_signature_use(line):
+            if not allowed and not _is_signature_use(line):
                 found.add(
                     path,
                     index + 1,
                     f"{match.group(0)!r} outside the I/O layers. Raw pointers "
-                    "and calls into C belong in httpx/_ffi or httpx/_io.",
+                    "and calls into C belong in httpx/_ffi or httpx/_io, or "
+                    "in a module named in UNSAFE_MODULES.",
                 )
             elif not justified(lines, index):
                 found.add(
