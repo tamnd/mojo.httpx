@@ -126,6 +126,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. It lists 
 
 - [Architecture](docs/architecture.md) for the layer model and the design decisions behind it
 - [TLS](docs/tls.md) for the defaults, custom CA bundles, client certificates, and reading a handshake failure
+- [JSON](docs/json.md) for reading a body, building one, and what the parser refuses
 - [Roadmap](docs/roadmap.md) for milestones M0 through M9
 - [Testing](docs/testing.md) for the test layers, the CI matrix, and the local hardware fleet
 
