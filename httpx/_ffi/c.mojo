@@ -40,7 +40,13 @@ from std.ffi import (
 )
 from std.sys import CompilationTarget, size_of
 
+from httpx._exceptions import ErrorKind, new_error
 
+
+# The one unsafe primitive the rest of this directory is built on. Sound only
+# because every pointer spelled this way is confined to `_ffi`, points at a
+# buffer whose lifetime the caller keeps alive across the call, and is checked
+# for null on the C side by being declared `Optional[Ptr[T]]`. See below.
 comptime Ptr[T: AnyType] = Pointer[T, MutUntrackedOrigin]
 """A raw C pointer. Write `Ptr[c_int]` where C would write `int *`.
 
@@ -135,6 +141,53 @@ def getenv(name: StringSpan) raises -> Optional[String]:
     if not found:
         return None
     return cstr_to_string(CStringSlice(unsafe_from_ptr=found.value()))
+
+
+def random_bytes(count: Int) raises -> List[UInt8]:
+    """`count` bytes from the operating system's entropy pool.
+
+    `getentropy` rather than `std.random`, because the caller is a multipart
+    boundary and a boundary that can be guessed is a boundary an attacker who
+    controls one part can write into another. `std.random` is seeded from the
+    clock and is fine for a shuffle and not for this.
+
+    Present on macOS since 10.12 and in glibc since 2.25, and in musl, which
+    covers every platform this builds for. There is no fallback on purpose: a
+    quiet downgrade to a weak source is worse than a failure that says the
+    machine cannot produce randomness.
+    """
+    comptime CHUNK = 256
+    """What `getentropy` accepts in one call. Asking for more fails with EIO
+    rather than returning short, so the loop is not optional."""
+
+    var out = List[UInt8](length=count, fill=0)
+    var at = 0
+    while at < count:
+        var want = min(CHUNK, count - at)
+        clear_errno()
+        # Writing into `out` from `at` onwards. The buffer was allocated at the
+        # full length above, so `want` bytes from `at` are in bounds on every
+        # pass, and the loop advances by exactly what it asked for.
+        var rc = external_call["getentropy", c_int](
+            Pointer(to=out[at]), c_size_t(want)
+        )
+        if rc != 0:
+            # `UnknownError` because there is no httpx2 exception for this and
+            # inventing a name would break the rule that every kind here is one
+            # httpx2 also has. The message carries the whole story anyway, and
+            # a machine that cannot produce sixteen random bytes has a problem
+            # no HTTP client is going to classify usefully.
+            raise new_error(
+                ErrorKind.UNKNOWN,
+                String(
+                    "the operating system would not produce ",
+                    want,
+                    " bytes of randomness: ",
+                    strerror(errno()),
+                ),
+            )
+        at += want
+    return out^
 
 
 def cstr_to_string[o: ImmOrigin](s: CStringSlice[o]) -> String:
