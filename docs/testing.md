@@ -85,6 +85,8 @@ The full plan, from `docs/roadmap.md`:
 | Parity | The same scenario through httpx2 and through us, compared on the wire |
 | Security | One explicit test per known attack class |
 
+The security layer is one file per attack class, named after the class, so somebody worried about a particular attack can find it by name rather than by reading the parser. `tests/security/test_smuggling.mojo` is the first of them and covers request smuggling: each published way of making two HTTP implementations disagree about where a message ends, put on a real socket, with the client required to refuse it. The cases at the end of that file are ordinary responses that have to be accepted, because a suite made only of refusals would pass on a parser that refused everything.
+
 The parity layer is the direct defence of the project's goal. Each scenario runs twice against the same server, once through this library and once through httpx2, and the raw bytes on the wire are compared. That catches header ordering, casing and framing differences that a status and body comparison would miss.
 
 ## Coverage
