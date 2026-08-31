@@ -98,6 +98,9 @@ struct Op(Equatable, ImplicitlyCopyable, Movable, Writable):
     comptime WRITE = Op(2)
     comptime CLOSE = Op(3)
     comptime RESOLVE = Op(4)
+    comptime POLL = Op(5)
+    comptime SOCKET = Op(6)
+    comptime FCNTL = Op(7)
 
     def __eq__(self, other: Self) -> Bool:
         return self.value == other.value
@@ -119,6 +122,12 @@ struct Op(Equatable, ImplicitlyCopyable, Movable, Writable):
             return "close"
         if self == Op.RESOLVE:
             return "resolve"
+        if self == Op.POLL:
+            return "wait on"
+        if self == Op.SOCKET:
+            return "open a socket for"
+        if self == Op.FCNTL:
+            return "configure the socket for"
         return "unknown"
 
 
@@ -171,6 +180,11 @@ def _network_kind(op: Op) -> ErrorKind:
         return ErrorKind.WRITE_ERROR
     if op == Op.CLOSE:
         return ErrorKind.CLOSE_ERROR
+    # Creating or configuring the socket is part of establishing the
+    # connection as far as a caller is concerned, so it reads as a connect
+    # failure rather than as an unlabelled network one.
+    if op == Op.SOCKET or op == Op.FCNTL:
+        return ErrorKind.CONNECT_ERROR
     return ErrorKind.NETWORK_ERROR
 
 
