@@ -18,6 +18,12 @@ deadline is made, which is the only place that knows whether this wait is a
 connect, a read, a write or a wait for a free connection, and carrying it means
 the raise site does not have to be told again.
 
+A deadline also remembers the duration it was made from, so that the phases
+measured per operation can start again for the next one. The connect budget
+covers a whole connect, resolution and every address tried together, but a read
+timeout that covered a whole response would be a ceiling on how large a
+download can be, which is not what anybody means by it.
+
 An unlimited deadline still produces a bounded wait. `remaining_ms` never
 returns a value that means wait forever, because a caller that loops until the
 deadline expires stays responsive and a caller that blocks in the kernel with no
@@ -68,10 +74,29 @@ struct Deadline(ImplicitlyCopyable, Movable, Writable):
     var kind: ErrorKind
     """What `check` raises. One of the four timeout kinds."""
 
-    def __init__(out self, at_ns: UInt64, limited: Bool, kind: ErrorKind):
+    var budget_ns: UInt64
+    """The duration this deadline was made from, or zero if it was made from an
+    instant.
+
+    Kept so that a per operation deadline can start again for the next
+    operation. The read and write timeouts apply to one read and one write
+    rather than to a whole response, which is what lets a download that keeps
+    making progress run as long as it likes while a server that goes quiet mid
+    body still fails. Restarting needs the original duration, and an instant on
+    its own does not carry it.
+    """
+
+    def __init__(
+        out self,
+        at_ns: UInt64,
+        limited: Bool,
+        kind: ErrorKind,
+        budget_ns: UInt64 = UInt64(0),
+    ):
         self.at_ns = at_ns
         self.limited = limited
         self.kind = kind
+        self.budget_ns = budget_ns
 
     @staticmethod
     def never(kind: ErrorKind = ErrorKind.TIMEOUT) -> Self:
@@ -89,9 +114,8 @@ struct Deadline(ImplicitlyCopyable, Movable, Writable):
         """
         if seconds <= 0.0:
             return Self(now_ns(), True, kind)
-        return Self(
-            now_ns() + UInt64(seconds * Float64(NANOS_PER_SECOND)), True, kind
-        )
+        var budget = UInt64(seconds * Float64(NANOS_PER_SECOND))
+        return Self(now_ns() + budget, True, kind, budget)
 
     @staticmethod
     def after_ms(ms: Int, kind: ErrorKind = ErrorKind.TIMEOUT) -> Self:
@@ -99,7 +123,32 @@ struct Deadline(ImplicitlyCopyable, Movable, Writable):
         milliseconds."""
         if ms <= 0:
             return Self(now_ns(), True, kind)
-        return Self(now_ns() + UInt64(ms * NANOS_PER_MS), True, kind)
+        var budget = UInt64(ms * NANOS_PER_MS)
+        return Self(now_ns() + budget, True, kind, budget)
+
+    def renewed(self) -> Self:
+        """The same budget, starting now.
+
+        What makes a read timeout mean one read rather than one response. Each
+        read gets the whole budget again, so the thing being measured is how
+        long the server went quiet for and not how long the body took.
+
+        A deadline built from an instant rather than a duration comes back
+        unchanged. There is nothing to restart it from, and inventing one would
+        turn a hard limit somebody set on purpose into no limit at all.
+        """
+        if not self.limited or self.budget_ns == 0:
+            return self
+        return Self(now_ns() + self.budget_ns, True, self.kind, self.budget_ns)
+
+    def fixed(self) -> Self:
+        """The same instant, and no restarting.
+
+        For a wait that is one total budget rather than one budget per
+        operation. Forgetting the duration is how that is said, because
+        `renewed` has nothing to work from afterwards.
+        """
+        return Self(self.at_ns, self.limited, self.kind)
 
     def with_kind(self, kind: ErrorKind) -> Self:
         """The same instant, reported as a different phase.
@@ -108,7 +157,7 @@ struct Deadline(ImplicitlyCopyable, Movable, Writable):
         address Happy Eyeballs tries, and each of those wants its own error
         name, so the instant travels and the label changes.
         """
-        return Self(self.at_ns, self.limited, kind)
+        return Self(self.at_ns, self.limited, kind, self.budget_ns)
 
     def earlier_of(self, other: Self) -> Self:
         """Whichever of the two runs out first, keeping that one's kind.

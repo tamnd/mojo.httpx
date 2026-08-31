@@ -215,7 +215,7 @@ struct H1Connection(Movable):
         self.state = H1State.SEND_BODY
 
         var head = serialize_head(request, form)
-        self.stream.write(Span(head), deadline)
+        self.stream.write(Span(head), deadline.renewed())
 
         if _expects_continue(request.headers):
             # The head is out and the body is held back on purpose. The whole
@@ -277,12 +277,20 @@ struct H1Connection(Movable):
         return response^
 
     def _send_body(mut self, request: Request, deadline: Deadline) raises:
+        # Each write starts the write budget again, because the timeout is on
+        # one write and not on the upload. A body large enough to need several
+        # writes is not a slow server, and treating it as one would mean the
+        # write timeout doubled as a limit on how much can be sent.
         if "transfer-encoding" in request.headers:
             if len(request.content) > 0:
-                self.stream.write(Span(chunk(Span(request.content))), deadline)
-            self.stream.write(Span(terminal_chunk(Headers())), deadline)
+                self.stream.write(
+                    Span(chunk(Span(request.content))), deadline.renewed()
+                )
+            self.stream.write(
+                Span(terminal_chunk(Headers())), deadline.renewed()
+            )
         elif len(request.content) > 0:
-            self.stream.write(Span(request.content), deadline)
+            self.stream.write(Span(request.content), deadline.renewed())
         self.state = H1State.WAIT_RESPONSE
 
     def _wait_for_continue(mut self, deadline: Deadline) raises -> Bool:
@@ -293,7 +301,12 @@ struct H1Connection(Movable):
         waiting for a body it never acknowledged. False only when a final
         response arrived, and then the body is never sent at all.
         """
-        var wait = deadline.earlier_of(Deadline.after(CONTINUE_WAIT_SECONDS))
+        # Fixed, because this one really is a total budget. It is the wait for a
+        # server to say yes or no, and a wait that restarted on every read
+        # would never end against a server that says neither slowly.
+        var wait = deadline.earlier_of(
+            Deadline.after(CONTINUE_WAIT_SECONDS)
+        ).fixed()
         while True:
             var found = parse_head(self.buf)
             if found:
@@ -345,9 +358,16 @@ struct H1Connection(Movable):
                 )
 
     def _fill(mut self, deadline: Deadline) raises -> Int:
-        """One read into the buffer. Zero means the peer closed."""
+        """One read into the buffer. Zero means the peer closed.
+
+        The deadline starts again here, which is what makes the read timeout a
+        limit on how long the server may go quiet rather than a limit on how
+        long the response may take. A ten minute download over a link that
+        never stalls stays inside a five second read timeout, and a server that
+        stops talking halfway through still fails after five seconds.
+        """
         var scratch = List[UInt8](length=READ_SIZE, fill=0)
-        var n = self.stream.read(Span(scratch), deadline)
+        var n = self.stream.read(Span(scratch), deadline.renewed())
         if n > 0:
             self.buf.extend(Span(scratch)[:n])
         return n

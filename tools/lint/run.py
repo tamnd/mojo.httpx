@@ -96,6 +96,20 @@ BLOCKING_RE = re.compile(r"\b(?:poll|recv|send|connect_to|accept|resolve)\s*\(")
 
 DEF_RE = re.compile(r"^(\s*)def\s+(\w+)\s*\(")
 
+# The same rule one storey up. Above the I/O layer nothing calls a syscall, but
+# plenty of things drive a socket through a stream, run a whole exchange, or
+# hand a request to a transport, and every one of those waits. A method that
+# does any of it and was not given a deadline is a wait nobody can bound.
+DRIVES_IO_RE = re.compile(
+    r"\b(?:stream|sock|socket|conn|connection)\.(?:read|write)\s*\("
+    r"|\.(?:exchange|handle_request)\s*\("
+    r"|\bconnect_to_host\s*\("
+)
+DEADLINE_CALLER_LAYERS = {6, 7, 8}
+"""Protocol, pool and transport. Not the client above them, which is where a
+timeout is turned into deadlines and so is the one place allowed to start
+without any."""
+
 
 class Findings:
     def __init__(self) -> None:
@@ -312,16 +326,48 @@ def check_deadlines(files: list[Path]) -> bool:
                         f"{name} can block but takes no deadline. Add one, or "
                         f"rename it _raw_{name} if it genuinely cannot wait.",
                     )
+
+        # Above the I/O layer the wait happens through somebody else, but it is
+        # still a wait, so whoever starts it still has to have been handed a
+        # deadline. Methods count here, which is why this walks every `def`
+        # rather than only the top level ones.
+        if layer in DEADLINE_CALLER_LAYERS:
+            for name, signature, start, end in _all_functions(lines):
+                body = "\n".join(lines[start:end])
+                if DRIVES_IO_RE.search(body) and "deadline" not in signature.lower():
+                    found.add(
+                        path,
+                        start,
+                        f"{name} drives a socket but takes no deadline. Pass "
+                        "one in from the caller that knows the budget.",
+                    )
     return found.report("deadlines")
 
 
 def _functions(lines: list[str]) -> list[tuple[str, str, int, int]]:
     """Every top level `def`, as (name, signature, first body line, end)."""
+    return _defs(lines, top_level_only=True)
+
+
+def _all_functions(lines: list[str]) -> list[tuple[str, str, int, int]]:
+    """Every `def`, methods and nested ones included.
+
+    A definition ends where the next one begins, whatever the indentation, so a
+    nested function's body is attributed to the nested function and not also to
+    the one around it. Otherwise a shim that only builds a closure would be
+    blamed for what the closure does.
+    """
+    return _defs(lines, top_level_only=False)
+
+
+def _defs(
+    lines: list[str], top_level_only: bool
+) -> list[tuple[str, str, int, int]]:
     out = []
     starts = []
     for index, line in enumerate(lines):
         match = DEF_RE.match(line)
-        if match and match.group(1) == "":
+        if match and (not top_level_only or match.group(1) == ""):
             starts.append((index, match.group(2)))
     for position, (index, name) in enumerate(starts):
         end = starts[position + 1][0] if position + 1 < len(starts) else len(lines)
@@ -375,6 +421,13 @@ SELFTEST_CASES = [
         '"""m."""\n\n\ndef read_some(fd: Int) -> Int:\n'
         "    # Blocks with nothing to stop it.\n"
         "    return recv(fd, 0, 0, 0)\n",
+        check_deadlines,
+    ),
+    (
+        # A method one layer up that drives a socket with no budget for it.
+        "_pool/leaky.mojo",
+        '"""m."""\n\n\nstruct P:\n    def send(mut self, body: Span[UInt8]):\n'
+        "        self.stream.write(body)\n",
         check_deadlines,
     ),
     (

@@ -147,6 +147,61 @@ def test_the_earlier_of_two_deadlines_wins_and_keeps_its_name() raises:
     assert_true(later.earlier_of(forever).kind == ErrorKind.CONNECT_TIMEOUT)
 
 
+def test_a_renewed_deadline_starts_its_budget_again() raises:
+    # What makes a read timeout a limit on silence rather than on size. Each
+    # read gets the whole budget back, so a body that keeps arriving never runs
+    # out of time for being long.
+    var original = Deadline.after(30.0, ErrorKind.READ_TIMEOUT)
+    var renewed = original.renewed()
+    assert_true(renewed.at_ns >= original.at_ns)
+    assert_true(renewed.kind == ErrorKind.READ_TIMEOUT)
+    assert_true(renewed.limited)
+
+
+def test_an_expired_deadline_renews_to_a_live_one() raises:
+    # The case that matters for a long download: the previous read used the
+    # whole budget, and the next read still gets one.
+    var spent = Deadline.after(0.0, ErrorKind.READ_TIMEOUT)
+    assert_true(spent.expired())
+    # Nothing to renew from, because zero was an instant and not a budget.
+    assert_true(spent.renewed().expired())
+
+    var used = Deadline(now_ns(), True, ErrorKind.READ_TIMEOUT, UInt64(10**9))
+    assert_true(used.expired())
+    assert_false(used.renewed().expired())
+
+
+def test_an_unlimited_deadline_renews_to_itself() raises:
+    var forever = Deadline.never(ErrorKind.READ_TIMEOUT)
+    assert_false(forever.renewed().limited)
+
+
+def test_a_deadline_made_from_an_instant_does_not_renew() raises:
+    # A hard limit somebody set on purpose. Guessing a budget for it would turn
+    # it into no limit at all, so it comes back unchanged.
+    var at = now_ns() + UInt64(10**9)
+    var fixed = Deadline(at, True, ErrorKind.READ_TIMEOUT)
+    assert_equal(fixed.renewed().at_ns, at)
+
+
+def test_a_deadline_can_be_stopped_from_renewing() raises:
+    # Used for the wait on a 100 Continue, which is one total budget rather than
+    # one budget per read.
+    var budgeted = Deadline.after(30.0, ErrorKind.READ_TIMEOUT)
+    var fixed = budgeted.fixed()
+    assert_equal(fixed.at_ns, budgeted.at_ns)
+    assert_equal(fixed.renewed().at_ns, budgeted.at_ns)
+
+
+def test_relabelling_keeps_the_budget() raises:
+    # The connect deadline is relabelled as it moves through DNS and the
+    # handshake, and losing the budget on the way would quietly make it a
+    # deadline that cannot be restarted.
+    var original = Deadline.after(30.0, ErrorKind.CONNECT_TIMEOUT)
+    var relabelled = original.with_kind(ErrorKind.READ_TIMEOUT)
+    assert_equal(relabelled.budget_ns, original.budget_ns)
+
+
 def test_the_clock_only_moves_forwards() raises:
     # Monotonic, not wall clock. A clock correction that stepped backwards would
     # otherwise extend every timeout in flight.
