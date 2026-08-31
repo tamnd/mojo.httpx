@@ -15,7 +15,7 @@ from std.ffi import c_int, c_size_t, c_uint
 from std.testing import assert_equal, assert_false, assert_true
 
 from httpx._exceptions import ErrorKind, is_connect_error, kind_of
-from httpx._ffi.c import clear_errno, errno, strerror
+from httpx._ffi.c import clear_errno, errno, random_bytes, strerror
 from httpx._ffi.clock import unix_now
 from httpx._ffi.errno import (
     EAGAIN,
@@ -343,3 +343,32 @@ def test_the_wall_clock_does_not_go_backwards_within_a_call() raises:
     var first = unix_now()
     var second = unix_now()
     assert_true(second >= first)
+
+
+def test_random_bytes_returns_the_number_asked_for() raises:
+    assert_equal(len(random_bytes(0)), 0)
+    assert_equal(len(random_bytes(1)), 1)
+    assert_equal(len(random_bytes(16)), 16)
+
+
+def test_random_bytes_loops_past_the_limit_of_one_call() raises:
+    # `getentropy` takes at most 256 bytes and fails outright rather than
+    # returning short, so anything larger has to be several calls. A caller
+    # asking for 300 and getting 256 followed by 44 zeros would be handed a
+    # buffer that looks random and is not.
+    var bytes = random_bytes(1000)
+    assert_equal(len(bytes), 1000)
+    var zeros = 0
+    for byte in bytes:
+        if byte == 0:
+            zeros += 1
+    # Roughly four expected out of a thousand. Fifty is far enough away to never
+    # trip by chance and close enough to catch a tail left as fill.
+    assert_true(zeros < 50)
+
+
+def test_two_draws_are_not_the_same() raises:
+    # The only property that matters here. A source seeded from the clock passes
+    # a length check and fails this one when two calls land in the same tick,
+    # which is exactly the failure that makes a multipart boundary guessable.
+    assert_true(random_bytes(32) != random_bytes(32))

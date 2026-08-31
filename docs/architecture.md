@@ -64,6 +64,20 @@ The constraint produced a better design than the one it ruled out. Parsing a bod
 
 The parser is iterative with an explicit stack on the heap, and refuses anything nested deeper than two hundred. A response body is attacker controlled, and a recursive descent parser handed a few hundred thousand open brackets exhausts the machine stack, which is not an exception the caller can catch. That is a one line denial of service against anything that calls `r.json()`, so the recursion had to go. The serializer is still a plain recursion, which is sound because the depth limit is enforced on built documents too, not only on parsed ones.
 
+## Multipart follows the browsers, not the RFC
+
+`multipart/form-data` is specified by RFC 7578, and what servers actually implement is the WHATWG HTML form submission algorithm. Where the two disagree this library follows the browsers, because the receiving framework was written against browser output and a body that is correct by the RFC and different from a browser's is a body some fraction of servers parse differently.
+
+The concrete case is escaping a filename. RFC 2231 has a proper mechanism, `filename*=UTF-8''...`, and enough server side parsers do not implement it that using it means correct bodies which some frameworks read as having no filename at all. So a filename goes out as raw UTF-8 with exactly three characters escaped, the quote and the two line ending bytes, spelled `%22`, `%0D` and `%0A`. That is what a browser sends and it is the whole of what stops a filename from closing the quoted string and writing headers the caller did not write.
+
+The boundary is sixteen bytes read from the operating system through `getentropy`, not from `std.random`, which is seeded from the clock. Nothing inside a part is escaped, so the boundary is the only thing separating one part from the next, and a boundary an attacker can predict is a boundary they can embed in a value to forge a part. Every part is also scanned for the boundary before the body is built. The random draw makes a collision impossible to arrange and the scan makes it impossible to ship, and having both is why a collision ends as a second draw rather than as a server reading parts nobody sent.
+
+## The content type is decided here and written by the client
+
+Each encoder returns bytes plus the content type that describes them, and touches no header block. Whether the type is actually written, and whether the framing ends up as `Content-Length` or `Transfer-Encoding`, is the client's call, because only the client knows what the caller passed in `headers=` and whether an explicit type should win.
+
+`content=` produces no content type at all. Bytes with no further description are `application/octet-stream` as far as HTTP is concerned, but guessing that on the caller's behalf means silently labelling every hand built body, including ones that are already JSON or already form encoded. httpx2 sets nothing here and neither does this.
+
 ## Parsing rule
 
 `len()` on a `String` is a hard compile error in Mojo 1.0, on the grounds that the byte count and the character count are different answers and the caller should say which one they want. That is a good decision by the language, and for this project it points somewhere useful: every parser works on `Span[UInt8]` and never touches `String` at all. Strings only appear at the boundary where a user sees a value.
