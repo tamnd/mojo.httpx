@@ -16,6 +16,7 @@ from std.testing import assert_equal, assert_false, assert_true
 
 from httpx._exceptions import ErrorKind, is_connect_error, kind_of
 from httpx._ffi.c import clear_errno, errno, strerror
+from httpx._ffi.clock import unix_now
 from httpx._ffi.errno import (
     EAGAIN,
     EBADF,
@@ -322,3 +323,23 @@ def test_reading_a_closed_peer_reports_end_of_stream() raises:
 
     _ = close(accepted)
     _ = close(server)
+
+
+def test_the_wall_clock_returns_a_plausible_time() raises:
+    # Not a precise assertion, because there is nothing to compare against
+    # without a second clock. The point is that the value is seconds rather than
+    # milliseconds or nanoseconds, which is the mistake that would otherwise
+    # only surface as cookies expiring in the wrong millennium. The lower bound
+    # is 2020 and the upper bound is 2100.
+    var now = unix_now()
+    assert_true(now > 1577836800)
+    assert_true(now < 4102444800)
+
+
+def test_the_wall_clock_does_not_go_backwards_within_a_call() raises:
+    # A clock correction can step the wall clock either way, so this only checks
+    # the two readings are ordered, which any sane clock manages across a few
+    # microseconds.
+    var first = unix_now()
+    var second = unix_now()
+    assert_true(second >= first)
