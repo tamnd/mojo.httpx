@@ -1,0 +1,55 @@
+[workspace]
+name = "mojo-httpx"
+version = "0.0.1"
+description = "A full featured HTTP client for Mojo, with the same API as httpx2"
+authors = ["mojo.httpx contributors"]
+license = "Apache-2.0"
+license-file = "LICENSE"
+readme = "README.md"
+homepage = "https://github.com/tamnd/mojo.httpx"
+repository = "https://github.com/tamnd/mojo.httpx"
+channels = ["https://conda.modular.com/max", "conda-forge"]
+platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
+
+[dependencies]
+mojo = "==1.0.0"
+
+[feature.dev.dependencies]
+openssl = ">=3.0"
+
+# The nightly Mojo build. CI runs this as an early warning for language changes
+# and is allowed to fail. Do not develop against it.
+[feature.nightly]
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+
+[feature.nightly.dependencies]
+mojo = "*"
+
+# The parity suite runs the same scenarios through httpx2 and compares the bytes
+# on the wire. Only needed for `pixi run -e parity parity`.
+[feature.parity.dependencies]
+python = ">=3.12"
+
+[feature.parity.pypi-dependencies]
+httpx2 = "*"
+
+[environments]
+default = { features = ["dev"] }
+nightly = { features = ["nightly"], no-default-feature = true }
+parity = { features = ["dev", "parity"] }
+
+[tasks]
+test = "mojo run -I . tests/run.mojo"
+format = "mojo format httpx/ tests/"
+# `mojo format` has no --check flag, so CI formats and then asks git whether
+# anything moved.
+format-check = "mojo format -q httpx/ tests/ && git diff --exit-code -- httpx/ tests/"
+
+# Tasks below land with the milestone that needs them. See docs/roadmap.md.
+#   build         M8   mojo build httpx/cli/__main__.mojo -o build/httpx
+#   lint          M0   the layering, unsafe and deadline checks
+#   bench         M2   the benchmark suite
+#   parity        M4   the httpx2 comparison suite
+#   docs          M8   render the mojo doc JSON into the API reference
+#   baseline      M0   re-run the toolchain probes against the current Mojo
+#   vendor-check  M1   verify the recorded provenance of tests/data/

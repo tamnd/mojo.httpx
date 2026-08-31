@@ -1,0 +1,93 @@
+# mojo.httpx
+
+A full featured HTTP client for Mojo, with the same API and the same developer experience as [httpx2](https://github.com/pydantic/httpx2).
+
+**Status: pre-alpha.** The design is complete and the toolchain work is done, but the library does not do anything useful yet. See the [roadmap](docs/roadmap.md) for what is landing and when. Do not use this in production.
+
+## Why
+
+Mojo has no HTTP client and no networking in the standard library. There is no socket module, no TLS module, no async runtime. So this project is not a thin wrapper over something that already exists. It is the whole stack: sockets over libc FFI, TLS over the OpenSSL that already ships inside the Mojo distribution, HTTP/1.1 and HTTP/2 framing, connection pooling, and the client API on top.
+
+The target is httpx2's API rather than something new, for a simple reason. Millions of developers already know that API from `requests` and `httpx`, the design has had ten years of real use behind it, and copying it means people can move code between Python and Mojo without relearning anything.
+
+## What it will look like
+
+```mojo
+from httpx import get, Client
+
+def main() raises:
+    var r = get("https://api.example.com/users")
+    print(r.status_code)
+    print(r.json()["users"][0]["name"].as_string())
+
+    var client = Client(base_url="https://api.example.com", http2=True)
+    var resp = client.post("/items", json={"name": "widget"})
+    resp.raise_for_status()
+```
+
+Streaming, redirects, cookies, auth, proxies, multipart uploads, event hooks, custom transports and a `MockTransport` for tests all work the way they do in httpx2.
+
+## Planned feature set
+
+| Area | Scope |
+| --- | --- |
+| Protocols | HTTP/1.1 and HTTP/2, keep alive, pipelined multiplexing on h2 |
+| TLS | OpenSSL 3.x via FFI, ALPN, SNI, mTLS, custom CA bundles |
+| Client | Sync `Client`, async `AsyncClient`, top level one shot helpers |
+| Pooling | Connection pool with per host and total limits, keepalive expiry |
+| Timeouts | Separate connect, read, write and pool deadlines, enforced everywhere |
+| Redirects | Opt in following, history, cross origin credential stripping |
+| Auth | Basic, Digest, netrc, and a pluggable `Auth` state machine |
+| Proxies | HTTP, CONNECT tunnelling, SOCKS5, per pattern mounts |
+| Content | multipart, form encoding, JSON, gzip, deflate, brotli, zstd |
+| Testing | `MockTransport` and `MockRouter`, no separate package needed |
+| CLI | An `httpx` binary matching httpx2's CLI flag for flag |
+
+## Differences from httpx2
+
+Mojo is not Python, and a few things cannot be copied directly. Every deviation is deliberate and documented rather than accidental.
+
+| httpx2 | mojo.httpx | Reason |
+| --- | --- | --- |
+| `r.json()` returns `Any` | returns a typed `JSON` value with accessors | Mojo has no dynamic `Any` |
+| `except httpx.TimeoutException` | `if httpx.is_timeout(e)` | Mojo has one error type and no exception subclassing |
+| duck typed transports | a generic transport plus an erased vtable | Mojo has no trait objects |
+| `async with AsyncClient()` | explicit `await client.aclose()` | Mojo has no async context managers |
+| generator based iterators | iterator structs | Mojo has no generators |
+| `**kwargs` config | typed builders | Mojo has no keyword argument packing |
+| `timedelta` | `Duration` | no stdlib equivalent |
+
+## Requirements
+
+Mojo 1.0.0 or newer. The project pins the exact toolchain in `pixi.toml`, because the language is still moving fast enough that building against a different version is a real source of confusion.
+
+| Platform | Status |
+| --- | --- |
+| macOS arm64 | Supported, tested in CI |
+| Linux x86_64 | Supported, tested in CI and on real hardware |
+| Linux arm64 | Supported, tested in CI |
+| Windows | Under WSL2 only, tested on real hardware before each release |
+
+Mojo has no native Windows build, so there is nothing to install on Windows directly. WSL2 works and is tested. That is a Modular limitation rather than one of ours.
+
+## Development
+
+```bash
+git clone https://github.com/tamnd/mojo.httpx
+cd mojo.httpx
+pixi install
+pixi run test
+pixi run lint
+```
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. It lists a small number of rules that are easy to break without noticing, such as parsing over byte spans rather than `String` and never issuing an I/O call without a deadline.
+
+## Documentation
+
+- [Architecture](docs/architecture.md) for the layer model and the design decisions behind it
+- [Roadmap](docs/roadmap.md) for milestones M0 through M9
+- [Testing](docs/testing.md) for the test layers, the CI matrix, and the local hardware fleet
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE), and [NOTICE](NOTICE) for third party test material that keeps its own upstream license.

@@ -1,0 +1,40 @@
+mojo.httpx
+Copyright 2026 mojo.httpx contributors
+
+This product includes software developed by the mojo.httpx contributors, licensed under the Apache License, Version 2.0. See LICENSE.
+
+
+Third party material
+--------------------
+
+The library itself has no third party code. The test suite vendors conformance corpora and fixtures that keep their own upstream licenses. None of this material is included in the distributed package. Each corpus lives under tests/data/ in its own directory with the upstream license text alongside it.
+
+  tests/data/httpx2/
+    Test fixtures derived from httpx2 (https://github.com/pydantic/httpx2), used by the parity and URL conformance suites.
+    License: BSD-3-Clause.
+
+  tests/data/wpt/
+    Cases from the Web Platform Tests project (https://github.com/web-platform-tests/wpt), used for URL and cookie conformance.
+    License: BSD-3-Clause.
+
+  tests/data/unicode/
+    IdnaTestV2.txt from the Unicode Consortium, used for IDNA 2008 and UTS-46 conformance.
+    License: Unicode License Agreement.
+
+  tests/data/publicsuffix/
+    Test cases from the Mozilla Public Suffix List (https://publicsuffix.org).
+    License: MPL-2.0.
+
+  tests/data/hpack-test-case/
+    HPACK encode and decode vectors from http2jp (https://github.com/http2jp/hpack-test-case).
+    License: MIT.
+
+  tests/data/json-test-suite/
+    Cases from JSONTestSuite by Nicolas Seriot (https://github.com/nst/JSONTestSuite).
+    License: MIT.
+
+  tests/data/h11/ and tests/data/h2/
+    Protocol edge cases derived from the python-hyper h11 and h2 test suites.
+    License: MIT.
+
+Each directory is produced by a generator script under tools/ that records the upstream source, the commit or version it was taken from, and the date. Run `pixi run vendor-check` to verify that the recorded provenance still matches.

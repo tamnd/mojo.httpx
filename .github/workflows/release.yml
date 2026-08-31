@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag to release
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: verify ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: macos-arm64
+            runner: macos-14
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@194d461b21b6c5717c722ffc597fa91ed2ff29fa # v0.9.1
+        with:
+          pixi-version: v0.78.0
+          environments: default
+          locked: true
+          cache: true
+      - run: pixi run test
+
+  source:
+    name: build the source tarball
+    runs-on: ubuntu-24.04
+    needs: verify
+    timeout-minutes: 15
+    outputs:
+      digest: ${{ steps.hash.outputs.digest }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+        with:
+          persist-credentials: false
+      # A .mojopkg is tied to the compiler that produced it and is not a
+      # distributable format, so the release artifact is source. See
+      # docs/architecture.md.
+      - name: Archive
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          git archive --format=tar.gz --prefix="mojo-httpx-${version}/" \
+            -o "mojo-httpx-${version}.tar.gz" HEAD
+      - name: Checksum
+        id: hash
+        run: |
+          sha256sum mojo-httpx-*.tar.gz | tee SHA256SUMS
+          echo "digest=$(sha256sum mojo-httpx-*.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: source
+          path: |
+            mojo-httpx-*.tar.gz
+            SHA256SUMS
+
+  publish:
+    name: publish
+    runs-on: ubuntu-24.04
+    needs: source
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: source
+      - name: Attest the artifact
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: mojo-httpx-*.tar.gz
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.3.4
+        with:
+          generate_release_notes: true
+          files: |
+            mojo-httpx-*.tar.gz
+            SHA256SUMS

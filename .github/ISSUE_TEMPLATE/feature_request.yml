@@ -1,0 +1,33 @@
+name: Feature request
+description: Something httpx2 does that we do not
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The target is httpx2 parity, so if httpx2 has it then it is already
+        planned. Check docs/roadmap.md before filing, and say which milestone
+        you think it belongs to.
+  - type: textarea
+    id: what
+    attributes:
+      label: What you want
+      description: Describe the behaviour, not the implementation.
+    validations:
+      required: true
+  - type: input
+    id: httpx2
+    attributes:
+      label: The httpx2 equivalent
+      description: >
+        The name of the httpx2 API this matches, if there is one. Say "none" if
+        this would be new.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why you need it
+      description: The problem you are actually trying to solve.
+    validations:
+      required: true

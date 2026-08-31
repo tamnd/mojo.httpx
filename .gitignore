@@ -1,0 +1,26 @@
+# pixi
+.pixi/
+pixi.lock.bak
+
+# build output
+build/
+*.mojopkg
+*.o
+*.dSYM/
+
+# generated
+docs/api/
+docs/api.json
+tests/**/_generated_main.mojo
+
+# fuzzing
+fuzz/corpus/
+fuzz/crashes/
+
+# local
+.DS_Store
+*.log
+.env
+.venv/
+__pycache__/
+*.pyc

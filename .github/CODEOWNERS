@@ -1,0 +1,17 @@
+# Default owner for everything.
+*                       @tamnd
+
+# The parsers take network input from an attacker, so changes here always get
+# a second look.
+/httpx/_http1/          @tamnd
+/httpx/_http2/          @tamnd
+/httpx/_tls/            @tamnd
+/httpx/_ffi/            @tamnd
+
+# Anything that changes how the project is built, released or trusted.
+/.github/workflows/     @tamnd
+/pixi.toml              @tamnd
+/pixi.lock              @tamnd
+/LICENSE                @tamnd
+/NOTICE                 @tamnd
+/SECURITY.md            @tamnd

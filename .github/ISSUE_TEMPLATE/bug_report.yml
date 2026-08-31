@@ -1,0 +1,46 @@
+name: Bug report
+description: Something does not work the way it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The project is pre-alpha, so a lot is simply not built yet. Check
+        docs/roadmap.md first to see whether the thing you are using has landed.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, and what you got instead of what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The smallest piece of code that shows the problem.
+      render: mojo
+    validations:
+      required: true
+  - type: input
+    id: mojo
+    attributes:
+      label: Mojo version
+      description: The output of `mojo --version`.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Operating system and architecture. Say so if this is WSL2.
+    validations:
+      required: true
+  - type: textarea
+    id: wire
+    attributes:
+      label: Bytes on the wire
+      description: >
+        For a protocol or parsing bug this is the most useful thing you can
+        attach. Leave it empty otherwise.
+      render: text

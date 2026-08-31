@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+
+# Least privilege by default. A job that needs more asks for it itself.
+permissions:
+  contents: read
+
+# One run per ref. A new push cancels the old run, except on main where we want
+# every commit on the branch to have a real result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  PIXI_VERSION: v0.78.0
+
+jobs:
+  format:
+    name: format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@194d461b21b6c5717c722ffc597fa91ed2ff29fa # v0.9.1
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          environments: default
+          locked: true
+          cache: true
+      - run: pixi run format-check
+
+  test:
+    name: test ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            runner: macos-14
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@194d461b21b6c5717c722ffc597fa91ed2ff29fa # v0.9.1
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          environments: default
+          locked: true
+          cache: true
+      - name: Record the toolchain
+        run: pixi run mojo --version
+      - run: pixi run test
+
+  # The rest of the matrix in docs/roadmap.md joins as the code that needs it
+  # lands: h1 and h2 from M5, OpenSSL 3.0 and 3.6 from M3, debug and release
+  # builds from M2, and the interop suite against nginx, Caddy and Envoy.
+
+  dependency-review:
+    name: dependency review
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+
+  # A single required check, so branch protection does not need updating every
+  # time the matrix changes.
+  ci-ok:
+    name: ci ok
+    runs-on: ubuntu-24.04
+    needs: [format, test]
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - name: Fail if anything upstream failed
+        run: |
+          if echo '${{ toJSON(needs) }}' | grep -q '"result": *"\(failure\|cancelled\)"'; then
+            echo "a required job did not pass"
+            exit 1
+          fi
+          echo "all required jobs passed"

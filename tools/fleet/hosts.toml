@@ -1,0 +1,44 @@
+# The machines used for local testing on real hardware.
+#
+# These are not CI. CI runs on GitHub hosted runners and covers the three
+# supported platforms. This fleet is for the things a hosted runner is bad at:
+# interop against real servers, long fuzzing runs, and benchmarks that need a
+# machine nobody else is sharing.
+#
+# Each name here is an SSH host alias, so `ssh server1` has to already work.
+# Nothing in this file holds credentials.
+
+[[host]]
+name = "server1"
+platform = "linux-64"
+os = "Ubuntu 24.04"
+cpus = 4
+roles = ["interop", "fuzz"]
+
+[[host]]
+name = "server2"
+platform = "linux-64"
+os = "Ubuntu 24.04"
+cpus = 6
+roles = ["interop", "fuzz"]
+
+[[host]]
+name = "server3"
+platform = "linux-64"
+os = "Ubuntu 24.04"
+cpus = 8
+roles = ["interop", "fuzz", "bench"]
+
+# Windows 11. Mojo has no native Windows build, so everything runs inside the
+# WSL2 Ubuntu guest. This is what lets us say the library works on Windows
+# under WSL2 rather than guessing.
+[[host]]
+name = "gamingpc"
+platform = "linux-64"
+os = "Windows 11 + WSL2 Ubuntu"
+shell = "wsl"
+cpus = 0
+roles = ["smoke"]
+
+# macOS arm64 is the development machine, so it is tested by just running
+# `pixi run test` locally.

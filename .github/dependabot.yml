@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Actions are pinned to commit SHAs, so this is the only thing that moves
+  # them. Without it, pinning means never getting a security fix.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]

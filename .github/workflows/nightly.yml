@@ -1,0 +1,91 @@
+name: Nightly toolchain
+
+# Mojo is still changing between releases in ways that break real code, so we
+# build against the nightly toolchain every day. This job is allowed to fail.
+# It exists to give us warning before a stable release lands, not to gate work.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: nightly ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    continue-on-error: true
+    outputs:
+      failed: ${{ steps.result.outputs.failed }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            runner: macos-14
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@194d461b21b6c5717c722ffc597fa91ed2ff29fa # v0.9.1
+        with:
+          pixi-version: v0.78.0
+          environments: nightly
+          locked: false
+          cache: false
+      - name: Record the toolchain
+        run: pixi run -e nightly mojo --version
+      - name: Test
+        id: run
+        run: pixi run -e nightly mojo run -I . tests/run.mojo 2>&1 | tee nightly-${{ matrix.name }}.log
+      - name: Note the result
+        id: result
+        if: always()
+        run: echo "failed=${{ steps.run.outcome == 'failure' }}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: nightly-log-${{ matrix.name }}
+          path: nightly-${{ matrix.name }}.log
+          retention-days: 14
+
+  report:
+    name: open an issue on breakage
+    runs-on: ubuntu-24.04
+    needs: build
+    if: always() && needs.build.outputs.failed == 'true'
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: Write the issue body
+        run: |
+          {
+            echo "The nightly Mojo toolchain broke the build."
+            echo
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo "This does not block anything on main, but it means a language change"
+            echo "is coming that this project needs to handle. Check the logs on the run,"
+            echo "then re-run the toolchain probes to see which assumption moved."
+          } > issue.md
+      - uses: peter-evans/create-issue-from-file@e8ef132d6df98ed982188e460ebb3b5d4ef3a9cd # v5.0.1
+        with:
+          title: "Nightly Mojo build is failing"
+          content-filepath: issue.md
+          labels: toolchain, ci
