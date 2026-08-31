@@ -183,3 +183,87 @@ def test_a_label_built_to_overflow_is_rejected() raises:
 def test_an_empty_host_stays_empty() raises:
     assert_equal(encode_host(""), "")
     assert_equal(decode_host(""), "")
+
+
+def test_a_name_is_mapped_before_it_is_encoded() raises:
+    # UTS-46 step one. Every one of these is a different way of writing the same
+    # name, and a client that did not map them would open a different connection
+    # for each and check a different certificate name against each.
+    assert_equal(encode_host("EXAMPLE.COM"), "example.com")
+    # Fullwidth letters and an ideographic full stop.
+    assert_equal(encode_host("ＥＸＡＭＰＬＥ。ＣＯＭ"), "example.com")
+    # A soft hyphen, which UTS-46 removes rather than rejects.
+    assert_equal(encode_host("exam­ple.com"), "example.com")
+
+
+def test_a_name_is_normalized_before_it_is_encoded() raises:
+    # UTS-46 step two. The precomposed letter and the letter plus the combining
+    # acute look identical and have to reach one host.
+    assert_equal(encode_host("münchen.de"), encode_host("münchen.de"))
+    assert_equal(encode_host("münchen.de"), "xn--mnchen-3ya.de")
+
+
+def test_std3_rules_keep_a_hostname_to_letters_digits_and_hyphens() raises:
+    # Unicode 17 stopped marking these disallowed in the mapping table and left
+    # it to the implementation, so this is the test that the rules are still
+    # being applied. A parenthesis or a space in a Host header is not something
+    # to find out about at the socket.
+    for host in ["a b.com", "a_b.com", "a%b.com", "a(b).com", "⑷.four"]:
+        with assert_raises():
+            _ = encode_host(host)
+
+
+def test_a_label_that_starts_with_a_combining_mark_is_rejected() raises:
+    # UTS-46 validity criterion five. A mark with nothing to attach to renders
+    # unpredictably, which is exactly what a name meant to be misread wants.
+    with assert_raises():
+        _ = encode_host("́abc.com")
+
+
+def test_a_zero_width_joiner_needs_a_virama_in_front_of_it() raises:
+    # RFC 5892 appendix A.2. The joiner is invisible, so a name may only contain
+    # one where it changes how the letters render, which means after a virama.
+    assert_equal(encode_host("क्‍ष.com"), "xn--11b2ezcw70k.com")
+    with assert_raises():
+        _ = encode_host("a‍b.com")
+
+
+def test_a_right_to_left_name_has_to_pass_the_bidi_rule() raises:
+    # RFC 5893. A name with any right to left character in it is a bidi domain,
+    # and then every label in it has to obey the rule, including the ASCII ones.
+    assert_equal(encode_host("مثال.إختبار"), "xn--mgbh0fb.xn--kgbechtv")
+    # A bidi label may not start with a digit, because the display order of what
+    # follows then depends on the surrounding text rather than on the name.
+    with assert_raises():
+        _ = encode_host("1א.com")
+
+
+def test_an_empty_label_is_only_allowed_as_the_trailing_root() raises:
+    assert_equal(encode_host("example.com."), "example.com.")
+    for host in ["example..com", ".example.com", "..", "."]:
+        with assert_raises():
+            _ = encode_host(host)
+
+
+def test_a_punycode_label_has_to_be_the_spelling_punycode_produces() raises:
+    # RFC 5891 section 4.4. Each of these decodes without error and encodes back
+    # to something else, so accepting it would give one name two forms that no
+    # longer compare equal.
+    for host in ["xn--ASCII-", "xn--unicode-.org", "xn--"]:
+        with assert_raises():
+            _ = encode_host(host)
+
+
+def test_a_punycode_label_may_not_decode_to_another_one() raises:
+    # Which name it is would otherwise depend on how many times the reader
+    # decoded it.
+    with assert_raises():
+        _ = encode_host("xn--xn---epa")
+
+
+def test_a_punycode_label_that_decodes_to_a_bad_name_is_rejected() raises:
+    # This one decodes to circled katakana, which the mapping table maps away, so
+    # no conforming encoder would ever have written the label. Passing it through
+    # would send DNS a name nothing produces.
+    with assert_raises():
+        _ = encode_host("a.b.c.xn--pokxncvks")

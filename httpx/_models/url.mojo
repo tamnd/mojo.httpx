@@ -396,13 +396,21 @@ def _normalize_host(host: StringSpan) raises -> String:
     # A host may arrive percent encoded, and the escapes have to come out before
     # IDNA sees it, or a label is encoded as the literal text `%C3%BC`.
     var decoded = percent_decode(bytes)
-    # An address is not a name, so it never goes to IDNA and never gets looked
-    # up. Deciding which one this is on the last label is what makes `foo.09` an
-    # error instead of a domain, and what makes `0x7f.1` come out as the address
-    # it will actually connect to rather than as a string that reads like a name.
-    if looks_like_ipv4(decoded.as_span()):
-        return parse_ipv4(decoded.as_span())
-    return encode_host(decoded.to_string())
+    var encoded = encode_host(decoded.to_string())
+    # An address is not a name, so it never gets looked up. Deciding which one
+    # this is on the last label is what makes `foo.09` an error instead of a
+    # domain, and what makes `0x7f.1` come out as the address it will actually
+    # connect to rather than as a string that reads like a name.
+    #
+    # The decision comes after IDNA rather than before because UTS-46 maps
+    # characters into digits and dots. `０Ｘｃ０．０２５０．０１` is not an address
+    # before mapping and is `0xc0.0250.01` after, which getaddrinfo reads as
+    # 192.168.0.1. Deciding first would report that host as a name, so anything
+    # checking it against an allowlist would be shown a name while the connection
+    # went to an address.
+    if looks_like_ipv4(encoded.as_bytes()):
+        return parse_ipv4(encoded.as_bytes())
+    return encoded^
 
 
 struct QueryParams(Boolable, Equatable, Movable, Sized, Writable):

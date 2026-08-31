@@ -246,10 +246,18 @@ DIVERGENCE_RULES: list[tuple[object, str]] = [
     ),
 ]
 
-IDNA = (
-    "the UTS-46 mapping and validation tables are not implemented yet, so the"
-    " host is punycoded as written instead of being mapped, filtered and"
-    " checked first. Tracked in the IDNA 2008 work on milestone one."
+EMPTY_LABEL = (
+    "a name with an empty label in it is rejected, because no resolver answers"
+    " one and `a..b` reads as one host to a person and as two to a resolver."
+    " WHATWG turns VerifyDnsLength off, which allows the empty label along with"
+    " names over the DNS length limits."
+)
+
+ACE = (
+    "a label that starts with xn-- has to decode to something UTS-46 would have"
+    " produced, and this one does not, so it is rejected rather than passed"
+    " through. WHATWG keeps the label as written when the decode is not usable,"
+    " which sends a name to DNS that no conforming encoder would have written."
 )
 
 ENCODE_SET = (
@@ -259,29 +267,16 @@ ENCODE_SET = (
 )
 
 DIVERGENCES: dict[tuple[str, str], str] = {
-    ("http://other.com/", "http://GOO​⁠﻿goo.com"): IDNA,
-    ("http://other.com/", "http://GOO 　goo.com"): IDNA,
-    ("http://other.com/", "http://www.foo。bar.com"): IDNA,
-    ("http://other.com/", "http://﷐zyx.com"): IDNA,
-    ("http://other.com/", "http://%ef%b7%90zyx.com"): IDNA,
-    ("http://other.com/", "http://Ｇｏ.com"): IDNA,
-    ("http://other.com/", "http://％４１.com"): IDNA,
-    (
-        "http://other.com/",
-        "http://%ef%bc%85%ef%bc%94%ef%bc%91.com",
-    ): IDNA,
-    ("http://other.com/", "http://％００.com"): IDNA,
-    (
-        "http://other.com/",
-        "http://%ef%bc%85%ef%bc%90%ef%bc%90.com",
-    ): IDNA,
-    ("http://other.com/", "http://０Ｘｃ０．０２５０．０１"): IDNA,
-    ("", "https://�"): IDNA,
-    ("", "https://%EF%BF%BD"): IDNA,
-    ("", "https://￿y"): IDNA,
-    ("", "https://a%C2%ADb/"): IDNA,
-    ("", "https://­/"): IDNA,
-    ("", "https://%C2%AD/"): IDNA,
+    ("", "http://./"): EMPTY_LABEL,
+    ("", "http://../"): EMPTY_LABEL,
+    ("", "http://foo.09.."): EMPTY_LABEL,
+    ("", "http://a.b.c.xn--pokxncvks"): ACE,
+    ("", "http://10.0.0.xn--pokxncvks"): ACE,
+    ("", "http://a.b.c.XN--pokxncvks"): ACE,
+    ("", "http://a.b.c.Xn--pokxncvks"): ACE,
+    ("", "http://10.0.0.XN--pokxncvks"): ACE,
+    ("", "http://10.0.0.xN--pokxncvks"): ACE,
+    ("", "https://xn--/"): ACE,
     ("http://example.org/foo/bar", "http://foo/path;a??e#f#g"): ENCODE_SET,
     ("http://example.org/foo/bar", "[61:24:74]:98"): ENCODE_SET,
     ("http://doesnotmatter/", "http://`{}:`{}@h/`{}?`{}"): ENCODE_SET,

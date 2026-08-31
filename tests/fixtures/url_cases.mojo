@@ -1787,12 +1787,7 @@ def url_cases() -> List[UrlCase]:
             "http://other.com/",
             True,
             "",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -1801,12 +1796,7 @@ def url_cases() -> List[UrlCase]:
             "http://other.com/",
             False,
             "http://googoo.com/",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -1830,12 +1820,7 @@ def url_cases() -> List[UrlCase]:
             "http://other.com/",
             False,
             "http://www.foo.bar.com/",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -1844,12 +1829,7 @@ def url_cases() -> List[UrlCase]:
             "http://other.com/",
             True,
             "",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -1858,12 +1838,7 @@ def url_cases() -> List[UrlCase]:
             "http://other.com/",
             True,
             "",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -1872,12 +1847,7 @@ def url_cases() -> List[UrlCase]:
             "",
             True,
             "",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -1886,12 +1856,7 @@ def url_cases() -> List[UrlCase]:
             "",
             True,
             "",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -1909,7 +1874,13 @@ def url_cases() -> List[UrlCase]:
             "",
             False,
             "http://a.b.c.xn--pokxncvks/",
-            "",
+            (
+                "a label that starts with xn-- has to decode to something"
+                " UTS-46 would have produced, and this one does not, so it is"
+                " rejected rather than passed through. WHATWG keeps the label"
+                " as written when the decode is not usable, which sends a name"
+                " to DNS that no conforming encoder would have written."
+            ),
         )
     )
     out.append(
@@ -1918,7 +1889,13 @@ def url_cases() -> List[UrlCase]:
             "",
             False,
             "http://10.0.0.xn--pokxncvks/",
-            "",
+            (
+                "a label that starts with xn-- has to decode to something"
+                " UTS-46 would have produced, and this one does not, so it is"
+                " rejected rather than passed through. WHATWG keeps the label"
+                " as written when the decode is not usable, which sends a name"
+                " to DNS that no conforming encoder would have written."
+            ),
         )
     )
     out.append(
@@ -1927,7 +1904,13 @@ def url_cases() -> List[UrlCase]:
             "",
             False,
             "http://a.b.c.xn--pokxncvks/",
-            "",
+            (
+                "a label that starts with xn-- has to decode to something"
+                " UTS-46 would have produced, and this one does not, so it is"
+                " rejected rather than passed through. WHATWG keeps the label"
+                " as written when the decode is not usable, which sends a name"
+                " to DNS that no conforming encoder would have written."
+            ),
         )
     )
     out.append(
@@ -1936,7 +1919,13 @@ def url_cases() -> List[UrlCase]:
             "",
             False,
             "http://a.b.c.xn--pokxncvks/",
-            "",
+            (
+                "a label that starts with xn-- has to decode to something"
+                " UTS-46 would have produced, and this one does not, so it is"
+                " rejected rather than passed through. WHATWG keeps the label"
+                " as written when the decode is not usable, which sends a name"
+                " to DNS that no conforming encoder would have written."
+            ),
         )
     )
     out.append(
@@ -1945,7 +1934,13 @@ def url_cases() -> List[UrlCase]:
             "",
             False,
             "http://10.0.0.xn--pokxncvks/",
-            "",
+            (
+                "a label that starts with xn-- has to decode to something"
+                " UTS-46 would have produced, and this one does not, so it is"
+                " rejected rather than passed through. WHATWG keeps the label"
+                " as written when the decode is not usable, which sends a name"
+                " to DNS that no conforming encoder would have written."
+            ),
         )
     )
     out.append(
@@ -1954,7 +1949,13 @@ def url_cases() -> List[UrlCase]:
             "",
             False,
             "http://10.0.0.xn--pokxncvks/",
-            "",
+            (
+                "a label that starts with xn-- has to decode to something"
+                " UTS-46 would have produced, and this one does not, so it is"
+                " rejected rather than passed through. WHATWG keeps the label"
+                " as written when the decode is not usable, which sends a name"
+                " to DNS that no conforming encoder would have written."
+            ),
         )
     )
     out.append(
@@ -1963,12 +1964,7 @@ def url_cases() -> List[UrlCase]:
             "http://other.com/",
             False,
             "http://go.com/",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -1977,12 +1973,7 @@ def url_cases() -> List[UrlCase]:
             "http://other.com/",
             True,
             "",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -1991,12 +1982,7 @@ def url_cases() -> List[UrlCase]:
             "http://other.com/",
             True,
             "",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -2005,12 +1991,7 @@ def url_cases() -> List[UrlCase]:
             "http://other.com/",
             True,
             "",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -2019,12 +2000,7 @@ def url_cases() -> List[UrlCase]:
             "http://other.com/",
             True,
             "",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -2132,30 +2108,37 @@ def url_cases() -> List[UrlCase]:
             "http://other.com/",
             False,
             "http://192.168.0.1/",
+            "",
+        )
+    )
+    out.append(
+        UrlCase(
+            "http://./",
+            "",
+            False,
+            "http://./",
             (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
+                "a name with an empty label in it is rejected, because no"
+                " resolver answers one and `a..b` reads as one host to a person"
+                " and as two to a resolver. WHATWG turns VerifyDnsLength off,"
+                " which allows the empty label along with names over the DNS"
+                " length limits."
             ),
         )
     )
     out.append(
         UrlCase(
-            "http://./",
-            "",
-            False,
-            "http://./",
-            "",
-        )
-    )
-    out.append(
-        UrlCase(
             "http://../",
             "",
             False,
             "http://../",
-            "",
+            (
+                "a name with an empty label in it is rejected, because no"
+                " resolver answers one and `a..b` reads as one host to a person"
+                " and as two to a resolver. WHATWG turns VerifyDnsLength off,"
+                " which allows the empty label along with names over the DNS"
+                " length limits."
+            ),
         )
     )
     out.append(
@@ -4132,7 +4115,13 @@ def url_cases() -> List[UrlCase]:
             "",
             False,
             "http://foo.09../",
-            "",
+            (
+                "a name with an empty label in it is rejected, because no"
+                " resolver answers one and `a..b` reads as one host to a person"
+                " and as two to a resolver. WHATWG turns VerifyDnsLength off,"
+                " which allows the empty label along with names over the DNS"
+                " length limits."
+            ),
         )
     )
     out.append(
@@ -4213,12 +4202,7 @@ def url_cases() -> List[UrlCase]:
             "",
             True,
             "",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -4263,12 +4247,7 @@ def url_cases() -> List[UrlCase]:
             "",
             False,
             "https://ab/",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -4277,12 +4256,7 @@ def url_cases() -> List[UrlCase]:
             "",
             True,
             "",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -4291,12 +4265,7 @@ def url_cases() -> List[UrlCase]:
             "",
             True,
             "",
-            (
-                "the UTS-46 mapping and validation tables are not implemented"
-                " yet, so the host is punycoded as written instead of being"
-                " mapped, filtered and checked first. Tracked in the IDNA 2008"
-                " work on milestone one."
-            ),
+            "",
         )
     )
     out.append(
@@ -4305,7 +4274,13 @@ def url_cases() -> List[UrlCase]:
             "",
             False,
             "https://xn--/",
-            "",
+            (
+                "a label that starts with xn-- has to decode to something"
+                " UTS-46 would have produced, and this one does not, so it is"
+                " rejected rather than passed through. WHATWG keeps the label"
+                " as written when the decode is not usable, which sends a name"
+                " to DNS that no conforming encoder would have written."
+            ),
         )
     )
     out.append(

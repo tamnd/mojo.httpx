@@ -26,11 +26,39 @@ sha256 = "8f50ad958916d6a8f79fba2363501475571acce752757f9126fe9d2f17dd920d"
 size = 4308
 retrieved = "2026-08-31"
 
+[file.unicode-data]
+path = "tests/data/unicode/UnicodeData.txt"
+url = "https://www.unicode.org/Public/17.0.0/ucd/UnicodeData.txt"
+sha256 = "2e1efc1dcb59c575eedf5ccae60f95229f706ee6d031835247d843c11d96470c"
+size = 2198209
+retrieved = "2026-08-31"
+
 [file.unicode-idna]
 path = "tests/data/idna/IdnaTestV2.txt"
 url = "https://www.unicode.org/Public/idna/latest/IdnaTestV2.txt"
 sha256 = "beb5d0be20e896189b03209a82fdc34f06351502bbd4b8e2523583fc2954d9cf"
 size = 775973
+retrieved = "2026-08-31"
+
+[file.unicode-idna-mapping]
+path = "tests/data/unicode/IdnaMappingTable.txt"
+url = "https://www.unicode.org/Public/idna/latest/IdnaMappingTable.txt"
+sha256 = "87f05505dc026fdb2bff16132bdc68a8014675836882a9a2b1844540ad3be382"
+size = 787378
+retrieved = "2026-08-31"
+
+[file.unicode-joining-type]
+path = "tests/data/unicode/DerivedJoiningType.txt"
+url = "https://www.unicode.org/Public/17.0.0/ucd/extracted/DerivedJoiningType.txt"
+sha256 = "f39ebe974825d6736aee15582250307aa532b2cfab3caf3f86bd23fddc9c5c4d"
+size = 40635
+retrieved = "2026-08-31"
+
+[file.unicode-normalization-props]
+path = "tests/data/unicode/DerivedNormalizationProps.txt"
+url = "https://www.unicode.org/Public/17.0.0/ucd/DerivedNormalizationProps.txt"
+sha256 = "71fd6a206a2c0cdd41feb6b7f656aa31091db45e9cedc926985d718397f9e488"
+size = 1377582
 retrieved = "2026-08-31"
 
 [file.whatwg-url]

@@ -45,6 +45,14 @@ client library deliberately does not copy, so the harness records which cases ar
 skipped and why rather than quietly passing a subset.
 """
 
+# The five Unicode files below have to come from one release. A mapping table
+# from one version checked against conformance cases from another disagrees about
+# exactly the characters that changed, which is a day of confusion for nothing.
+# The two under idna/ are only published under `latest` until the release is a
+# year old, so the version cannot be pinned in the URL for all of them. Instead
+# tools/gen_idna.py reads the `# Version:` line out of each file and refuses to
+# build a table out of a mixed set, which is the thing the pin was for.
+
 [[source]]
 name = "unicode-idna"
 url = "https://www.unicode.org/Public/idna/latest/IdnaTestV2.txt"
@@ -54,6 +62,51 @@ purpose = """
 The UTS-46 conformance cases. A hostname that maps to a different name than the
 user typed sends the request somewhere else entirely, so this is the corpus that
 decides whether the IDNA layer is trustworthy.
+"""
+
+[[source]]
+name = "unicode-idna-mapping"
+url = "https://www.unicode.org/Public/idna/latest/IdnaMappingTable.txt"
+path = "tests/data/unicode/IdnaMappingTable.txt"
+license = "Unicode-3.0"
+purpose = """
+What UTS-46 does with every code point: leave it, drop it, replace it with
+something else, or refuse the name outright. This is the table that decides that
+a fullwidth letter and the letter it looks like are the same host.
+"""
+
+[[source]]
+name = "unicode-data"
+url = "https://www.unicode.org/Public/17.0.0/ucd/UnicodeData.txt"
+path = "tests/data/unicode/UnicodeData.txt"
+license = "Unicode-3.0"
+purpose = """
+The character database. Three fields of it are needed: the canonical
+decomposition and combining class, which are what NFC is built out of, the
+general category, which is how a label starting with a combining mark is caught,
+and the bidi class, which the right to left rules are written in terms of.
+"""
+
+[[source]]
+name = "unicode-normalization-props"
+url = "https://www.unicode.org/Public/17.0.0/ucd/DerivedNormalizationProps.txt"
+path = "tests/data/unicode/DerivedNormalizationProps.txt"
+license = "Unicode-3.0"
+purpose = """
+Full_Composition_Exclusion, which is the list of characters that decompose but
+must not be put back together. Composing without it produces a string that is not
+NFC and does not round trip.
+"""
+
+[[source]]
+name = "unicode-joining-type"
+url = "https://www.unicode.org/Public/17.0.0/ucd/extracted/DerivedJoiningType.txt"
+path = "tests/data/unicode/DerivedJoiningType.txt"
+license = "Unicode-3.0"
+purpose = """
+Which characters join to their neighbours, for the UTS-46 rules on the zero width
+joiner and non joiner. Those two are invisible, so without the rules a name can
+be spelled two ways that look identical and resolve differently.
 """
 
 [[source]]
