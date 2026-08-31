@@ -35,6 +35,10 @@ from httpx._pool.limits import Limits
 from httpx._pool.origin import Origin, origin_for
 from httpx._proto.h1.connection import H1Connection
 from httpx._proto.h1.writer import TargetForm
+from httpx._stream.config import TlsConfig
+from httpx._stream.stream import Stream
+from httpx._stream.tls import TlsStream
+from httpx._ffi.openssl import SslCtx
 
 
 struct PooledConnection(Movable):
@@ -103,6 +107,18 @@ struct ConnectionPool(Movable):
 
     var limits: Limits
     var resolver: Resolver
+    var tls: TlsConfig
+    """What to do about certificates, kept here rather than at the transport
+    because this is where a connection is made and so the only place that can
+    apply it."""
+
+    var _ssl_ctx: Optional[SslCtx]
+    """Built on the first https connection, then shared by every later one.
+
+    Lazy on purpose. Building it parses the whole trust store, and a client
+    that only ever talks to `http://` should not pay for that, nor should it
+    fail to start on a machine with no OpenSSL on it.
+    """
 
     var _idle: List[PooledConnection]
     """Idle connections, oldest first.
@@ -121,9 +137,16 @@ struct ConnectionPool(Movable):
     well as connections waiting.
     """
 
-    def __init__(out self, var limits: Limits, ttl_seconds: Int = 60):
+    def __init__(
+        out self,
+        var limits: Limits,
+        ttl_seconds: Int = 60,
+        var tls: TlsConfig = TlsConfig(),
+    ):
         self.limits = limits^
         self.resolver = Resolver(ttl_seconds)
+        self.tls = tls^
+        self._ssl_ctx = None
         self._idle = List[PooledConnection]()
         self._leased = 0
 
@@ -187,9 +210,27 @@ struct ConnectionPool(Movable):
             return found.take()
 
         self._make_room(origin, deadlines)
+        var tcp = connect_to_host(
+            self.resolver, origin.host, origin.port, deadlines.connect
+        )
+        if not origin.is_secure():
+            return H1Connection(Stream(tcp^))
+
+        # Built here, on the first https connection, and shared by every one
+        # after it. `TlsStream` takes its own reference on the context through
+        # `SSL_new`, so the pool holding the only Mojo side handle is what
+        # keeps it alive and nothing has to order the two lifetimes by hand.
+        if not self._ssl_ctx:
+            self._ssl_ctx = Optional(self.tls.build())
         return H1Connection(
-            connect_to_host(
-                self.resolver, origin.host, origin.port, deadlines.connect
+            Stream(
+                TlsStream(
+                    tcp^,
+                    self._ssl_ctx.value(),
+                    origin.host,
+                    self.tls.verify.enabled,
+                    deadlines.connect,
+                )
             )
         )
 

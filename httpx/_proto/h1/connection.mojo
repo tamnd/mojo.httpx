@@ -17,15 +17,16 @@ Pipelining is out of scope. It is allowed by the RFC, it wins almost nothing
 over a connection pool, and getting it wrong means responses handed to the wrong
 caller.
 
-`H1Connection` is written against `TcpStream` rather than against a stream
-trait. The trait arrives with the transport layer, which is where TLS gets
-layered in, and inventing it here would mean guessing at what that layer needs.
+`H1Connection` is written against `Stream`, which is either a plain socket or a
+TLS session over one. Nothing in this file branches on which, and that is the
+whole reason the type exists: `http://` and `https://` differ in how the bytes
+are carried and in nothing this module cares about.
 """
 
 from httpx._exceptions import ErrorKind, new_error
 from httpx._io.buffer import ByteBuffer
 from httpx._io.deadline import Deadline
-from httpx._io.socket import TcpStream
+from httpx._stream.stream import Stream
 from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.response import Response
@@ -103,7 +104,7 @@ def _remote(message: String) -> Error:
 struct H1Connection(Movable):
     """A connection that can carry one exchange at a time."""
 
-    var stream: TcpStream
+    var stream: Stream
     var buf: ByteBuffer
     var state: H1State
 
@@ -127,7 +128,7 @@ struct H1Connection(Movable):
     the wire by then and there is nowhere to put it back, so it is parked here.
     """
 
-    def __init__(out self, var stream: TcpStream):
+    def __init__(out self, var stream: Stream):
         self.stream = stream^
         self.buf = ByteBuffer()
         self.state = H1State.IDLE

@@ -24,6 +24,7 @@ from httpx._models.request import Request
 from httpx._models.response import Response
 from httpx._models.url import URL, QueryParams
 from httpx._pool.limits import Limits
+from httpx._stream.config import ClientCert, SSLVerify, TlsConfig
 from httpx._transport.base import AnyTransport, erase
 from httpx._transport.http import HTTPTransport
 
@@ -71,16 +72,21 @@ struct Client(Movable):
         var base_url: URL = URL(),
         timeout: Optional[Timeout] = None,
         limits: Optional[Limits] = None,
+        verify: SSLVerify = SSLVerify(),
+        cert: Optional[ClientCert] = None,
+        trust_env: Bool = True,
     ) raises:
         self.headers = headers^
         self.params = params^
         self.base_url = base_url^
         self.timeout = timeout.value() if timeout else Timeout()
-        var transport: HTTPTransport
-        if limits:
-            transport = HTTPTransport(limits.value())
-        else:
-            transport = HTTPTransport()
+        var tls = TlsConfig()
+        tls.verify = verify
+        tls.cert = cert.copy()
+        tls.trust_env = trust_env
+        var transport = HTTPTransport(
+            limits.value() if limits else Limits(), tls^
+        )
         self._transport = erase(transport^)
         self._closed = False
 

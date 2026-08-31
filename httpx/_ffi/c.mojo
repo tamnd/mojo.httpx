@@ -117,6 +117,26 @@ def strerror(code: c_int) -> String:
     return cstr_to_string(external_call["strerror", CStr](code))
 
 
+def getenv(name: StringSpan) raises -> Optional[String]:
+    """One environment variable, or nothing when it is not set.
+
+    An empty variable comes back as an empty string rather than as nothing,
+    because `SSL_CERT_DIR=` set to empty is a user saying something different
+    from not setting it, and the caller is entitled to tell the two apart.
+
+    The value is copied straight away. `getenv` returns a pointer into the
+    process environment block, which any later `setenv` from any thread is free
+    to move.
+    """
+    var key = c_string(name)
+    var found = external_call["getenv", Optional[Ptr[c_char]]](
+        CStringSlice(key)
+    )
+    if not found:
+        return None
+    return cstr_to_string(CStringSlice(unsafe_from_ptr=found.value()))
+
+
 def cstr_to_string[o: ImmOrigin](s: CStringSlice[o]) -> String:
     """Copy a C string into a `String` we control.
 
