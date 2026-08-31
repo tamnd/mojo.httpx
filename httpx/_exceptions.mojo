@@ -397,3 +397,11 @@ def is_too_many_redirects(imm e: Error) -> Bool:
 
 def is_invalid_url(imm e: Error) -> Bool:
     return kind_of(e) == ErrorKind.INVALID_URL
+
+
+def is_invalid_header(imm e: Error) -> Bool:
+    return kind_of(e) == ErrorKind.INVALID_HEADER
+
+
+def is_cookie_conflict(imm e: Error) -> Bool:
+    return kind_of(e) == ErrorKind.COOKIE_CONFLICT
