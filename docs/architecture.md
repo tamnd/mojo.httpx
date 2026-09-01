@@ -110,6 +110,16 @@ The lease count is decremented on all three of those paths. Getting that wrong i
 
 The pool is held through a shared handle rather than borrowed, because a streamed response outlives the call that produced it and may outlive the transport too. `httpx.stream()` is the extreme case: the one shot helper closes its client before returning, and the response still works, because the connection carrying the body was never in the pool to be closed and the pool itself stays alive as long as the source holds a handle on it.
 
+## A request body can stream too
+
+The same `ByteStream` that carries a response body carries a request body, pulled a piece at a time and written as each piece arrives. `Request.streaming` is the constructor and `content_stream=` is the client argument.
+
+The framing follows what the caller said rather than what this code guessed. With no `Content-Length` the body goes out as `Transfer-Encoding: chunked`, because there is nothing else available when the length is not known at the time the head is written. A caller who does know the length can set `Content-Length` and get a length framed body instead, which is worth having because chunked request bodies are still handled badly by some servers and more proxies.
+
+A source that fails halfway leaves the connection closed rather than in `SEND_BODY`. Part of the body is already on the wire and the server has been told how much to expect, so there is nothing to recover and no way to take back what went out.
+
+Such a body can only be sent once, which makes redirects and retries a problem, and the answer is to fail rather than to improvise. `Request.copy()` gives a copy with no body that remembers it is missing one, and sending that copy raises. The alternative is a redirect that quietly delivers an empty upload to the new location.
+
 ## Parsing rule
 
 `len()` on a `String` is a hard compile error in Mojo 1.0, on the grounds that the byte count and the character count are different answers and the caller should say which one they want. That is a good decision by the language, and for this project it points somewhere useful: every parser works on `Span[UInt8]` and never touches `String` at all. Strings only appear at the boundary where a user sees a value.

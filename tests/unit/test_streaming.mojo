@@ -19,6 +19,8 @@ from httpx._exceptions import ErrorKind, kind_of
 from httpx._io.deadline import Deadlines
 from httpx._models.request import Request
 from httpx._models.response import Response
+from httpx._models.headers import Headers
+from httpx._models.stream import ByteSource, ByteStream, erase_source
 from httpx._models.url import URL
 from httpx._transport.http import HTTPTransport
 
@@ -290,4 +292,194 @@ def test_a_streamed_head_response_has_no_body() raises:
 
     assert_equal(response.status_code, 200)
     assert_equal(len(response.content()), 0)
+    server.stop()
+
+
+struct Chunks(ByteSource, Movable):
+    """A request body handed over one piece at a time.
+
+    What a caller uploading a file or generating a body as it goes would write.
+    Held as a list so a test can say exactly how the body is cut up, which is
+    what decides how many chunks go on the wire.
+    """
+
+    var _pieces: List[List[UInt8]]
+    var _at: Int
+
+    def __init__(out self, var pieces: List[List[UInt8]]):
+        self._pieces = pieces^
+        self._at = 0
+
+    def read_chunk(mut self) raises -> List[UInt8]:
+        if self._at >= len(self._pieces):
+            return List[UInt8]()
+        var out = self._pieces[self._at].copy()
+        self._at += 1
+        return out^
+
+    def close(mut self):
+        self._at = len(self._pieces)
+
+    def trailers(self) -> Headers:
+        return Headers()
+
+
+struct FailingChunks(ByteSource, Movable):
+    """Sends one piece and then the upload falls over."""
+
+    var _sent: Bool
+
+    def __init__(out self):
+        self._sent = False
+
+    def read_chunk(mut self) raises -> List[UInt8]:
+        if self._sent:
+            raise Error("the file being uploaded went away")
+        self._sent = True
+        var out = List[UInt8]()
+        out.extend("first".as_bytes())
+        return out^
+
+    def close(mut self):
+        pass
+
+    def trailers(self) -> Headers:
+        return Headers()
+
+
+def _body_of(*parts: StringSpan) raises -> ByteStream:
+    var pieces = List[List[UInt8]]()
+    for part in parts:
+        var piece = List[UInt8]()
+        piece.extend(part.as_bytes())
+        pieces.append(piece^)
+    return erase_source(Chunks(pieces^))
+
+
+def _empty_body() raises -> ByteStream:
+    """The variadic helper above cannot be called with nothing."""
+    return erase_source(Chunks(List[List[UInt8]]()))
+
+
+def test_a_streaming_request_body_arrives_whole() raises:
+    var server = TestServer()
+    var client = Client()
+    var response = client.post(
+        server.url("/echo"),
+        content_stream=Optional[ByteStream](_body_of("one ", "two ", "three")),
+    )
+    assert_equal(response.status_code, 200)
+    assert_equal(response.text(), "one two three")
+    server.stop()
+
+
+def test_a_streaming_request_body_goes_out_chunked() raises:
+    # No length is known when the head is written, so chunked is the only
+    # framing available. The server tells us what it saw.
+    var server = TestServer()
+    var client = Client()
+    var response = client.post(
+        server.url("/post"),
+        content_stream=Optional[ByteStream](_body_of("a", "b")),
+    )
+    var seen = response.text()
+    assert_true('"Transfer-Encoding": "chunked"' in seen)
+    assert_true('"Content-Length"' not in seen)
+    assert_true('"data": "ab"' in seen)
+    server.stop()
+
+
+def test_a_streaming_body_with_a_declared_length_is_not_chunked() raises:
+    # A caller who knows the size says so and gets a length framed body. Worth
+    # having because some servers and more proxies still handle chunked request
+    # bodies badly.
+    var server = TestServer()
+    var client = Client()
+    var headers = Headers()
+    headers["Content-Length"] = "6"
+    var response = client.post(
+        server.url("/post"),
+        content_stream=Optional[ByteStream](_body_of("abc", "def")),
+        headers=headers^,
+    )
+    var seen = response.text()
+    assert_true('"Content-Length": "6"' in seen)
+    assert_true('"Transfer-Encoding"' not in seen)
+    assert_true('"data": "abcdef"' in seen)
+    server.stop()
+
+
+def test_an_empty_streaming_body_still_ends_the_message() raises:
+    # The terminal chunk has to go out even when nothing before it did, or the
+    # server waits for a body that is already over.
+    var server = TestServer()
+    var client = Client()
+    var response = client.post(
+        server.url("/echo"),
+        content_stream=Optional[ByteStream](_empty_body()),
+    )
+    assert_equal(response.status_code, 200)
+    assert_equal(len(response.content()), 0)
+    server.stop()
+
+
+def test_a_streaming_body_can_be_sent_to_a_streaming_response() raises:
+    var server = TestServer()
+    var client = Client()
+    var body = String()
+    with client.stream(
+        "POST",
+        server.url("/echo"),
+        content_stream=Optional[ByteStream](_body_of("up", "load")),
+    ) as response:
+        var chunks = response.iter_text()
+        while chunks.has_next():
+            body += chunks.next()
+    assert_equal(body, "upload")
+    server.stop()
+
+
+def test_a_request_with_a_streaming_body_says_it_has_one() raises:
+    var request = Request.streaming(
+        "POST", URL("http://example.com/"), _body_of("x")
+    )
+    assert_true(request.has_body())
+    assert_true(request.has_stream())
+
+
+def test_a_copy_of_a_streaming_request_cannot_be_sent() raises:
+    # The rule that makes a redirect or a retry of a streamed upload an error
+    # rather than an empty body arriving at the new location.
+    var request = Request.streaming(
+        "POST", URL("http://example.com/"), _body_of("x")
+    )
+    var second = request.copy()
+    assert_true(second.has_stream() == False)
+
+    var raised = False
+    try:
+        _ = second.take_stream()
+    except e:
+        raised = True
+        assert_true(kind_of(e) == ErrorKind.REQUEST_NOT_READ)
+        assert_true("cannot be sent again" in String(e))
+    assert_true(raised)
+
+
+def test_a_body_that_fails_partway_closes_the_connection() raises:
+    # Half the body is already on the wire and there is no taking it back, so
+    # the connection cannot be reused whatever happens next.
+    var server = TestServer()
+    var transport = HTTPTransport()
+    var request = Request.streaming(
+        "POST", URL(server.url("/echo")), erase_source(FailingChunks())
+    )
+    var raised = False
+    try:
+        _ = transport.handle_request(request^, _deadlines())
+    except e:
+        raised = True
+        assert_true("went away" in String(e))
+    assert_true(raised)
+    assert_equal(transport.pool[].total_count(), 0)
     server.stop()

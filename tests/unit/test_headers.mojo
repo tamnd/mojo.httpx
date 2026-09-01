@@ -246,6 +246,24 @@ def test_update_replaces_rather_than_appends() raises:
     assert_equal(headers["host"], "example.com")
 
 
+def test_update_keeps_the_casing_it_was_given() raises:
+    # This used to go through `keys()`, which returns the lowered names, so
+    # every header a caller set on a request went out lowercased. Legal, and
+    # nothing else on the internet does it, which made a request from this
+    # library identifiable by its shape alone.
+    var headers = Headers()
+    var overrides = Headers()
+    overrides.append("X-Request-Id", "abc")
+    overrides.append("Content-Length", "6")
+    headers.update(overrides)
+    assert_equal(
+        String(StringSpan(from_utf8=headers.raw_name(0))), "X-Request-Id"
+    )
+    assert_equal(
+        String(StringSpan(from_utf8=headers.raw_name(1))), "Content-Length"
+    )
+
+
 def test_update_keeps_a_field_that_repeats_in_the_source() raises:
     var headers = Headers()
     headers.append("Accept", "text/html")

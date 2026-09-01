@@ -136,13 +136,21 @@ struct Loopback(Movable):
         _ = suppress_sigpipe(fd)
         return Peer(fd)
 
-    def has_pending(self) -> Bool:
-        """Whether a connection is already waiting to be accepted.
+    def has_pending(self, ms: Int = 500) -> Bool:
+        """Whether a connection is waiting to be accepted, or arrives shortly.
 
-        Zero rather than a timeout, because the caller is asking about now.
+        This used to poll for zero milliseconds, on the grounds that the caller
+        is asking about now. That was a race. A connect on loopback returns once
+        the handshake is under way, and the listener's accept queue is filled a
+        moment later on the other side of the kernel, so asking whether it had
+        already happened lost often enough to fail three tests every few runs
+        for no reason to do with the code under test.
+
+        Half a second is far longer than a loopback handshake takes and still
+        short enough that a client which never connected at all fails quickly.
         """
         var fds = PollFd(self._fd, POLLIN, Int16(0))
-        return poll(Pointer(to=fds), c_uint(1), c_int(0)) > 0
+        return poll(Pointer(to=fds), c_uint(1), c_int(ms)) > 0
 
     def close(mut self):
         if self._fd >= 0:
