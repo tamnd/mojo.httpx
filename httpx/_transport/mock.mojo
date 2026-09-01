@@ -44,8 +44,14 @@ struct MockTransport(Transport):
         mock that timed out on request would be inventing a failure the code
         under test never asked for.
         """
+        # The handler gets the real request, body and all, and the response
+        # carries the copy. The other way round would hand the handler a
+        # streaming body that had already been taken away from it.
+        var recorded = request.copy()
         self.requests.append(request.copy())
-        return self.handler(request^)
+        var response = self.handler(request^)
+        response.set_request(recorded^)
+        return response^
 
     def handle_stream(
         mut self, var request: Request, deadlines: Deadlines

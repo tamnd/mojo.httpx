@@ -34,9 +34,8 @@ def _response_to(method: StringSpan, canned: StringSpan) raises -> Response:
         open_stream(listener.addr, "loopback", Deadline.after(5.0))
     )
     var peer = listener.accept_within()
-    conn.send_request(
-        Request(method, URL("http://example.com/")), Deadline.after(5.0)
-    )
+    var request = Request(method, URL("http://example.com/"))
+    conn.send_request(request, Deadline.after(5.0))
     _ = peer.recv_until("\r\n\r\n")
     peer.send_text(canned)
     return conn.read_response(Deadline.after(5.0))

@@ -15,7 +15,9 @@ from httpx._exceptions import ErrorKind, new_error
 from httpx._models.headers import Headers
 from httpx._models.iterators import ByteChunks, LineChunks, TextChunks
 from httpx._models.json import Json, parse_json
+from httpx._models.request import Request
 from httpx._models.stream import ByteStream, buffered_stream, empty_stream
+from httpx._models.url import URL
 from httpx._util.charset import (
     DEFAULT_CHARSET,
     UNKNOWN,
@@ -25,6 +27,7 @@ from httpx._util.charset import (
     decode_charset,
     is_known_charset,
 )
+from httpx._util.erase import ErasedBox
 from httpx._util.media import parse_media_type
 
 
@@ -160,6 +163,31 @@ struct Response(Movable, Writable):
     knowledge about a service that mislabels its bodies.
     """
 
+    var _request: Optional[Request]
+    """What was sent to get this, put here by whoever sent it.
+
+    The transport hands the request back inside the response rather than
+    consuming it, because the client above needs it again for a redirect, an
+    auth challenge or a retry, and rebuilding it from nothing would mean
+    guessing at the body.
+    """
+
+    var _next_request: Optional[Request]
+    """The request that would follow this redirect, when one was worked out.
+
+    Only ever set on a redirect the client was told not to follow, which is how
+    a caller steps through a redirect chain themselves.
+    """
+
+    var _history: List[ErasedBox]
+    """The redirects that led here, oldest first.
+
+    Boxed rather than held as a `List[Response]` because a struct in Mojo 1.0
+    cannot contain itself, not even through a list. The box forgets the type on
+    the way in and `history` remembers it on the way out, so the field is legal
+    and the accessor still hands back responses.
+    """
+
     def __init__(
         out self,
         status_code: Int,
@@ -187,6 +215,9 @@ struct Response(Movable, Writable):
         self.is_closed = True
         self.trailers = trailers^
         self.default_encoding = default_encoding^
+        self._request = None
+        self._next_request = None
+        self._history = List[ErasedBox]()
 
     @staticmethod
     def streaming(
@@ -212,13 +243,17 @@ struct Response(Movable, Writable):
         out.default_encoding = default_encoding^
         return out^
 
-    def copy(self) -> Self:
+    def copy(self) raises -> Self:
         """Another response with the same body.
 
         Only meaningful once the body has been read, which is why the copy
         starts read: a copy of a response that is still arriving would be a
         second handle on one stream, and whichever of the two was read first
         would take the bytes from the other.
+
+        The history is shared rather than duplicated. The responses in it are
+        finished and nothing can change them, so a second reference is as good
+        as a second copy and costs a count instead of every body in the chain.
         """
         var out = Self(
             self.status_code,
@@ -229,7 +264,102 @@ struct Response(Movable, Writable):
         out._content = self._content.copy()
         out.trailers = self.trailers.copy()
         out.default_encoding = self.default_encoding.copy()
+        if self._request:
+            out._request = Optional[Request](self._request.value().copy())
+        if self._next_request:
+            out._next_request = Optional[Request](
+                self._next_request.value().copy()
+            )
+        for i in range(len(self._history)):
+            out._history.append(self._history[i].copy())
         return out^
+
+    def set_request(mut self, var request: Request):
+        """Record what was sent to get this response.
+
+        Called by the transport on its way out, with the request it has just
+        finished writing. Nothing above the transport should have to do this and
+        nothing below it has the request to do it with.
+        """
+        self._request = Optional[Request](request^)
+
+    def has_request(self) -> Bool:
+        return Bool(self._request)
+
+    def request(ref self) raises -> ref[self._request._value] Request:
+        """What was sent to get this response.
+
+        Raises rather than handing back an empty request when nothing set one,
+        which happens only for a response built by hand. An empty request would
+        answer `url` with an empty URL and the caller would have no way to tell
+        that apart from a real answer.
+        """
+        if not self._request:
+            raise Error(
+                "RuntimeError: this response did not come from sending a"
+                " request, so there is nothing to report as its request"
+            )
+        return self._request.value()
+
+    def url(self) raises -> URL:
+        """The URL this response came from.
+
+        After a followed redirect chain that is the last URL in the chain, not
+        the one the caller asked for. The one they asked for is on the first
+        entry of `history`.
+        """
+        return self.request().url.copy()
+
+    def history(self) raises -> List[Self]:
+        """The redirects that led here, oldest first.
+
+        Copies, because the responses in the chain are shared with anything else
+        that took a copy of this one. They have been read and closed by the time
+        they get here, so a copy costs a body in memory and nothing else.
+        """
+        var out = List[Self]()
+        for i in range(len(self._history)):
+            out.append(self._history[i].get[Self]().copy())
+        return out^
+
+    def history_count(self) -> Int:
+        """How many redirects led here, without copying any of them."""
+        return len(self._history)
+
+    def inherit_history(mut self, var prior: Self):
+        """Take on `prior`'s history, and then `prior` itself.
+
+        How a redirect chain is threaded together: each response is handed the
+        one before it, so the response the caller finally gets carries the whole
+        chain and the client does not have to keep a list of its own alongside.
+        """
+        var chain = List[ErasedBox]()
+        for i in range(len(prior._history)):
+            chain.append(prior._history[i].copy())
+        chain.append(ErasedBox.make[Self](prior^))
+        self._history = chain^
+
+    def set_next_request(mut self, var request: Request):
+        self._next_request = Optional[Request](request^)
+
+    def has_next_request(self) -> Bool:
+        """Whether there is a redirect here that was not followed."""
+        return Bool(self._next_request)
+
+    def next_request(mut self) raises -> Request:
+        """The request that follows this redirect, taken rather than borrowed.
+
+        Set only when the client was told not to follow redirects, which is the
+        default. Taken because sending it consumes it, and handing a second
+        caller a second copy would be a second copy of a body that may only go
+        out once. Ask `has_next_request` first.
+        """
+        if not self._next_request:
+            raise Error(
+                "RuntimeError: this response has no redirect to follow, so"
+                " there is no next request to take"
+            )
+        return self._next_request.take()
 
     def read(mut self) raises:
         """Pull the whole body into memory, if it is not there already.

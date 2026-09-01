@@ -63,6 +63,23 @@ The `with` around the response is not decoration. The connection that body is ar
 
 Both requests in the client block above go over one connection. `Timeout` holds a separate limit for connect, read, write and pool, because those four fail for different reasons and deserve different answers, and every one of them is a deadline that is checked all the way down to the socket call.
 
+A redirect is not followed unless you ask for it, which is httpx2's default and the right one. A client that follows silently is a client that can be sent somewhere else without the caller ever knowing.
+
+```mojo
+import httpx
+
+def main() raises:
+    with httpx.Client(follow_redirects=True) as client:
+        var r = client.get("https://example.com/old")
+        print(r.status_code, r.url())
+
+        var history = r.history()
+        for i in range(len(history)):
+            print(history[i].status_code, history[i].url())
+```
+
+`follow_redirects=` is also an argument on every request method, so one call can differ from the client it was made on. Left off, a 3xx comes back as it is and `r.next_request()` holds the request that would have been sent, which is how a caller inspects or rewrites a hop before taking it. `Authorization` is dropped when a hop crosses an origin, so no server can talk this client into handing your credentials to an address you never named.
+
 ## What it will look like
 
 ```mojo
@@ -78,7 +95,7 @@ def main() raises:
     resp.raise_for_status()
 ```
 
-Streaming, redirects, cookies, auth, proxies, multipart uploads, event hooks, custom transports and a `MockTransport` for tests all work the way they do in httpx2.
+Cookies, auth, proxies, multipart uploads, event hooks, custom transports and a `MockTransport` for tests all work the way they do in httpx2.
 
 ## Planned feature set
 

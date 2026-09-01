@@ -26,6 +26,7 @@ def request(
     var content: List[UInt8] = List[UInt8](),
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
+    follow_redirects: Bool = False,
 ) raises -> Response:
     """Send one request through a client that lives for one request.
 
@@ -42,6 +43,7 @@ def request(
             content=content^,
             params=params^,
             timeout=timeout,
+            follow_redirects=follow_redirects,
         )
     except e:
         # The pool has to be closed on the way out as well, or a failed one shot
@@ -60,6 +62,7 @@ def stream(
     var content: List[UInt8] = List[UInt8](),
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
+    follow_redirects: Bool = False,
 ) raises -> Response:
     """Send one request and return before the body has arrived.
 
@@ -80,6 +83,7 @@ def stream(
             content=content^,
             params=params^,
             timeout=timeout,
+            follow_redirects=follow_redirects,
         )
     except e:
         client.close()
@@ -94,9 +98,15 @@ def get(
     var headers: Headers = Headers(),
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
+    follow_redirects: Bool = False,
 ) raises -> Response:
     return request(
-        "GET", url, headers=headers^, params=params^, timeout=timeout
+        "GET",
+        url,
+        headers=headers^,
+        params=params^,
+        timeout=timeout,
+        follow_redirects=follow_redirects,
     )
 
 
@@ -106,9 +116,15 @@ def head(
     var headers: Headers = Headers(),
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
+    follow_redirects: Bool = False,
 ) raises -> Response:
     return request(
-        "HEAD", url, headers=headers^, params=params^, timeout=timeout
+        "HEAD",
+        url,
+        headers=headers^,
+        params=params^,
+        timeout=timeout,
+        follow_redirects=follow_redirects,
     )
 
 
@@ -118,9 +134,15 @@ def options(
     var headers: Headers = Headers(),
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
+    follow_redirects: Bool = False,
 ) raises -> Response:
     return request(
-        "OPTIONS", url, headers=headers^, params=params^, timeout=timeout
+        "OPTIONS",
+        url,
+        headers=headers^,
+        params=params^,
+        timeout=timeout,
+        follow_redirects=follow_redirects,
     )
 
 
@@ -130,9 +152,15 @@ def delete(
     var headers: Headers = Headers(),
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
+    follow_redirects: Bool = False,
 ) raises -> Response:
     return request(
-        "DELETE", url, headers=headers^, params=params^, timeout=timeout
+        "DELETE",
+        url,
+        headers=headers^,
+        params=params^,
+        timeout=timeout,
+        follow_redirects=follow_redirects,
     )
 
 
@@ -143,6 +171,7 @@ def post(
     var headers: Headers = Headers(),
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
+    follow_redirects: Bool = False,
 ) raises -> Response:
     return request(
         "POST",
@@ -151,6 +180,7 @@ def post(
         content=content^,
         params=params^,
         timeout=timeout,
+        follow_redirects=follow_redirects,
     )
 
 
@@ -161,6 +191,7 @@ def put(
     var headers: Headers = Headers(),
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
+    follow_redirects: Bool = False,
 ) raises -> Response:
     return request(
         "PUT",
@@ -169,6 +200,7 @@ def put(
         content=content^,
         params=params^,
         timeout=timeout,
+        follow_redirects=follow_redirects,
     )
 
 
@@ -179,6 +211,7 @@ def patch(
     var headers: Headers = Headers(),
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
+    follow_redirects: Bool = False,
 ) raises -> Response:
     return request(
         "PATCH",
@@ -187,4 +220,5 @@ def patch(
         content=content^,
         params=params^,
         timeout=timeout,
+        follow_redirects=follow_redirects,
     )

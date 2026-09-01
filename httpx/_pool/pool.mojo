@@ -195,6 +195,10 @@ struct ConnectionPool(Movable):
         exchange that raised takes its connection with it, because a connection
         whose framing went wrong cannot be told apart from one whose next byte
         is somebody else's response.
+
+        The request goes out inside the response it produced. That is what lets
+        the client above follow a redirect or answer a challenge without having
+        kept a copy of every request it has ever sent.
         """
         var origin = origin_for(request.url)
         var conn = self._acquire(origin, deadlines)
@@ -203,7 +207,7 @@ struct ConnectionPool(Movable):
         var response: Response
         try:
             response = conn.exchange(
-                request^, deadlines.write, deadlines.read, form
+                request, deadlines.write, deadlines.read, form
             )
         except e:
             self._leased -= 1
@@ -212,6 +216,7 @@ struct ConnectionPool(Movable):
 
         self._leased -= 1
         self._release(origin, conn^)
+        response.set_request(request^)
         return response^
 
     def _acquire(
@@ -470,7 +475,7 @@ def stream_request(
 
     var head: ResponseHead
     try:
-        conn.send_request(request^, deadlines.write, form)
+        conn.send_request(request, deadlines.write, form)
         head = conn.start_response(deadlines.read)
     except e:
         pool[]._leased -= 1
@@ -478,10 +483,12 @@ def stream_request(
         raise e
 
     var source = PooledSource(pool^, origin, conn^, deadlines.read)
-    return Response.streaming(
+    var response = Response.streaming(
         head.status_code,
         erase_source(source^),
         head.reason_phrase.copy(),
         head.http_version.copy(),
         head.take_headers(),
     )
+    response.set_request(request^)
+    return response^
