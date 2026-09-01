@@ -14,14 +14,19 @@ from std.testing import assert_equal, assert_false, assert_true
 
 from httpx._bytes import Bytes
 from httpx._content.encode import (
+    FORM_TYPE,
+    JSON_TYPE,
+    MULTIPART_TYPE,
     EncodedBody,
     encode_bytes,
     encode_json,
     encode_multipart,
     encode_multipart_with,
+    encode_request_body,
     encode_text,
     encode_urlencoded,
 )
+from httpx._exceptions import ErrorKind, kind_of
 from httpx._content.multipart import FileUpload, MultipartData
 from httpx._models.json import Json, parse_json
 from httpx._models.url import QueryParams
@@ -174,3 +179,72 @@ def test_an_encoded_body_can_be_copied() raises:
     var again = body.copy()
     assert_equal(again.to_string(), body.to_string())
     assert_equal(again.content_type, body.content_type)
+
+
+# Choosing between the arguments.
+
+
+def _chosen(
+    var content: Bytes = Bytes(),
+    text: StringSpan = "",
+    var data: QueryParams = QueryParams(),
+    var files: MultipartData = MultipartData(),
+    var json: Optional[Json] = None,
+) raises -> EncodedBody:
+    return encode_request_body(content^, text, data^, files^, json^)
+
+
+def test_nothing_given_is_an_empty_body_with_no_type() raises:
+    var body = _chosen()
+    assert_equal(len(body), 0)
+    assert_false(body.has_content_type())
+
+
+def test_each_argument_reaches_its_own_encoder() raises:
+    assert_equal(_chosen(content=Bytes("raw")).to_string(), "raw")
+    assert_equal(_chosen(text="text").to_string(), "text")
+    assert_equal(
+        _chosen(data=QueryParams().add("a", "1")).content_type,
+        String(FORM_TYPE),
+    )
+    assert_equal(_chosen(json=Json(1)).content_type, String(JSON_TYPE))
+
+
+def test_form_fields_are_written_ahead_of_the_files() raises:
+    # The order httpx2 and every browser produce. Some server side parsers hand
+    # the application whichever part they saw last under a repeated name, so
+    # this is not cosmetic.
+    var files = MultipartData()
+    files.add_file(FileUpload("upload", "a.txt", "x"))
+    var body = _chosen(data=QueryParams().add("field", "v"), files=files^)
+
+    var text = body.to_string()
+    assert_true(text.find('name="field"') < text.find('name="upload"'))
+    assert_true(body.content_type.startswith(String(MULTIPART_TYPE)))
+
+
+def test_two_bodies_are_refused_and_both_are_named() raises:
+    var raised = False
+    try:
+        var body = _chosen(content=Bytes("raw"), json=Json(1))
+        _ = body
+    except e:
+        raised = True
+        assert_true(kind_of(e) == ErrorKind.INVALID_ARGUMENT)
+        assert_true("content=" in String(e))
+        assert_true("json=" in String(e))
+    assert_true(raised)
+
+
+def test_an_empty_argument_is_not_a_body() raises:
+    # Every one of these has an empty value that is indistinguishable from not
+    # passing it, so an empty form next to a real JSON document has to be one
+    # body rather than a conflict.
+    var body = _chosen(
+        content=Bytes(),
+        text="",
+        data=QueryParams(),
+        files=MultipartData(),
+        json=Json("only me"),
+    )
+    assert_equal(body.to_string(), '"only me"')

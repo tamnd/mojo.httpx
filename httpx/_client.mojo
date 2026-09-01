@@ -21,12 +21,16 @@ watching every send.
 """
 
 from httpx._auth import AnyAuth
+from httpx._bytes import Bytes
 from httpx._config import Timeout
+from httpx._content.encode import encode_request_body
+from httpx._content.multipart import MultipartData
 from httpx._exceptions import ErrorKind, new_error
 from httpx._ffi.clock import unix_now
 from httpx._hooks import EventHooks
 from httpx._models.cookies import Cookies
 from httpx._models.headers import Headers
+from httpx._models.json import Json
 from httpx._models.request import Request
 from httpx._models.response import Response
 from httpx._models.stream import ByteStream
@@ -216,6 +220,10 @@ struct Client(Movable):
         *,
         var headers: Headers = Headers(),
         var content: List[UInt8] = List[UInt8](),
+        text: StringSpan = "",
+        var data: QueryParams = QueryParams(),
+        var files: MultipartData = MultipartData(),
+        var json: Optional[Json] = None,
         var content_stream: Optional[ByteStream] = None,
         var params: QueryParams = QueryParams(),
         var cookies: Cookies = Cookies(),
@@ -226,23 +234,45 @@ struct Client(Movable):
         sending it, and because `send` takes what it returns. httpx has the same
         pair for the same reason.
 
-        `content` is a body that is already in memory and `content_stream` is
-        one that is pulled as it is written. httpx2 takes either through a
-        single `content=`, because Python can tell bytes from an iterable at
-        runtime. Here they are two arguments because they are two types, and
-        naming them apart is better than a wrapper whose only job is to hide
-        which one the caller meant.
+        There are six ways to give a body and they are six arguments. `content`
+        is bytes already in memory, `text` is a string encoded as UTF-8, `data`
+        is a urlencoded form, `files` is a multipart one, `json` is a document
+        serialized compactly, and `content_stream` is a body pulled as it is
+        written. httpx2 folds the first two into one `content=` and tells them
+        apart at runtime, which Mojo cannot do, and naming them apart is better
+        than a wrapper whose only job is to hide which one the caller meant.
+
+        Passing two of them raises, except for `data` with `files`, which is one
+        multipart body carrying both. The `Content-Type` the encoding implies is
+        applied only if the caller did not write one, so an explicit header
+        always wins.
         """
         var target = self._resolve(url)
         if len(params) > 0 or len(self.params) > 0:
             target = target.copy_merge_params(self.params.merge(params))
+
+        var body = encode_request_body(
+            Bytes(content^), text, data^, files^, json^
+        )
+        if content_stream and len(body) > 0:
+            raise new_error(
+                ErrorKind.INVALID_ARGUMENT,
+                String(
+                    "content_stream= cannot be combined with another body"
+                    " argument"
+                ),
+            )
+
         var merged = self._headers_for(headers^)
+        if body.has_content_type():
+            merged.setdefault("Content-Type", body.content_type)
         self._apply_cookies(target, cookies^, merged)
         if content_stream:
             return Request.streaming(
                 method, target^, content_stream.take(), merged^
             )
-        return Request(method, target^, merged^, content^)
+        var raw = body.take_content()
+        return Request(method, target^, merged^, raw.take_list())
 
     def _apply_cookies(
         self, url: URL, var cookies: Cookies, mut headers: Headers
@@ -478,6 +508,10 @@ struct Client(Movable):
         *,
         var headers: Headers = Headers(),
         var content: List[UInt8] = List[UInt8](),
+        text: StringSpan = "",
+        var data: QueryParams = QueryParams(),
+        var files: MultipartData = MultipartData(),
+        var json: Optional[Json] = None,
         var content_stream: Optional[ByteStream] = None,
         var params: QueryParams = QueryParams(),
         var cookies: Cookies = Cookies(),
@@ -508,6 +542,10 @@ struct Client(Movable):
             url,
             headers=headers^,
             content=content^,
+            text=text,
+            data=data^,
+            files=files^,
+            json=json^,
             content_stream=content_stream^,
             params=params^,
             cookies=cookies^,
@@ -527,6 +565,10 @@ struct Client(Movable):
         *,
         var headers: Headers = Headers(),
         var content: List[UInt8] = List[UInt8](),
+        text: StringSpan = "",
+        var data: QueryParams = QueryParams(),
+        var files: MultipartData = MultipartData(),
+        var json: Optional[Json] = None,
         var content_stream: Optional[ByteStream] = None,
         var params: QueryParams = QueryParams(),
         var cookies: Cookies = Cookies(),
@@ -539,6 +581,10 @@ struct Client(Movable):
             url,
             headers=headers^,
             content=content^,
+            text=text,
+            data=data^,
+            files=files^,
+            json=json^,
             content_stream=content_stream^,
             params=params^,
             cookies=cookies^,
@@ -643,6 +689,10 @@ struct Client(Movable):
         url: StringSpan,
         *,
         var content: List[UInt8] = List[UInt8](),
+        text: StringSpan = "",
+        var data: QueryParams = QueryParams(),
+        var files: MultipartData = MultipartData(),
+        var json: Optional[Json] = None,
         var content_stream: Optional[ByteStream] = None,
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
@@ -656,6 +706,10 @@ struct Client(Movable):
             url,
             headers=headers^,
             content=content^,
+            text=text,
+            data=data^,
+            files=files^,
+            json=json^,
             content_stream=content_stream^,
             params=params^,
             cookies=cookies^,
@@ -669,6 +723,10 @@ struct Client(Movable):
         url: StringSpan,
         *,
         var content: List[UInt8] = List[UInt8](),
+        text: StringSpan = "",
+        var data: QueryParams = QueryParams(),
+        var files: MultipartData = MultipartData(),
+        var json: Optional[Json] = None,
         var content_stream: Optional[ByteStream] = None,
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
@@ -682,6 +740,10 @@ struct Client(Movable):
             url,
             headers=headers^,
             content=content^,
+            text=text,
+            data=data^,
+            files=files^,
+            json=json^,
             content_stream=content_stream^,
             params=params^,
             cookies=cookies^,
@@ -695,6 +757,10 @@ struct Client(Movable):
         url: StringSpan,
         *,
         var content: List[UInt8] = List[UInt8](),
+        text: StringSpan = "",
+        var data: QueryParams = QueryParams(),
+        var files: MultipartData = MultipartData(),
+        var json: Optional[Json] = None,
         var content_stream: Optional[ByteStream] = None,
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
@@ -708,6 +774,10 @@ struct Client(Movable):
             url,
             headers=headers^,
             content=content^,
+            text=text,
+            data=data^,
+            files=files^,
+            json=json^,
             content_stream=content_stream^,
             params=params^,
             cookies=cookies^,

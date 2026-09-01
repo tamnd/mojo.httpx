@@ -25,6 +25,7 @@ from httpx._content.multipart import (
     choose_boundary,
     render_multipart,
 )
+from httpx._exceptions import ErrorKind, new_error
 from httpx._models.json import Json
 from httpx._models.url import QueryParams
 from std.collections.string import StringSpan
@@ -57,6 +58,17 @@ struct EncodedBody(Movable, Sized):
 
     def has_content_type(self) -> Bool:
         return self.content_type != ""
+
+    def take_content(mut self) -> Bytes:
+        """Hand the bytes over, leaving an empty body behind.
+
+        The client needs the buffer without copying it, and it still wants the
+        content type afterwards, so this empties the field rather than consuming
+        the whole value.
+        """
+        var out = self.content^
+        self.content = Bytes()
+        return out^
 
     def to_string(self) raises -> String:
         """The body decoded as UTF-8. For tests and for debugging."""
@@ -128,3 +140,65 @@ def encode_multipart_with(
         render_multipart(data, boundary),
         String(MULTIPART_TYPE, "; boundary=", boundary),
     )
+
+
+def encode_request_body(
+    var content: Bytes,
+    text: StringSpan,
+    var data: QueryParams,
+    var files: MultipartData,
+    var json: Optional[Json],
+) raises -> EncodedBody:
+    """Pick the encoding from whichever body argument the caller filled in.
+
+    One request has one body, so passing two of these is a mistake rather than a
+    thing to resolve by precedence. httpx2 quietly lets `data=` and `json=`
+    fight, with the loser silently dropped, and the caller finds out from the
+    server. This raises and names both.
+
+    The one exception is `data=` with `files=`, which is not two bodies but one:
+    the fields and the files go into the same multipart body, which is what a
+    browser sends for a form with a file input on it.
+    """
+    var given = List[String]()
+    if content:
+        given.append(String("content"))
+    if text.byte_length() > 0:
+        given.append(String("text"))
+    if files:
+        given.append(String("files"))
+    elif data:
+        given.append(String("data"))
+    if json:
+        given.append(String("json"))
+
+    if len(given) > 1:
+        var names = String()
+        for i in range(len(given)):
+            if i > 0:
+                names += ", "
+            names += given[i]
+            names += "="
+        raise new_error(
+            ErrorKind.INVALID_ARGUMENT,
+            String("more than one request body was given: ", names),
+        )
+
+    if json:
+        return encode_json(json.value())
+    if files:
+        var body = files^
+        # The fields go on before the encoding, so they are written ahead of the
+        # files, which is the order httpx2 and every browser produce.
+        var pairs = data.multi_items()
+        for i in range(len(pairs)):
+            # Copied out one at a time, because passing two spans that both
+            # borrow the same list into one call is an aliasing error.
+            var name = pairs[i][0].copy()
+            body.add(name, pairs[i][1])
+        return encode_multipart(body)
+    if data:
+        return encode_urlencoded(data)
+    if text.byte_length() > 0:
+        return encode_text(text)
+    return encode_bytes(content^)
