@@ -26,6 +26,17 @@ from httpx._api import (
     request,
     stream,
 )
+from httpx._auth import (
+    AnyAuth,
+    Auth,
+    BasicAuth,
+    DigestAuth,
+    NetRCAuth,
+    basic_auth,
+    digest_auth,
+    erase_auth,
+    netrc_auth,
+)
 from httpx._client import Client
 from httpx._config import Timeout
 from httpx._content.multipart import FileUpload, MultipartData

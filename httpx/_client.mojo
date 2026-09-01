@@ -11,14 +11,15 @@ costs a round trip instead of a connect, a DNS lookup and, later, a handshake.
 That is the whole argument for `Client` existing next to `httpx.get`, and it is
 why the one shot helpers in `_api.mojo` are documented as the slow path.
 
-Auth, cookies, event hooks and the content encoders are still to come and land
-as separate arguments and separate files. What is here now is a request going
-out over TCP and a parsed response coming back, with the four timeouts and the
+Cookies, event hooks and the content encoders are still to come and land as
+separate arguments and separate files. What is here now is a request going out
+over TCP and a parsed response coming back, with the four timeouts and the
 client level headers, base URL and query parameters honoured, either read whole
-or streamed a chunk at a time, and a redirect chain followed for anyone who
-asked for that.
+or streamed a chunk at a time, a redirect chain followed for anyone who asked
+for that, and an auth scheme answering a challenge around the outside of it.
 """
 
+from httpx._auth import AnyAuth
 from httpx._config import Timeout
 from httpx._exceptions import ErrorKind, new_error
 from httpx._models.headers import Headers
@@ -69,6 +70,7 @@ struct Client(Movable):
     var max_redirects: Int
     """How many hops before `TooManyRedirects`. Twenty, as in httpx."""
 
+    var _auth: Optional[AnyAuth]
     var _transport: AnyTransport
     var _closed: Bool
 
@@ -94,6 +96,7 @@ struct Client(Movable):
         trust_env: Bool = True,
         follow_redirects: Bool = False,
         max_redirects: Int = DEFAULT_MAX_REDIRECTS,
+        var auth: Optional[AnyAuth] = None,
     ) raises:
         self.headers = headers^
         self.params = params^
@@ -101,6 +104,7 @@ struct Client(Movable):
         self.timeout = timeout.value() if timeout else Timeout()
         self.follow_redirects = follow_redirects
         self.max_redirects = max_redirects
+        self._auth = auth^
         var tls = TlsConfig()
         tls.verify = verify
         tls.cert = cert.copy()
@@ -125,6 +129,7 @@ struct Client(Movable):
         self.timeout = Timeout()
         self.follow_redirects = False
         self.max_redirects = DEFAULT_MAX_REDIRECTS
+        self._auth = None
         self._transport = transport^
         self._closed = False
 
@@ -194,6 +199,7 @@ struct Client(Movable):
         timeout: Optional[Timeout] = None,
         stream: Bool = False,
         follow_redirects: Optional[Bool] = None,
+        var auth: Optional[AnyAuth] = None,
     ) raises -> Response:
         """Send a request that is already built.
 
@@ -211,7 +217,68 @@ struct Client(Movable):
         var follow = (
             follow_redirects.value() if follow_redirects else self.follow_redirects
         )
-        return self._send_following_redirects(request^, budget, stream, follow)
+
+        var scheme = auth^
+        if not scheme and self._auth:
+            # A copy of the client's scheme rather than the scheme itself,
+            # because the send path needs it mutably and the client is only
+            # borrowed here. The copy shares the same state, so a digest client
+            # that has already been challenged stays challenged.
+            scheme = Optional[AnyAuth](self._auth.value().copy())
+        if not scheme:
+            return self._send_following_redirects(
+                request^, budget, stream, follow
+            )
+
+        var chosen = scheme.take()
+        return self._send_handling_auth(
+            request^, budget, stream, follow, chosen
+        )
+
+    def _send_handling_auth(
+        mut self,
+        var request: Request,
+        budget: Timeout,
+        stream: Bool,
+        follow: Bool,
+        mut auth: AnyAuth,
+    ) raises -> Response:
+        """Send, and send again if the scheme says the answer was a challenge.
+
+        Auth is outside redirects rather than inside because a challenge can
+        come back from the end of a redirect chain, and answering it means
+        starting the chain again from the original URL. The other order would
+        answer a challenge from an intermediate hop, which is a different
+        server asking a different question.
+
+        The 401 is read before the retry goes out, for the same reason a
+        redirect is: an unread body is a connection that cannot go back to the
+        pool, and the retry is about to want one to the same host.
+        """
+        var current = auth.sign(request^)
+        var prior: Optional[Response] = None
+        while True:
+            var response = self._send_following_redirects(
+                current^, budget, stream, follow, prior^
+            )
+            var following: Optional[Request]
+            try:
+                if auth.requires_response_body():
+                    response.read()
+                following = auth.next_request(response)
+            except e:
+                response.close()
+                raise e
+            if not following:
+                return response^
+
+            try:
+                response.read()
+            except e:
+                response.close()
+                raise e
+            prior = Optional[Response](response^)
+            current = following.take()
 
     def _send_following_redirects(
         mut self,
@@ -219,6 +286,7 @@ struct Client(Movable):
         budget: Timeout,
         stream: Bool,
         follow: Bool,
+        var earlier: Optional[Response] = None,
     ) raises -> Response:
         """Send, and keep sending while the answer says to go somewhere else.
 
@@ -233,9 +301,13 @@ struct Client(Movable):
         the loop possible at all: the request went into the transport and came
         back out inside the answer, so the next hop can be built from it without
         the client having kept a copy.
+
+        `earlier` is the chain an auth retry already accumulated, threaded in so
+        that the history a caller finally sees spans both, in the order things
+        happened. It is empty for a first attempt.
         """
         var current = request^
-        var prior: Optional[Response] = None
+        var prior = earlier^
         var hops = 0
         while True:
             var response: Response
@@ -300,6 +372,7 @@ struct Client(Movable):
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
+        var auth: Optional[AnyAuth] = None,
     ) raises -> Response:
         """Send a request and get the response back before the body arrives.
 
@@ -328,7 +401,11 @@ struct Client(Movable):
             params=params^,
         )
         return self.send(
-            built^, timeout, stream=True, follow_redirects=follow_redirects
+            built^,
+            timeout,
+            stream=True,
+            follow_redirects=follow_redirects,
+            auth=auth^,
         )
 
     def request(
@@ -342,6 +419,7 @@ struct Client(Movable):
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
+        var auth: Optional[AnyAuth] = None,
     ) raises -> Response:
         var built = self.build_request(
             method,
@@ -351,7 +429,9 @@ struct Client(Movable):
             content_stream=content_stream^,
             params=params^,
         )
-        return self.send(built^, timeout, follow_redirects=follow_redirects)
+        return self.send(
+            built^, timeout, follow_redirects=follow_redirects, auth=auth^
+        )
 
     def get(
         mut self,
@@ -361,6 +441,7 @@ struct Client(Movable):
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
+        var auth: Optional[AnyAuth] = None,
     ) raises -> Response:
         # No body argument, on any of the four verbs below. RFC 9110 says a body
         # on these has no defined semantics, and httpx leaves it out of the
@@ -372,6 +453,7 @@ struct Client(Movable):
             params=params^,
             timeout=timeout,
             follow_redirects=follow_redirects,
+            auth=auth^,
         )
 
     def head(
@@ -382,6 +464,7 @@ struct Client(Movable):
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
+        var auth: Optional[AnyAuth] = None,
     ) raises -> Response:
         return self.request(
             "HEAD",
@@ -390,6 +473,7 @@ struct Client(Movable):
             params=params^,
             timeout=timeout,
             follow_redirects=follow_redirects,
+            auth=auth^,
         )
 
     def options(
@@ -400,6 +484,7 @@ struct Client(Movable):
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
+        var auth: Optional[AnyAuth] = None,
     ) raises -> Response:
         return self.request(
             "OPTIONS",
@@ -408,6 +493,7 @@ struct Client(Movable):
             params=params^,
             timeout=timeout,
             follow_redirects=follow_redirects,
+            auth=auth^,
         )
 
     def delete(
@@ -418,6 +504,7 @@ struct Client(Movable):
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
+        var auth: Optional[AnyAuth] = None,
     ) raises -> Response:
         return self.request(
             "DELETE",
@@ -426,6 +513,7 @@ struct Client(Movable):
             params=params^,
             timeout=timeout,
             follow_redirects=follow_redirects,
+            auth=auth^,
         )
 
     def post(
@@ -438,6 +526,7 @@ struct Client(Movable):
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
+        var auth: Optional[AnyAuth] = None,
     ) raises -> Response:
         return self.request(
             "POST",
@@ -448,6 +537,7 @@ struct Client(Movable):
             params=params^,
             timeout=timeout,
             follow_redirects=follow_redirects,
+            auth=auth^,
         )
 
     def put(
@@ -460,6 +550,7 @@ struct Client(Movable):
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
+        var auth: Optional[AnyAuth] = None,
     ) raises -> Response:
         return self.request(
             "PUT",
@@ -470,6 +561,7 @@ struct Client(Movable):
             params=params^,
             timeout=timeout,
             follow_redirects=follow_redirects,
+            auth=auth^,
         )
 
     def patch(
@@ -482,6 +574,7 @@ struct Client(Movable):
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
+        var auth: Optional[AnyAuth] = None,
     ) raises -> Response:
         return self.request(
             "PATCH",
@@ -492,6 +585,7 @@ struct Client(Movable):
             params=params^,
             timeout=timeout,
             follow_redirects=follow_redirects,
+            auth=auth^,
         )
 
     def _resolve(self, url: StringSpan) raises -> URL:

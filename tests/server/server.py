@@ -29,6 +29,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 
+DIGEST_REALM = "testserver"
+DIGEST_NONCE = "dcd98b7102dd2f0e8b11d0f600bfb0c093"
+DIGEST_OPAQUE = "5ccc069c403ebaf9f0171e9517f40e41"
+"""Fixed rather than random, so any connection can check any response.
+
+A real server issues a fresh nonce per challenge and remembers it. Doing that
+here would mean shared state across the threading server for no gain, since
+what these tests are checking is that the client computes the right answer to a
+challenge, not that the server tracks replay.
+"""
+
+
 class Handler(BaseHTTPRequestHandler):
     # Keep alive is the default in HTTP/1.1 and the connection pool needs a
     # server that actually honours it, so this is not the usual 1.0 default.
@@ -127,6 +139,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._redirect(query["url"][0], code)
         if len(parts) == 3 and parts[0] == "basic-auth":
             return self._basic_auth(parts[1], parts[2])
+        if len(parts) in (4, 5) and parts[0] == "digest-auth":
+            algorithm = parts[4] if len(parts) == 5 else "MD5"
+            return self._digest_auth(parts[1], parts[2], parts[3], algorithm)
         if path == "/cookies":
             return self._json({"cookies": self._cookies_dict()})
         if path == "/cookies/set":
@@ -299,6 +314,107 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         self._json({"authenticated": True, "user": user})
+
+    def _digest_auth(self, qop, user, password, algorithm):
+        # `/digest-auth/<qop>/<user>/<password>[/<algorithm>]`, as httpbin has
+        # it. A qop of `none` means the RFC 2069 shape with no client nonce,
+        # which some old servers still speak.
+        self._read_body()
+        header = self.headers.get("authorization")
+        if header and self._digest_ok(header, qop, user, password, algorithm):
+            return self._json(
+                {
+                    "authenticated": True,
+                    "user": user,
+                    "cookies": self._cookies_dict(),
+                }
+            )
+
+        challenge = (
+            'Digest realm="%s", nonce="%s", opaque="%s", algorithm=%s'
+            % (DIGEST_REALM, DIGEST_NONCE, DIGEST_OPAQUE, algorithm)
+        )
+        if qop != "none":
+            challenge += ', qop="%s"' % qop
+        body = b'{"authenticated": false}'
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", challenge)
+        # A cookie on the challenge, because a real digest server often pins the
+        # session to one and a client that drops it on the retry gets challenged
+        # forever. The success route echoes the cookies back so a test can see
+        # whether it survived.
+        self.send_header("Set-Cookie", "digest-session=opened; Path=/")
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _digest_ok(self, header, qop, user, password, algorithm):
+        # Verified with Python's own header parser and hashlib rather than with
+        # anything of ours. A check written against our own implementation would
+        # agree with whatever mistake it made.
+        import hashlib
+        from urllib.request import parse_http_list, parse_keqv_list
+
+        scheme, _, rest = header.partition(" ")
+        if scheme.lower() != "digest":
+            return False
+        fields = parse_keqv_list(parse_http_list(rest))
+
+        hashes = {
+            "md5": hashlib.md5,
+            "sha": hashlib.sha1,
+            "sha-256": hashlib.sha256,
+            "sha-512": hashlib.sha512,
+        }
+        name = algorithm.lower()
+        session = name.endswith("-sess")
+        if session:
+            name = name[: -len("-sess")]
+        if name not in hashes:
+            return False
+
+        def digest(text):
+            return hashes[name](text.encode("utf-8")).hexdigest()
+
+        if fields.get("username") != user:
+            return False
+        if fields.get("nonce") != DIGEST_NONCE:
+            return False
+        if fields.get("realm") != DIGEST_REALM:
+            return False
+        if fields.get("opaque") != DIGEST_OPAQUE:
+            return False
+        if fields.get("uri") != self.path:
+            return False
+
+        ha1 = digest("%s:%s:%s" % (user, DIGEST_REALM, password))
+        if session:
+            ha1 = digest(
+                "%s:%s:%s" % (ha1, DIGEST_NONCE, fields.get("cnonce", ""))
+            )
+        ha2 = digest("%s:%s" % (self.command, fields.get("uri", "")))
+
+        if qop == "none":
+            if "qop" in fields:
+                return False
+            want = digest("%s:%s:%s" % (ha1, DIGEST_NONCE, ha2))
+        else:
+            if fields.get("qop") != "auth":
+                return False
+            want = digest(
+                ":".join(
+                    [
+                        ha1,
+                        DIGEST_NONCE,
+                        fields.get("nc", ""),
+                        fields.get("cnonce", ""),
+                        "auth",
+                        ha2,
+                    ]
+                )
+            )
+        return fields.get("response") == want
 
     def _set_cookies(self, query):
         self._read_body()
