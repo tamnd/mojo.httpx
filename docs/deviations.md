@@ -62,6 +62,14 @@ That costs one connection on a call that was already the slow path, since a one 
 
 ## Judgement calls
 
+### A cross origin redirect drops `Host` rather than rewriting it
+
+httpx2 sets `headers["Host"] = url.netloc` when a redirect crosses an origin. This library removes the stale `Host` instead and lets the head serializer put the right one back.
+
+The bytes on the wire are the same. A request head is serialized with a `Host` taken from the URL whenever the request does not carry one of its own, so a request with no `Host` and a request whose `Host` was just set from the same URL produce identical output. What differs is that there is one rule about where `Host` comes from rather than two, and the one rule is already exercised by every request that was never redirected.
+
+The visible difference is in `response.request().headers`, where a followed redirect shows no `Host` here and shows the new one in httpx2. A caller who wants to know where a request went should ask `response.url()`, which is the same answer in both libraries and is right whether or not a redirect was involved.
+
 ### UTF-16 with no byte order mark decodes little endian
 
 A response labelled `charset=utf-16` whose body does not start with a byte order mark is decoded little endian here. httpx2 raises `UnicodeDecodeError` from `Response.text`, because Python's `utf-16` codec refuses a stream with no mark and the `errors="replace"` setting httpx2 passes does not cover that particular check.

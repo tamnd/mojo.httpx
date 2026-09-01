@@ -34,6 +34,22 @@ def _connect(listener: Loopback) raises -> H1Connection:
     )
 
 
+def _send(
+    mut conn: H1Connection,
+    method: StringSpan,
+    url: StringSpan,
+    var headers: Headers = Headers(),
+) raises:
+    """One request out, with the request left where the caller can still see it.
+
+    A helper because `send_request` borrows the request rather than taking it,
+    so every call site needs somewhere to put one, and a test is clearer without
+    that line in it.
+    """
+    var request = Request(method, URL(url), headers^)
+    conn.send_request(request, Deadline.after(5.0))
+
+
 def _exchange(
     method: StringSpan, var headers: Headers, response: StringSpan
 ) raises -> Response:
@@ -42,10 +58,8 @@ def _exchange(
     var conn = _connect(listener)
     var peer = listener.accept_within()
 
-    conn.send_request(
-        Request(method, URL("http://example.com/"), headers^),
-        Deadline.after(5.0),
-    )
+    var request = Request(method, URL("http://example.com/"), headers^)
+    conn.send_request(request, Deadline.after(5.0))
     _ = peer.recv_until("\r\n\r\n")
     peer.send_text(response)
     return conn.read_response(Deadline.after(5.0))
@@ -56,9 +70,8 @@ def test_a_get_reaches_the_server_as_it_was_serialized() raises:
     var conn = _connect(listener)
     var peer = listener.accept_within()
 
-    conn.send_request(
-        Request("GET", URL("http://example.com/hello")), Deadline.after(5.0)
-    )
+    var request = Request("GET", URL("http://example.com/hello"))
+    conn.send_request(request, Deadline.after(5.0))
     assert_equal(
         peer.recv_until("\r\n\r\n"),
         "GET /hello HTTP/1.1\r\nHost: example.com\r\n\r\n",
@@ -73,7 +86,7 @@ def test_a_post_body_follows_the_head() raises:
     var body = List[UInt8]()
     body.extend("hello".as_bytes())
     var request = Request("POST", URL("http://example.com/"), Headers(), body^)
-    conn.send_request(request^, Deadline.after(5.0))
+    conn.send_request(request, Deadline.after(5.0))
     var sent = peer.recv_until("hello")
     assert_true("Content-Length: 5" in sent)
     assert_true(sent.endswith("\r\n\r\nhello"))
@@ -144,9 +157,7 @@ def test_a_response_arriving_in_pieces_is_read() raises:
     var conn = _connect(listener)
     var peer = listener.accept_within()
 
-    conn.send_request(
-        Request("GET", URL("http://example.com/")), Deadline.after(5.0)
-    )
+    _send(conn, "GET", "http://example.com/")
     _ = peer.recv_until("\r\n\r\n")
     peer.send_text("HTTP/1.1 20")
     peer.send_text("0 OK\r\nContent-Len")
@@ -175,9 +186,7 @@ def test_a_body_read_until_close_ends_at_the_close() raises:
     var conn = _connect(listener)
     var peer = listener.accept_within()
 
-    conn.send_request(
-        Request("GET", URL("http://example.com/")), Deadline.after(5.0)
-    )
+    _send(conn, "GET", "http://example.com/")
     _ = peer.recv_until("\r\n\r\n")
     peer.send_text("HTTP/1.0 200 OK\r\n\r\nno framing here")
     peer.close()
@@ -195,9 +204,7 @@ def test_a_truncated_body_is_an_error_not_a_short_response() raises:
     var conn = _connect(listener)
     var peer = listener.accept_within()
 
-    conn.send_request(
-        Request("GET", URL("http://example.com/")), Deadline.after(5.0)
-    )
+    _send(conn, "GET", "http://example.com/")
     _ = peer.recv_until("\r\n\r\n")
     peer.send_text("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort")
     peer.close()
@@ -215,9 +222,7 @@ def test_a_smuggling_shaped_response_is_refused() raises:
     var conn = _connect(listener)
     var peer = listener.accept_within()
 
-    conn.send_request(
-        Request("GET", URL("http://example.com/")), Deadline.after(5.0)
-    )
+    _send(conn, "GET", "http://example.com/")
     _ = peer.recv_until("\r\n\r\n")
     peer.send_text(
         "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nTransfer-Encoding:"
@@ -237,9 +242,7 @@ def test_a_clean_exchange_leaves_the_connection_reusable() raises:
     var conn = _connect(listener)
     var peer = listener.accept_within()
 
-    conn.send_request(
-        Request("GET", URL("http://example.com/")), Deadline.after(5.0)
-    )
+    _send(conn, "GET", "http://example.com/")
     _ = peer.recv_until("\r\n\r\n")
     peer.send_text("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi")
     _ = conn.read_response(Deadline.after(5.0))
@@ -259,16 +262,12 @@ def test_a_second_exchange_runs_on_the_same_connection() raises:
     var conn = _connect(listener)
     var peer = listener.accept_within()
 
-    conn.send_request(
-        Request("GET", URL("http://example.com/one")), Deadline.after(5.0)
-    )
+    _send(conn, "GET", "http://example.com/one")
     _ = peer.recv_until("\r\n\r\n")
     peer.send_text("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\none")
     assert_equal(conn.read_response(Deadline.after(5.0)).text(), "one")
 
-    conn.send_request(
-        Request("GET", URL("http://example.com/two")), Deadline.after(5.0)
-    )
+    _send(conn, "GET", "http://example.com/two")
     assert_true("GET /two HTTP/1.1" in peer.recv_until("\r\n\r\n"))
     peer.send_text("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\ntwo")
     assert_equal(conn.read_response(Deadline.after(5.0)).text(), "two")
@@ -295,15 +294,10 @@ def test_a_second_request_before_the_first_response_is_refused() raises:
     var conn = _connect(listener)
     var peer = listener.accept_within()
 
-    conn.send_request(
-        Request("GET", URL("http://example.com/")), Deadline.after(5.0)
-    )
+    _send(conn, "GET", "http://example.com/")
     var raised = False
     try:
-        conn.send_request(
-            Request("GET", URL("http://example.com/again")),
-            Deadline.after(5.0),
-        )
+        _send(conn, "GET", "http://example.com/again")
     except e:
         raised = True
         assert_true(is_local_protocol_error(e))
@@ -332,10 +326,7 @@ def test_a_101_hands_the_connection_over() raises:
     var headers = Headers()
     headers.append("Upgrade", "websocket")
     headers.append("Connection", "Upgrade")
-    conn.send_request(
-        Request("GET", URL("http://example.com/ws"), headers^),
-        Deadline.after(5.0),
-    )
+    _send(conn, "GET", "http://example.com/ws", headers^)
     _ = peer.recv_until("\r\n\r\n")
     peer.send_text(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection:"
@@ -354,9 +345,8 @@ def test_the_four_way_deadlines_are_the_ones_that_fire() raises:
     var conn = _connect(listener)
     var peer = listener.accept_within()
 
-    conn.send_request(
-        Request("GET", URL("http://example.com/")), write_deadline(None)
-    )
+    var request = Request("GET", URL("http://example.com/"))
+    conn.send_request(request, write_deadline(None))
     _ = peer.recv_until("\r\n\r\n")
     var raised = False
     try:

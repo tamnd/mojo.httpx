@@ -11,20 +11,23 @@ costs a round trip instead of a connect, a DNS lookup and, later, a handshake.
 That is the whole argument for `Client` existing next to `httpx.get`, and it is
 why the one shot helpers in `_api.mojo` are documented as the slow path.
 
-Redirects, auth, cookies, event hooks and the content encoders are still to
-come and land as separate arguments and separate files. What is here now is a
-request going out over TCP and a parsed response coming back, with the four
-timeouts and the client level headers, base URL and query parameters honoured,
-either read whole or streamed a chunk at a time.
+Auth, cookies, event hooks and the content encoders are still to come and land
+as separate arguments and separate files. What is here now is a request going
+out over TCP and a parsed response coming back, with the four timeouts and the
+client level headers, base URL and query parameters honoured, either read whole
+or streamed a chunk at a time, and a redirect chain followed for anyone who
+asked for that.
 """
 
 from httpx._config import Timeout
+from httpx._exceptions import ErrorKind, new_error
 from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.response import Response
 from httpx._models.stream import ByteStream
 from httpx._models.url import URL, QueryParams
 from httpx._pool.limits import Limits
+from httpx._redirects import DEFAULT_MAX_REDIRECTS, build_redirect_request
 from httpx._stream.config import ClientCert, SSLVerify, TlsConfig
 from httpx._transport.base import AnyTransport, erase
 from httpx._transport.http import HTTPTransport
@@ -53,6 +56,19 @@ struct Client(Movable):
     var timeout: Timeout
     """The four phase timeout used when a request does not name its own."""
 
+    var follow_redirects: Bool
+    """Whether a 3xx with a `Location` is followed rather than returned.
+
+    Off by default, which is httpx's choice and not the one most libraries make.
+    A client that follows redirects silently will happily turn one request into
+    a request somewhere else entirely, and the caller who wrote the URL never
+    sees that it happened. Off means the redirect comes back as a response with
+    a `next_request` on it, and following it is something the caller asked for.
+    """
+
+    var max_redirects: Int
+    """How many hops before `TooManyRedirects`. Twenty, as in httpx."""
+
     var _transport: AnyTransport
     var _closed: Bool
 
@@ -76,11 +92,15 @@ struct Client(Movable):
         verify: SSLVerify = SSLVerify(),
         cert: Optional[ClientCert] = None,
         trust_env: Bool = True,
+        follow_redirects: Bool = False,
+        max_redirects: Int = DEFAULT_MAX_REDIRECTS,
     ) raises:
         self.headers = headers^
         self.params = params^
         self.base_url = base_url^
         self.timeout = timeout.value() if timeout else Timeout()
+        self.follow_redirects = follow_redirects
+        self.max_redirects = max_redirects
         var tls = TlsConfig()
         tls.verify = verify
         tls.cert = cert.copy()
@@ -103,6 +123,8 @@ struct Client(Movable):
         self.params = QueryParams()
         self.base_url = URL()
         self.timeout = Timeout()
+        self.follow_redirects = False
+        self.max_redirects = DEFAULT_MAX_REDIRECTS
         self._transport = transport^
         self._closed = False
 
@@ -171,6 +193,7 @@ struct Client(Movable):
         var request: Request,
         timeout: Optional[Timeout] = None,
         stream: Bool = False,
+        follow_redirects: Optional[Bool] = None,
     ) raises -> Response:
         """Send a request that is already built.
 
@@ -185,9 +208,86 @@ struct Client(Movable):
         if self._closed:
             raise Error("RuntimeError: the client is closed")
         var budget = timeout.value() if timeout else self.timeout
-        if stream:
-            return self._transport.handle_stream(request^, budget.deadlines())
-        return self._transport.handle_request(request^, budget.deadlines())
+        var follow = (
+            follow_redirects.value() if follow_redirects else self.follow_redirects
+        )
+        return self._send_following_redirects(request^, budget, stream, follow)
+
+    def _send_following_redirects(
+        mut self,
+        var request: Request,
+        budget: Timeout,
+        stream: Bool,
+        follow: Bool,
+    ) raises -> Response:
+        """Send, and keep sending while the answer says to go somewhere else.
+
+        The whole loop runs on one timeout, applied to each hop rather than to
+        the chain, because each hop is a separate exchange with a separate
+        server and a chain that shared one budget would fail a request for being
+        redirected rather than for being slow.
+
+        The deadlines are built fresh for every hop for the same reason.
+
+        Each response carries the request that produced it, which is what makes
+        the loop possible at all: the request went into the transport and came
+        back out inside the answer, so the next hop can be built from it without
+        the client having kept a copy.
+        """
+        var current = request^
+        var prior: Optional[Response] = None
+        var hops = 0
+        while True:
+            var response: Response
+            if stream:
+                response = self._transport.handle_stream(
+                    current^, budget.deadlines()
+                )
+            else:
+                response = self._transport.handle_request(
+                    current^, budget.deadlines()
+                )
+            if prior:
+                response.inherit_history(prior.take())
+            if not response.is_redirect():
+                return response^
+
+            if follow and hops >= self.max_redirects:
+                response.close()
+                raise new_error(
+                    ErrorKind.TOO_MANY_REDIRECTS,
+                    String("Exceeded maximum allowed redirects."),
+                )
+
+            var status = response.status_code
+            var location = response.headers["location"]
+            var following: Request
+            try:
+                following = build_redirect_request(
+                    response.request(), status, location
+                )
+            except e:
+                # A streamed response is still holding a connection at this
+                # point and nothing above here will ever see it again.
+                response.close()
+                raise e
+
+            if not follow:
+                response.set_next_request(following^)
+                return response^
+
+            try:
+                # Drained rather than left behind. A streamed redirect is
+                # holding a connection out of the pool, and the next hop is very
+                # likely to want it.
+                response.read()
+            except e:
+                response.close()
+                raise e
+
+            hops += 1
+            prior = Optional[Response](response^)
+            current = following^
 
     def stream(
         mut self,
@@ -199,6 +299,7 @@ struct Client(Movable):
         var content_stream: Optional[ByteStream] = None,
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
+        follow_redirects: Optional[Bool] = None,
     ) raises -> Response:
         """Send a request and get the response back before the body arrives.
 
@@ -226,7 +327,9 @@ struct Client(Movable):
             content_stream=content_stream^,
             params=params^,
         )
-        return self.send(built^, timeout, stream=True)
+        return self.send(
+            built^, timeout, stream=True, follow_redirects=follow_redirects
+        )
 
     def request(
         mut self,
@@ -238,6 +341,7 @@ struct Client(Movable):
         var content_stream: Optional[ByteStream] = None,
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
+        follow_redirects: Optional[Bool] = None,
     ) raises -> Response:
         var built = self.build_request(
             method,
@@ -247,7 +351,7 @@ struct Client(Movable):
             content_stream=content_stream^,
             params=params^,
         )
-        return self.send(built^, timeout)
+        return self.send(built^, timeout, follow_redirects=follow_redirects)
 
     def get(
         mut self,
@@ -256,12 +360,18 @@ struct Client(Movable):
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
+        follow_redirects: Optional[Bool] = None,
     ) raises -> Response:
         # No body argument, on any of the four verbs below. RFC 9110 says a body
         # on these has no defined semantics, and httpx leaves it out of the
         # signature for the same reason.
         return self.request(
-            "GET", url, headers=headers^, params=params^, timeout=timeout
+            "GET",
+            url,
+            headers=headers^,
+            params=params^,
+            timeout=timeout,
+            follow_redirects=follow_redirects,
         )
 
     def head(
@@ -271,9 +381,15 @@ struct Client(Movable):
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
+        follow_redirects: Optional[Bool] = None,
     ) raises -> Response:
         return self.request(
-            "HEAD", url, headers=headers^, params=params^, timeout=timeout
+            "HEAD",
+            url,
+            headers=headers^,
+            params=params^,
+            timeout=timeout,
+            follow_redirects=follow_redirects,
         )
 
     def options(
@@ -283,9 +399,15 @@ struct Client(Movable):
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
+        follow_redirects: Optional[Bool] = None,
     ) raises -> Response:
         return self.request(
-            "OPTIONS", url, headers=headers^, params=params^, timeout=timeout
+            "OPTIONS",
+            url,
+            headers=headers^,
+            params=params^,
+            timeout=timeout,
+            follow_redirects=follow_redirects,
         )
 
     def delete(
@@ -295,9 +417,15 @@ struct Client(Movable):
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
+        follow_redirects: Optional[Bool] = None,
     ) raises -> Response:
         return self.request(
-            "DELETE", url, headers=headers^, params=params^, timeout=timeout
+            "DELETE",
+            url,
+            headers=headers^,
+            params=params^,
+            timeout=timeout,
+            follow_redirects=follow_redirects,
         )
 
     def post(
@@ -309,6 +437,7 @@ struct Client(Movable):
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
+        follow_redirects: Optional[Bool] = None,
     ) raises -> Response:
         return self.request(
             "POST",
@@ -318,6 +447,7 @@ struct Client(Movable):
             content_stream=content_stream^,
             params=params^,
             timeout=timeout,
+            follow_redirects=follow_redirects,
         )
 
     def put(
@@ -329,6 +459,7 @@ struct Client(Movable):
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
+        follow_redirects: Optional[Bool] = None,
     ) raises -> Response:
         return self.request(
             "PUT",
@@ -338,6 +469,7 @@ struct Client(Movable):
             content_stream=content_stream^,
             params=params^,
             timeout=timeout,
+            follow_redirects=follow_redirects,
         )
 
     def patch(
@@ -349,6 +481,7 @@ struct Client(Movable):
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
+        follow_redirects: Optional[Bool] = None,
     ) raises -> Response:
         return self.request(
             "PATCH",
@@ -358,6 +491,7 @@ struct Client(Movable):
             content_stream=content_stream^,
             params=params^,
             timeout=timeout,
+            follow_redirects=follow_redirects,
         )
 
     def _resolve(self, url: StringSpan) raises -> URL:

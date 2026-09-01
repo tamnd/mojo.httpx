@@ -186,7 +186,7 @@ struct H1Connection(Movable):
 
     def exchange(
         mut self,
-        var request: Request,
+        mut request: Request,
         write_at: Deadline,
         read_at: Deadline,
         form: TargetForm = TargetForm.ORIGIN,
@@ -197,16 +197,21 @@ struct H1Connection(Movable):
         deserve different limits: a slow upload is not the same problem as a
         server that never answers.
         """
-        self.send_request(request^, write_at, form)
+        self.send_request(request, write_at, form)
         return self.read_response(read_at)
 
     def send_request(
         mut self,
-        var request: Request,
+        mut request: Request,
         deadline: Deadline,
         form: TargetForm = TargetForm.ORIGIN,
     ) raises:
         """Write the head and, unless the server is being asked first, the body.
+
+        The request is borrowed rather than consumed, so that the caller still
+        has it when this returns. A redirect, an auth challenge and a retry all
+        need the request that was just sent, and the only thing sending takes
+        from it for good is a streaming body, which it takes explicitly.
         """
         if self.state == H1State.DONE:
             # A connection that finished one exchange cleanly starts the next
@@ -257,7 +262,7 @@ struct H1Connection(Movable):
                 self.state = H1State.WAIT_RESPONSE
                 return
 
-        self._send_body(request^, deadline)
+        self._send_body(request, deadline)
 
     def read_response(mut self, deadline: Deadline) raises -> Response:
         """Read one response, informational ones skipped, body and all.
@@ -361,7 +366,7 @@ struct H1Connection(Movable):
             self.state = H1State.CLOSED
             self.stream.close()
 
-    def _send_body(mut self, var request: Request, deadline: Deadline) raises:
+    def _send_body(mut self, mut request: Request, deadline: Deadline) raises:
         # Each write starts the write budget again, because the timeout is on
         # one write and not on the upload. A body large enough to need several
         # writes is not a slow server, and treating it as one would mean the

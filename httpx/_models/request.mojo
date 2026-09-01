@@ -132,6 +132,16 @@ struct Request(Movable, Writable):
     def has_stream(self) -> Bool:
         return Bool(self._stream)
 
+    def body_was_taken(self) -> Bool:
+        """Whether this request once had a streaming body and no longer does.
+
+        The question a redirect asks before trying to send the same body to a
+        new location. A body that was pulled from a source as it went out is not
+        somewhere it can be pulled from again, and this is how the caller finds
+        that out instead of silently sending nothing.
+        """
+        return self._body_gone
+
     def take_stream(mut self) raises -> ByteStream:
         """The body, taken rather than borrowed, because it can only go once.
 

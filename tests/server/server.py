@@ -267,12 +267,16 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(delay)
 
     def _redirect_chain(self, remaining):
-        self._read_body()
         if remaining <= 1:
             return self._redirect("/get", 302)
         return self._redirect("/redirect/%d" % (remaining - 1), 302)
 
     def _redirect(self, location, code):
+        # The body is read even though nothing looks at it. A redirect is
+        # usually the answer to a POST, and leaving the body on the socket
+        # means the next request on that connection starts by parsing it as a
+        # request line, which comes back as a 501 with no obvious cause.
+        self._read_body()
         self.send_response(code)
         self.send_header("Location", location)
         self.send_header("Content-Length", "0")

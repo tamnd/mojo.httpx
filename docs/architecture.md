@@ -120,6 +120,26 @@ A source that fails halfway leaves the connection closed rather than in `SEND_BO
 
 Such a body can only be sent once, which makes redirects and retries a problem, and the answer is to fail rather than to improvise. `Request.copy()` gives a copy with no body that remembers it is missing one, and sending that copy raises. The alternative is a redirect that quietly delivers an empty upload to the new location.
 
+## A response carries the request that produced it
+
+The transport takes the request and gives back the response, and the request goes back with it. `response.request()` is the request that was sent, `response.url()` is where it went, and `response.history()` is every response that redirected to this one, oldest first.
+
+This is part of the httpx API we owe anyway, and it is also how the redirect loop gets the previous request without keeping its own copy of one. The alternative was to make the transport borrow the request instead of taking it, which the language will not express: a `Transport` is a thin function pointer and a thin function pointer cannot have a `mut` parameter, because that parameter would need an origin and a function pointer has no place to put one.
+
+History is stored as a list of type erased boxes rather than a list of responses, because a struct in Mojo 1.0 cannot contain itself, not even through a `List`. The erasure is confined to the field and its accessor, so nothing outside `Response` knows the boxes are there.
+
+## Following a redirect
+
+The rules live in `_redirects.mojo` and none of them touch a response or send anything. They take the request that went out, the status code and the `Location`, and produce the next request. That keeps every rule testable without a server, which matters most for the ones that exist for security reasons, because those are the ones you want to be able to test exhaustively and cheaply.
+
+They are httpx's rules rather than RFC 9110's, which is to say browsers' rules. The RFC says a 301 or a 302 preserves the method and only a 303 rewrites it to GET. Nobody implements that, two decades of servers were written against clients that rewrite, and 307 and 308 were registered precisely because the older codes cannot be trusted to preserve a method.
+
+Three things are stripped on the way. `Authorization` is dropped when the origin changes, unless the hop is the same host upgrading itself from `http` on port 80 to `https` on port 443, which gives the credentials back to the host that already had them over a better connection than they arrived on. `Content-Length` and `Transfer-Encoding` are dropped when the method was rewritten, since they describe a body that is no longer being sent. `Cookie` is dropped on every hop, even a same origin one, because the jar computes it from the URL being requested and a header computed for the old URL is stale either way.
+
+The loop is in the client. It sends, and if the response is not a redirect it returns it. If it is a redirect and the caller did not ask to follow, it attaches the next request to the response and returns, so a caller can step through a chain by hand with `client.send(response.next_request())`. If the caller did ask, it reads the body before going on, which is what lets the whole chain run over one connection: a connection with an unread body on it cannot go back to the pool. Streaming a chain streams only the last hop, for the same reason.
+
+The budget is a hop count and not a cycle detector, because a server can redirect in a loop that never repeats a URL, so counting is the only check that always terminates.
+
 ## Parsing rule
 
 `len()` on a `String` is a hard compile error in Mojo 1.0, on the grounds that the byte count and the character count are different answers and the caller should say which one they want. That is a good decision by the language, and for this project it points somewhere useful: every parser works on `Span[UInt8]` and never touches `String` at all. Strings only appear at the boundary where a user sees a value.
