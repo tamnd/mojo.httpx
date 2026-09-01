@@ -22,6 +22,8 @@ def main() raises:
 
 That request verifies the certificate chain, checks the hostname, sends SNI and refuses anything below TLS 1.2, with nothing to configure. See [TLS](docs/tls.md) for private CAs, client certificates, and what the failure messages mean.
 
+There is one of those helpers per verb, `get`, `head`, `options`, `delete`, `post`, `put` and `patch`, plus `request` for a method you name yourself and `stream` for a body you read as it arrives. They take everything that describes a single request, and they take `verify`, `cert` and `trust_env` as well, so a first request against a private CA is still one line.
+
 Keep a `Client` as soon as there is a second request, because a client holds its connections open and the one shot helpers do not.
 
 ```mojo

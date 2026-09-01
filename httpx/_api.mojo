@@ -9,6 +9,14 @@ They exist anyway because the first thing anybody writes is one request, and a
 library that made that awkward would be a library people stopped reading. The
 docstrings say what to use instead as soon as there is a second request, which
 is the same thing httpx does.
+
+Each of them takes the arguments that describe one request and the three that
+describe the connection it goes out on, `verify`, `cert` and `trust_env`. The
+connection ones are here because the client these build is not reachable from
+outside, so without them a caller talking to a private CA would have to abandon
+the one line form on their very first request. Everything else that lives on a
+`Client`, the pool limits, the event hooks, the redirect ceiling, describes
+behaviour across requests and there is only ever one request here.
 """
 
 from httpx._auth import AnyAuth
@@ -19,7 +27,9 @@ from httpx._models.cookies import Cookies
 from httpx._models.headers import Headers
 from httpx._models.json import Json
 from httpx._models.response import Response
+from httpx._models.stream import ByteStream
 from httpx._models.url import QueryParams
+from httpx._stream.config import ClientCert, SSLVerify
 
 
 def request(
@@ -32,18 +42,22 @@ def request(
     var data: QueryParams = QueryParams(),
     var files: MultipartData = MultipartData(),
     var json: Optional[Json] = None,
+    var content_stream: Optional[ByteStream] = None,
     var params: QueryParams = QueryParams(),
     var cookies: Cookies = Cookies(),
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
     var auth: Optional[AnyAuth] = None,
+    verify: SSLVerify = SSLVerify(),
+    cert: Optional[ClientCert] = None,
+    trust_env: Bool = True,
 ) raises -> Response:
     """Send one request through a client that lives for one request.
 
     Use `Client` for anything that sends more than one. The connection reuse it
     gives you is the difference between one round trip and three or four.
     """
-    var client = Client()
+    var client = Client(verify=verify, cert=cert, trust_env=trust_env)
     var response: Response
     try:
         response = client.request(
@@ -55,6 +69,7 @@ def request(
             data=data^,
             files=files^,
             json=json^,
+            content_stream=content_stream^,
             params=params^,
             cookies=cookies^,
             timeout=timeout,
@@ -80,11 +95,15 @@ def stream(
     var data: QueryParams = QueryParams(),
     var files: MultipartData = MultipartData(),
     var json: Optional[Json] = None,
+    var content_stream: Optional[ByteStream] = None,
     var params: QueryParams = QueryParams(),
     var cookies: Cookies = Cookies(),
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
     var auth: Optional[AnyAuth] = None,
+    verify: SSLVerify = SSLVerify(),
+    cert: Optional[ClientCert] = None,
+    trust_env: Bool = True,
 ) raises -> Response:
     """Send one request and return before the body has arrived.
 
@@ -95,7 +114,7 @@ def stream(
     closed rather than reused. `Client.stream` is the one to use for anything
     that streams more than once.
     """
-    var client = Client()
+    var client = Client(verify=verify, cert=cert, trust_env=trust_env)
     var response: Response
     try:
         response = client.stream(
@@ -107,6 +126,7 @@ def stream(
             data=data^,
             files=files^,
             json=json^,
+            content_stream=content_stream^,
             params=params^,
             cookies=cookies^,
             timeout=timeout,
@@ -129,7 +149,16 @@ def get(
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
     var auth: Optional[AnyAuth] = None,
+    verify: SSLVerify = SSLVerify(),
+    cert: Optional[ClientCert] = None,
+    trust_env: Bool = True,
 ) raises -> Response:
+    """One `GET`, through a client that is built and closed around it.
+
+    No body argument, because RFC 9110 gives a body on `GET` no defined
+    semantics and httpx2 leaves it out of the signature for the same reason. A
+    caller who genuinely needs one can reach for `request`.
+    """
     return request(
         "GET",
         url,
@@ -139,6 +168,9 @@ def get(
         timeout=timeout,
         follow_redirects=follow_redirects,
         auth=auth^,
+        verify=verify,
+        cert=cert,
+        trust_env=trust_env,
     )
 
 
@@ -151,6 +183,9 @@ def head(
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
     var auth: Optional[AnyAuth] = None,
+    verify: SSLVerify = SSLVerify(),
+    cert: Optional[ClientCert] = None,
+    trust_env: Bool = True,
 ) raises -> Response:
     return request(
         "HEAD",
@@ -161,6 +196,9 @@ def head(
         timeout=timeout,
         follow_redirects=follow_redirects,
         auth=auth^,
+        verify=verify,
+        cert=cert,
+        trust_env=trust_env,
     )
 
 
@@ -173,6 +211,9 @@ def options(
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
     var auth: Optional[AnyAuth] = None,
+    verify: SSLVerify = SSLVerify(),
+    cert: Optional[ClientCert] = None,
+    trust_env: Bool = True,
 ) raises -> Response:
     return request(
         "OPTIONS",
@@ -183,6 +224,9 @@ def options(
         timeout=timeout,
         follow_redirects=follow_redirects,
         auth=auth^,
+        verify=verify,
+        cert=cert,
+        trust_env=trust_env,
     )
 
 
@@ -195,6 +239,9 @@ def delete(
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
     var auth: Optional[AnyAuth] = None,
+    verify: SSLVerify = SSLVerify(),
+    cert: Optional[ClientCert] = None,
+    trust_env: Bool = True,
 ) raises -> Response:
     return request(
         "DELETE",
@@ -205,6 +252,9 @@ def delete(
         timeout=timeout,
         follow_redirects=follow_redirects,
         auth=auth^,
+        verify=verify,
+        cert=cert,
+        trust_env=trust_env,
     )
 
 
@@ -216,13 +266,18 @@ def post(
     var data: QueryParams = QueryParams(),
     var files: MultipartData = MultipartData(),
     var json: Optional[Json] = None,
+    var content_stream: Optional[ByteStream] = None,
     var headers: Headers = Headers(),
     var params: QueryParams = QueryParams(),
     var cookies: Cookies = Cookies(),
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
     var auth: Optional[AnyAuth] = None,
+    verify: SSLVerify = SSLVerify(),
+    cert: Optional[ClientCert] = None,
+    trust_env: Bool = True,
 ) raises -> Response:
+    """One `POST`. The six body arguments are the ones `Client.post` takes."""
     return request(
         "POST",
         url,
@@ -232,11 +287,15 @@ def post(
         data=data^,
         files=files^,
         json=json^,
+        content_stream=content_stream^,
         params=params^,
         cookies=cookies^,
         timeout=timeout,
         follow_redirects=follow_redirects,
         auth=auth^,
+        verify=verify,
+        cert=cert,
+        trust_env=trust_env,
     )
 
 
@@ -248,12 +307,16 @@ def put(
     var data: QueryParams = QueryParams(),
     var files: MultipartData = MultipartData(),
     var json: Optional[Json] = None,
+    var content_stream: Optional[ByteStream] = None,
     var headers: Headers = Headers(),
     var params: QueryParams = QueryParams(),
     var cookies: Cookies = Cookies(),
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
     var auth: Optional[AnyAuth] = None,
+    verify: SSLVerify = SSLVerify(),
+    cert: Optional[ClientCert] = None,
+    trust_env: Bool = True,
 ) raises -> Response:
     return request(
         "PUT",
@@ -264,11 +327,15 @@ def put(
         data=data^,
         files=files^,
         json=json^,
+        content_stream=content_stream^,
         params=params^,
         cookies=cookies^,
         timeout=timeout,
         follow_redirects=follow_redirects,
         auth=auth^,
+        verify=verify,
+        cert=cert,
+        trust_env=trust_env,
     )
 
 
@@ -280,12 +347,16 @@ def patch(
     var data: QueryParams = QueryParams(),
     var files: MultipartData = MultipartData(),
     var json: Optional[Json] = None,
+    var content_stream: Optional[ByteStream] = None,
     var headers: Headers = Headers(),
     var params: QueryParams = QueryParams(),
     var cookies: Cookies = Cookies(),
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
     var auth: Optional[AnyAuth] = None,
+    verify: SSLVerify = SSLVerify(),
+    cert: Optional[ClientCert] = None,
+    trust_env: Bool = True,
 ) raises -> Response:
     return request(
         "PATCH",
@@ -296,9 +367,13 @@ def patch(
         data=data^,
         files=files^,
         json=json^,
+        content_stream=content_stream^,
         params=params^,
         cookies=cookies^,
         timeout=timeout,
         follow_redirects=follow_redirects,
         auth=auth^,
+        verify=verify,
+        cert=cert,
+        trust_env=trust_env,
     )
