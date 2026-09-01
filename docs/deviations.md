@@ -70,6 +70,20 @@ That costs one connection on a call that was already the slow path, since a one 
 
 ## Judgement calls
 
+### `Accept-Encoding` asks for `identity`
+
+httpx2 sends `Accept-Encoding: gzip, deflate, zstd`. This client sends `identity`, because it has no decoders yet.
+
+Asking for a coding you cannot undo is worse than not asking. The server compresses, the client cannot decompress, and `response.text()` hands back a string built out of the compressed bytes and calls it the body. Advertising only what the client can actually do means a body that arrives is a body that can be read. When the decoders land the header becomes the list of what is compiled in, and this entry goes away.
+
+This is one of the two differences the parity suite is allowed to see. See [testing](testing.md).
+
+### Headers go out in a different order
+
+Both clients send the same headers with the same values; they order them differently. We put the ones the caller set immediately after `Host`, so a trace shows what the request was about before it shows the boilerplate, and the framing headers last, because the writer is what adds them. httpx2 puts its own defaults first and the caller's after, and writes `Content-Length` before `Content-Type`.
+
+Field order carries no meaning in HTTP for any header either client sends, so there is nothing to be right about here. It is written down because the parity suite compares order and would otherwise be reporting a difference with no explanation attached.
+
 ### The auth tuple shorthand is a function
 
 httpx2 lets you write `auth=("user", "pass")` and turns the pair into a `BasicAuth` behind your back. Here it is `auth=basic_auth("user", "pass")`, with `digest_auth` and `netrc_auth` alongside it.

@@ -51,6 +51,27 @@ The comparison is deliberately asymmetric. Being stricter than h11 is recorded a
 
 It is not part of `pixi run check`. A fuzzer with a fixed seed and a fixed case count is a slow unit test, and one without them is not something a commit can wait for, so it runs nightly with a fresh seed and on the fleet.
 
+## The parity suite
+
+The same scenarios through this client and through httpx2, against one recording server, comparing the bytes that went out.
+
+```bash
+pixi run -e parity parity              # pass or fail
+pixi run -e parity parity --show-all   # and every difference, accepted ones included
+```
+
+The point of the project is the same developer experience as httpx2, and the honest test of that is not that both libraries accept the same arguments. It is that the same arguments produce the same request. A client that takes `files=` and writes a different multipart body has matched the signature and nothing else, so the comparison is over the raw bytes the server received: the request line, every header with its value, the order they arrived in, and the body.
+
+There are two halves. The request half covers the verbs, query strings, paths needing escapes, caller headers, cookies, all six body arguments, basic auth, digest auth with and without `qop`, four kinds of redirect, and a cookie set by one response and sent back on the next request. Where a case sends more than one request, each hop is compared separately, which is what makes the redirect and auth cases worth having. The response half feeds each client an answer written by hand and compares what it made of it: status, reason phrase, encoding, and the decoded text as hex, so a one byte difference in a body is visible rather than hidden inside a rendering.
+
+Two things are normalized before comparing, and they are the only two. The product token in `User-Agent`, which is the library's own name and cannot match. And the random tokens: a multipart boundary, and the client nonce in a `qop` digest. The boundary's length is still compared through `Content-Length`, and the digest case without `qop` has no client nonce at all, so the credential it computes is compared byte for byte.
+
+Everything else that differs has to be signed off. `ACCEPTED` in `tools/parity/run.py` holds one entry per difference we have decided to live with, each with the reason, and every entry has to match something on every run. An entry that stops matching fails the suite, because a stale allowance is how a suite like this quietly stops noticing regressions. There are two entries today: we send `Accept-Encoding: identity` because there are no decoders yet, and we order headers differently, which no part of HTTP gives meaning to.
+
+Nothing tells the driver which cases the Mojo side ran. It does not need telling, because every request carries its case name in the path, so a case implemented on one side and forgotten on the other arrives as a case with records from only one client. That is a failure, and it is a stronger check than comparing two lists of names.
+
+Like the fuzzer, it is not part of `pixi run check` and not in CI. It needs a second HTTP client installed and it opens real sockets.
+
 ## The local fleet
 
 Some testing does not belong in CI. Interop against real servers needs Docker and several minutes of wall clock, fuzzing needs hours, and benchmarks need a machine that nobody else is sharing. A hosted runner is bad at all three.

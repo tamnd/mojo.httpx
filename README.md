@@ -292,6 +292,8 @@ Mojo is not Python, and a few things cannot be copied directly. Every deviation 
 
 That is the short list. [Deviations](docs/deviations.md) has the full one, including the handful of places where copying httpx2 exactly was possible and we chose not to, and what the alternative was in each case.
 
+The list is not maintained by hand alone. `pixi run -e parity parity` runs the same scenarios through both libraries against one recording server and compares the raw bytes each one put on the wire, hop by hop, plus what each made of an answer written by hand. Two differences are signed off today, both listed above; anything else fails the run, and so does a sign off that stops matching. See [testing](docs/testing.md).
+
 ## Requirements
 
 Mojo 1.0.0 or newer. The project pins the exact toolchain in `pixi.toml`, because the language is still moving fast enough that building against a different version is a real source of confusion.

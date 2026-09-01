@@ -85,6 +85,15 @@ badssl = "mojo run -I . tools/interop/badssl.mojo"
 # runs it nightly with a fresh seed.
 fuzz = "python tools/fuzz/h1_diff.py"
 
+# The same scenarios through this client and through httpx2, comparing the bytes
+# that went out and what each one made of the answer. Needs httpx2 installed, so
+# it is `pixi run -e parity parity`. Not part of `check` and not in CI, for the
+# same reason the fuzzer is not: a second HTTP client and real sockets are a
+# deliberate step rather than something every commit waits for. Add `--show-all`
+# to see the differences that are being accepted rather than only the ones that
+# fail. See docs/testing.md.
+parity = "python tools/parity/run.py"
+
 # The platform tables that cannot be checked from Mojo, because checking them
 # means asking the host what the right answer is. Everything that can be
 # checked from Mojo is a test instead, so that it runs on every platform on
@@ -105,5 +114,4 @@ check = { depends-on = [
 # Tasks below land with the milestone that needs them. See docs/roadmap.md.
 #   build         M8   mojo build httpx/cli/__main__.mojo -o build/httpx
 #   bench         M2   the benchmark suite
-#   parity        M4   the httpx2 comparison suite
 #   docs          M8   render the mojo doc JSON into the API reference
