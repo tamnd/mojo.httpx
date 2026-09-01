@@ -19,6 +19,7 @@ layers above this file, and Mojo 1.0 has no trait objects to hold it with. The
 cost is an indirect call per chunk, against a syscall on the other side of it.
 """
 
+from httpx._models.headers import Headers
 from httpx._util.erase import ErasedBox
 
 
@@ -43,6 +44,16 @@ trait ByteSource(Movable):
         """
         ...
 
+    def trailers(self) -> Headers:
+        """The fields that came after the body, if any did.
+
+        Empty until the body has been read to the end, and empty forever for a
+        source that cannot carry any. It is on the source rather than on the
+        response because trailers arrive after the response object exists, and
+        the source is the only thing still watching the wire by then.
+        """
+        ...
+
 
 struct ByteStream(Movable):
     """A source whose type has been forgotten, ready to be stored."""
@@ -50,16 +61,19 @@ struct ByteStream(Movable):
     var _state: ErasedBox
     var _read_chunk: def(ErasedBox) raises thin -> List[UInt8]
     var _close: def(ErasedBox) thin -> None
+    var _trailers: def(ErasedBox) thin -> Headers
 
     def __init__(
         out self,
         var state: ErasedBox,
         read_chunk: def(ErasedBox) raises thin -> List[UInt8],
         close: def(ErasedBox) thin -> None,
+        trailers: def(ErasedBox) thin -> Headers,
     ):
         self._state = state^
         self._read_chunk = read_chunk
         self._close = close
+        self._trailers = trailers
 
     def copy(self) -> Self:
         """Another handle on the same source, not a second copy of the body.
@@ -70,13 +84,21 @@ struct ByteStream(Movable):
         bytes, and the response marks itself consumed at the moment it hands a
         handle out so that nobody reads second by accident.
         """
-        return Self(self._state.copy(), self._read_chunk, self._close)
+        return Self(
+            self._state.copy(),
+            self._read_chunk,
+            self._close,
+            self._trailers,
+        )
 
     def read_chunk(mut self) raises -> List[UInt8]:
         return self._read_chunk(self._state)
 
     def close(mut self):
         self._close(self._state)
+
+    def trailers(self) -> Headers:
+        return self._trailers(self._state)
 
 
 def erase_source[T: ByteSource & Deinitable](var source: T) -> ByteStream:
@@ -93,7 +115,12 @@ def erase_source[T: ByteSource & Deinitable](var source: T) -> ByteStream:
     def _close(state: ErasedBox) -> None:
         state.get[T]().close()
 
-    return ByteStream(ErasedBox.make[T](source^), _read_chunk, _close)
+    def _trailers(state: ErasedBox) -> Headers:
+        return state.get[T]().trailers()
+
+    return ByteStream(
+        ErasedBox.make[T](source^), _read_chunk, _close, _trailers
+    )
 
 
 struct BufferedSource(ByteSource, Movable):
@@ -124,6 +151,10 @@ struct BufferedSource(ByteSource, Movable):
     def close(mut self):
         self._taken = True
         self._content.clear()
+
+    def trailers(self) -> Headers:
+        """None, ever. Bytes in memory came without a wire behind them."""
+        return Headers()
 
 
 def buffered_stream(var content: List[UInt8]) -> ByteStream:

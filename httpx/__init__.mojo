@@ -15,7 +15,17 @@ The library is pre-alpha. Nothing here is stable and most of it does not exist
 yet. See docs/roadmap.md for what lands when.
 """
 
-from httpx._api import delete, get, head, options, patch, post, put, request
+from httpx._api import (
+    delete,
+    get,
+    head,
+    options,
+    patch,
+    post,
+    put,
+    request,
+    stream,
+)
 from httpx._client import Client
 from httpx._config import Timeout
 from httpx._content.multipart import FileUpload, MultipartData

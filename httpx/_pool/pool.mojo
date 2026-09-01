@@ -18,7 +18,17 @@ trusting the caller to give it back. A borrowed connection that is dropped on an
 error path is a descriptor leak in the best case and a connection returned to the
 pool in an unknown state in the worst, and the second one hands somebody else's
 response to the wrong caller. Doing the exchange here makes both impossible.
+
+Streaming is the one case that cannot work that way. A response whose body is
+still on the wire is a connection that has to stay out of the pool until the
+caller has finished with it, so `stream_request` does lend one out, wrapped in a
+`PooledSource` that gives it back the moment the body ends and closes it if
+anything else happens first, including the caller simply dropping the response.
+That is why the pool is held through a shared handle: the source has to be able
+to reach it long after the call that made it returned.
 """
+
+from std.memory import ArcPointer
 
 from httpx._exceptions import ErrorKind, new_error
 from httpx._io.connect import connect_to_host
@@ -29,11 +39,14 @@ from httpx._io.deadline import (
     now_ns,
 )
 from httpx._io.dns import Resolver
+from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.response import Response
+from httpx._models.stream import ByteSource, erase_source
 from httpx._pool.limits import Limits
 from httpx._pool.origin import Origin, origin_for
 from httpx._proto.h1.connection import H1Connection
+from httpx._proto.h1.head import ResponseHead
 from httpx._proto.h1.writer import TargetForm
 from httpx._stream.config import TlsConfig
 from httpx._stream.stream import Stream
@@ -322,3 +335,153 @@ struct ConnectionPool(Movable):
         var oldest = self._idle.pop(0)
         var conn = oldest.take()
         conn.close()
+
+
+comptime SharedPool = ArcPointer[ConnectionPool]
+"""A pool that more than one thing can hold.
+
+A streaming response outlives the call that produced it, and the connection it
+is reading from has to go back to the pool when the body ends. So the source
+carries a handle rather than a reference: the pool stays alive as long as
+anything is still reading from one of its connections, which is exactly the
+lifetime that matters and is not one a borrow could express.
+"""
+
+
+struct PooledSource(ByteSource, Movable):
+    """A response body still on a connection, with the connection to give back.
+
+    Owns the connection for as long as the body is being read, and does one of
+    two things when that stops: hands it back to the pool if the body ended the
+    way it said it would, or closes it if anything else happened. Both paths
+    also give the lease back, which is what keeps the pool's limit honest when a
+    caller walks away from a response halfway through.
+    """
+
+    var _pool: SharedPool
+    var _origin: Origin
+    var _conn: Optional[H1Connection]
+    """Nothing once the connection has gone back or been closed.
+
+    Which is also how `read_chunk` knows there is no more body: an empty chunk
+    and a missing connection are the same answer, so a caller that keeps reading
+    past the end gets the ending again rather than an error.
+    """
+
+    var _deadline: Deadline
+    """The read deadline, applied to each read rather than to the whole body.
+
+    Which is what lets a download that keeps making progress run as long as it
+    likes while a server that goes quiet mid body still fails.
+    """
+
+    var _trailers: Headers
+
+    def __init__(
+        out self,
+        var pool: SharedPool,
+        origin: Origin,
+        var conn: H1Connection,
+        deadline: Deadline,
+    ):
+        self._pool = pool^
+        self._origin = origin
+        self._conn = Optional[H1Connection](conn^)
+        self._deadline = deadline
+        self._trailers = Headers()
+
+    def read_chunk(mut self) raises -> List[UInt8]:
+        if not self._conn:
+            return List[UInt8]()
+        var chunk: List[UInt8]
+        try:
+            chunk = self._conn.value().read_chunk(self._deadline)
+        except e:
+            # The connection closed itself on the way out of `read_chunk`, so
+            # all that is left here is to stop holding it and give the lease
+            # back. Re-raised because a truncated body is the caller's problem.
+            self._drop()
+            raise e
+        if len(chunk) == 0:
+            self._give_back()
+        return chunk^
+
+    def close(mut self):
+        """Give up whatever is left of the body and release the connection.
+
+        Always a close rather than a return to the pool, even on a connection
+        that would have been reusable. Whatever is left of the body is still on
+        the wire, and a connection whose next byte is the middle of somebody
+        else's response is not one to hand to the next request.
+        """
+        self._drop()
+
+    def trailers(self) -> Headers:
+        return self._trailers.copy()
+
+    def __deinit__(deinit self):
+        """A response dropped without being read still gives its lease back.
+
+        Without this the connection would be closed by its own destructor but
+        the pool would go on counting it as in use, and a program that abandoned
+        a few streaming responses would eventually be told its pool is full when
+        it is empty.
+        """
+        if self._conn:
+            var conn = self._conn.take()
+            conn.close()
+            self._pool[]._leased -= 1
+
+    def _give_back(mut self):
+        var conn = self._conn.take()
+        self._trailers = conn.take_trailers()
+        self._pool[]._leased -= 1
+        self._pool[]._release(self._origin, conn^)
+
+    def _drop(mut self):
+        if not self._conn:
+            return
+        var conn = self._conn.take()
+        conn.close()
+        self._pool[]._leased -= 1
+
+
+def stream_request(
+    var pool: SharedPool,
+    var request: Request,
+    deadlines: Deadlines,
+    form: TargetForm = TargetForm.ORIGIN,
+) raises -> Response:
+    """Send `request` and return as soon as the head has been read.
+
+    The body stays on the connection and comes out through the response's
+    iterators, which is the point: a caller downloading a large file or reading
+    an event stream should not have to hold the whole thing in memory, and a
+    caller who only wanted the status line should not have to wait for a body
+    they are about to throw away.
+
+    The connection is not back in the pool when this returns. It goes back when
+    the body ends, or is closed when the response is closed or dropped, and
+    either way the caller does not have to do anything for that to happen.
+    """
+    var origin = origin_for(request.url)
+    var conn = pool[]._acquire(origin, deadlines)
+    pool[]._leased += 1
+
+    var head: ResponseHead
+    try:
+        conn.send_request(request^, deadlines.write, form)
+        head = conn.start_response(deadlines.read)
+    except e:
+        pool[]._leased -= 1
+        conn.close()
+        raise e
+
+    var source = PooledSource(pool^, origin, conn^, deadlines.read)
+    return Response.streaming(
+        head.status_code,
+        erase_source(source^),
+        head.reason_phrase.copy(),
+        head.http_version.copy(),
+        head.take_headers(),
+    )

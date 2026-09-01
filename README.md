@@ -2,7 +2,7 @@
 
 A full featured HTTP client for Mojo, with the same API and the same developer experience as [httpx2](https://github.com/pydantic/httpx2).
 
-**Status: pre-alpha.** HTTP/1.1 requests work over TCP and over TLS today, so `http://` and `https://` both work. HTTP/2, redirects, auth and cookies do not exist yet. A response can be walked a chunk at a time with `iter_bytes`, `iter_text` and `iter_lines`, but the transport still reads the whole body before handing the response back, so nothing is streamed off the wire yet. See the [roadmap](docs/roadmap.md) for what is landing and when. Do not use this in production.
+**Status: pre-alpha.** HTTP/1.1 requests work over TCP and over TLS today, so `http://` and `https://` both work. Streaming works: `client.stream()` returns as soon as the head has arrived and the body is read off the wire a chunk at a time with `iter_bytes`, `iter_text` or `iter_lines`. HTTP/2, redirects, auth and cookies do not exist yet. See the [roadmap](docs/roadmap.md) for what is landing and when. Do not use this in production.
 
 ## Why
 
@@ -46,7 +46,22 @@ def main() raises:
         print(created.status_code)
 ```
 
-Both requests in that block go over one connection. `Timeout` holds a separate limit for connect, read, write and pool, because those four fail for different reasons and deserve different answers, and every one of them is a deadline that is checked all the way down to the socket call.
+A body too large to want in memory, or one that does not end, is read with `stream` instead.
+
+```mojo
+import httpx
+
+def main() raises:
+    with httpx.Client() as client:
+        with client.stream("GET", "https://example.com/big.log") as r:
+            var lines = r.iter_lines()
+            while lines.has_next():
+                print(lines.next())
+```
+
+The `with` around the response is not decoration. The connection that body is arriving on goes back to the pool when the body ends and is closed if the block is left before that, and both of those happen because the response was destroyed at the end of the block.
+
+Both requests in the client block above go over one connection. `Timeout` holds a separate limit for connect, read, write and pool, because those four fail for different reasons and deserve different answers, and every one of them is a deadline that is checked all the way down to the socket call.
 
 ## What it will look like
 

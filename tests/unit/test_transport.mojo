@@ -61,6 +61,11 @@ struct Recorder(Transport):
         self.counts.get[Int]() += 1
         return _text(String("recorded"))
 
+    def handle_stream(
+        mut self, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        return self.handle_request(request^, deadlines)
+
     def close(mut self):
         self.counts.get[Int]() += 100
 
@@ -172,7 +177,7 @@ def test_the_http_transport_reaches_a_real_server() raises:
     var response = _get(transport, server, "/get")
     assert_equal(response.status_code, 200)
     assert_true('"method": "GET"' in response.text())
-    assert_equal(transport.pool.idle_count(), 1)
+    assert_equal(transport.pool[].idle_count(), 1)
 
 
 def test_the_http_transport_pools_across_requests() raises:
@@ -181,16 +186,16 @@ def test_the_http_transport_pools_across_requests() raises:
     var first = _get(transport, server, "/conn")
     var second = _get(transport, server, "/conn")
     assert_equal(first.headers["x-conn-id"], second.headers["x-conn-id"])
-    assert_equal(transport.pool.total_count(), 1)
+    assert_equal(transport.pool[].total_count(), 1)
 
 
 def test_closing_the_http_transport_drops_its_connections() raises:
     var server = TestServer()
     var transport = HTTPTransport()
     _ = _get(transport, server, "/get")
-    assert_equal(transport.pool.idle_count(), 1)
+    assert_equal(transport.pool[].idle_count(), 1)
     transport.close()
-    assert_equal(transport.pool.idle_count(), 0)
+    assert_equal(transport.pool[].idle_count(), 0)
 
 
 def test_an_erased_http_transport_works_end_to_end() raises:

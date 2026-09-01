@@ -47,6 +47,17 @@ struct MockTransport(Transport):
         self.requests.append(request.copy())
         return self.handler(request^)
 
+    def handle_stream(
+        mut self, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        """Exactly `handle_request`, because there is nothing to stream from.
+
+        The handler builds a whole response in memory before this returns, so
+        the response is already read. A test that iterates it still works, since
+        an already read body iterates out of the buffer.
+        """
+        return self.handle_request(request^, deadlines)
+
     def close(mut self):
         """Nothing to release. Kept so this is a transport like any other."""
         pass

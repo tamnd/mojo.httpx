@@ -25,10 +25,16 @@ struct ChunkSource(ByteSource, Movable):
 
     var _chunks: List[List[UInt8]]
     var _at: Int
+    var _trailers: Headers
 
-    def __init__(out self, var chunks: List[List[UInt8]]):
+    def __init__(
+        out self,
+        var chunks: List[List[UInt8]],
+        var trailers: Headers = Headers(),
+    ):
         self._chunks = chunks^
         self._at = 0
+        self._trailers = trailers^
 
     def read_chunk(mut self) raises -> List[UInt8]:
         if self._at >= len(self._chunks):
@@ -39,6 +45,9 @@ struct ChunkSource(ByteSource, Movable):
 
     def close(mut self):
         self._at = len(self._chunks)
+
+    def trailers(self) -> Headers:
+        return self._trailers.copy()
 
 
 def bytes_of(*values: Int) -> List[UInt8]:

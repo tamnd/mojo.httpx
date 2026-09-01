@@ -128,6 +128,27 @@ struct H1Connection(Movable):
     the wire by then and there is nowhere to put it back, so it is parked here.
     """
 
+    var _reader: Optional[BodyReader]
+    """The body reader for the response being read, while one is in progress.
+
+    An optional because the body is now read a chunk at a time, which means the
+    reader has to survive between calls. Nothing means either that no response
+    is being read or that the last one finished, and both answer `read_chunk`
+    the same way.
+    """
+
+    var _trailers: Headers
+    """What the last body carried after it, waiting to be collected."""
+
+    var _keep_alive: Bool
+    """Whether this connection survives the response being read.
+
+    Decided from the head, before a byte of body is read, because that is when
+    the framing and the `Connection` field are both in hand. Acting on it is
+    deferred to the end of the body, which is the only point at which the
+    question can be answered by doing something.
+    """
+
     def __init__(out self, var stream: Stream):
         self.stream = stream^
         self.buf = ByteBuffer()
@@ -135,6 +156,9 @@ struct H1Connection(Movable):
         self.upgraded = False
         self._method = String()
         self._pending = None
+        self._reader = None
+        self._trailers = Headers()
+        self._keep_alive = False
 
     def is_idle(self) -> Bool:
         return self.state == H1State.IDLE
@@ -192,6 +216,8 @@ struct H1Connection(Movable):
             self.state = H1State.IDLE
             self._method = String()
             self._pending = None
+            self._reader = None
+            self._trailers = Headers()
         if self.state != H1State.IDLE:
             raise _local(
                 "a request cannot be sent while this connection is busy"
@@ -229,53 +255,106 @@ struct H1Connection(Movable):
         self._send_body(request, deadline)
 
     def read_response(mut self, deadline: Deadline) raises -> Response:
-        """Read one response, informational ones skipped, body and all."""
+        """Read one response, informational ones skipped, body and all.
+
+        The eager path, which is what a caller who is not streaming wants. It is
+        `start_response` followed by `read_chunk` until the body runs out, so
+        there is one implementation of the framing rules rather than two.
+        """
+        var head = self.start_response(deadline)
+        var content = List[UInt8]()
+        while True:
+            var chunk = self.read_chunk(deadline)
+            if len(chunk) == 0:
+                break
+            content.extend(Span(chunk))
+        return Response(
+            head.status_code,
+            head.reason_phrase.copy(),
+            head.http_version.copy(),
+            head.take_headers(),
+            content^,
+            self.take_trailers(),
+        )
+
+    def start_response(mut self, deadline: Deadline) raises -> ResponseHead:
+        """Read the head and leave the body on the wire.
+
+        What the streaming path is built on. The connection is left in
+        `RECV_BODY` with a reader set up, and every call to `read_chunk` after
+        this takes another piece of the body until there is none left.
+        """
         if self.state != H1State.WAIT_RESPONSE:
             raise _local("there is no response to read on this connection yet")
 
         var head = self._read_final_head(deadline)
         var framing = framing_for(self._method, head)
+        self._trailers = Headers()
 
         if head.status_code == 101:
             # The connection stops being HTTP here. Nothing after the head
             # belongs to us, so nothing after the head is read.
             self.upgraded = True
             self.state = H1State.CLOSED
-            return Response(
-                head.status_code,
-                head.reason_phrase.copy(),
-                head.http_version.copy(),
-                head.take_headers(),
-            )
+            self._reader = None
+            self._keep_alive = False
+            return head^
 
         self.state = H1State.RECV_BODY
-        var reader = BodyReader(framing)
-        var content = List[UInt8]()
-        while not reader.is_complete():
-            if not reader.read_from(self.buf, content):
-                break
-            if self._fill(deadline) == 0:
-                reader.at_eof()
-                # One last pass, because the bytes that arrived alongside the
-                # close are still a valid part of the body.
-                _ = reader.read_from(self.buf, content)
-                break
-
-        var response = Response(
-            head.status_code,
-            head.reason_phrase.copy(),
-            head.http_version.copy(),
-            head.take_headers(),
-            content^,
-            reader.take_trailers(),
+        self._keep_alive = framing.is_self_delimiting() and _keeps_alive(
+            head.http_version, head.headers
         )
+        self._reader = Optional[BodyReader](BodyReader(framing))
+        return head^
 
-        if not framing.is_self_delimiting() or not _keeps_alive(response):
+    def read_chunk(mut self, deadline: Deadline) raises -> List[UInt8]:
+        """The next piece of the body. Empty means the body is over.
+
+        Empty never means "nothing has arrived yet". A read that has nothing to
+        return waits for the socket rather than handing back nothing, because a
+        caller that took a pause for an ending would report half a response as
+        a whole one.
+        """
+        var out = List[UInt8]()
+        if not self._reader:
+            return out^
+        try:
+            while True:
+                if not self._reader.value().read_from(self.buf, out):
+                    self._end_body()
+                    return out^
+                if len(out) > 0:
+                    return out^
+                if self._fill(deadline) == 0:
+                    # A close is the ending for one framing mode and a truncated
+                    # body for the other two, and `at_eof` is what knows which.
+                    self._reader.value().at_eof()
+                    _ = self._reader.value().read_from(self.buf, out)
+                    self._end_body()
+                    return out^
+        except e:
+            # Whatever went wrong, the framing is now unknown, so there is no
+            # way to tell where this message ends and the next one starts.
+            self._reader = None
             self.state = H1State.CLOSED
             self.stream.close()
-        else:
+            raise e
+
+    def take_trailers(mut self) -> Headers:
+        """The fields the last body carried after it, leaving none behind."""
+        var out = Headers()
+        swap(out, self._trailers)
+        return out^
+
+    def _end_body(mut self):
+        """Settle the connection once the body has been read to the end."""
+        var reader = self._reader.take()
+        self._trailers = reader.take_trailers()
+        if self._keep_alive:
             self.state = H1State.DONE
-        return response^
+        else:
+            self.state = H1State.CLOSED
+            self.stream.close()
 
     def _send_body(mut self, request: Request, deadline: Deadline) raises:
         # Each write starts the write budget again, because the timeout is on
@@ -382,14 +461,18 @@ def _expects_continue(headers: Headers) raises -> Bool:
     return False
 
 
-def _keeps_alive(response: Response) raises -> Bool:
+def _keeps_alive(http_version: String, headers: Headers) raises -> Bool:
     """Whether the server said it would keep the connection open.
 
     HTTP/1.1 keeps it open unless told otherwise and HTTP/1.0 closes it unless
     told otherwise, which is the one place the version in the status line does
     something rather than being a label.
+
+    Asked of the head rather than of the response, because the answer is needed
+    before the body has been read and a streaming response does not exist in
+    finished form until after it has.
     """
-    var tokens = response.headers.get_list("connection", split_commas=True)
+    var tokens = headers.get_list("connection", split_commas=True)
     var said_close = False
     var said_keep_alive = False
     for i in range(len(tokens)):
@@ -400,6 +483,6 @@ def _keeps_alive(response: Response) raises -> Bool:
             said_keep_alive = True
     if said_close:
         return False
-    if response.http_version == "HTTP/1.0":
+    if http_version == "HTTP/1.0":
         return said_keep_alive
     return True

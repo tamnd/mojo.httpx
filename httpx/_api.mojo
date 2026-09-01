@@ -52,6 +52,42 @@ def request(
     return response^
 
 
+def stream(
+    method: StringSpan,
+    url: StringSpan,
+    *,
+    var headers: Headers = Headers(),
+    var content: List[UInt8] = List[UInt8](),
+    var params: QueryParams = QueryParams(),
+    timeout: Optional[Timeout] = None,
+) raises -> Response:
+    """Send one request and return before the body has arrived.
+
+    The client is closed before this returns, but the connection carrying the
+    body is not in the pool to be closed, so the response keeps working and
+    releases the connection itself when it is done or dropped. What that costs
+    is the connection: there is no pool left to put it back into, so it is
+    closed rather than reused. `Client.stream` is the one to use for anything
+    that streams more than once.
+    """
+    var client = Client()
+    var response: Response
+    try:
+        response = client.stream(
+            method,
+            url,
+            headers=headers^,
+            content=content^,
+            params=params^,
+            timeout=timeout,
+        )
+    except e:
+        client.close()
+        raise e
+    client.close()
+    return response^
+
+
 def get(
     url: StringSpan,
     *,

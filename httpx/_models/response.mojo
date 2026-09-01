@@ -243,6 +243,11 @@ struct Response(Movable, Writable):
         var chunks = self.iter_raw()
         while chunks.has_next():
             self._content.extend(Span(chunks.next()))
+        # Only after the last chunk, because trailers are by definition what
+        # comes after the body. A response read through the iterators instead
+        # never sees them, which is the price of the response not being able to
+        # reach back into an iterator that has already been handed out.
+        self.trailers = self._stream.trailers()
         self._read = True
         self.is_closed = True
 
@@ -277,6 +282,20 @@ struct Response(Movable, Writable):
         """
         self._stream.close()
         self.is_closed = True
+
+    def __enter__(var self) -> Self:
+        """Hand the response to the `with` block, which then owns it.
+
+        This is what makes `with client.stream(...) as r:` read the way it does
+        in httpx. The block owning the response is what releases the connection:
+        the response is destroyed at the end of the block whether the body was
+        read or not, and the stream underneath it gives the connection back or
+        closes it from its own destructor.
+
+        Consuming rather than borrowing, because Mojo 1.0 will not enter a
+        `with` on a value that is neither copyable nor transferred.
+        """
+        return self^
 
     def iter_raw(mut self, chunk_size: Int = 0) raises -> ByteChunks:
         """The body exactly as it arrives, before any content decoding.

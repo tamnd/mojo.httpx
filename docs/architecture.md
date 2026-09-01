@@ -100,6 +100,16 @@ An empty chunk always means the end and never means "nothing yet". A source with
 
 The three iterators stack. `LineChunks` pulls from `TextChunks` pulls from `ByteChunks` pulls from the stream, so the buffering that makes each step safe is written once. Each step has one thing it holds back. `ByteChunks` holds bytes until it has a full chunk of the size that was asked for. `TextChunks` holds the tail of a character whose remaining bytes have not arrived, which is the whole reason it is not `decode(chunk)` in a loop: without it every multibyte character that straddled a network boundary would come out as replacement characters, and which ones broke would depend on how the server sized its writes. `LineChunks` holds a trailing carriage return, because its newline may be the first byte of the next read.
 
+## Who owns the connection while a body is streaming
+
+The pool normally runs the whole exchange itself and never lends a connection out. A borrowed connection dropped on an error path is a leaked descriptor at best, and at worst it goes back into the pool in an unknown state and hands somebody else's response to the wrong caller.
+
+Streaming cannot work that way, because the point of it is that the call returns while the body is still arriving. So `stream_request` does lend a connection out, and everything about the design is aimed at making the give back automatic. The connection is owned by a `PooledSource`, which is the `ByteStream` behind the response. When the body ends the source puts the connection back in the pool. When the response is closed early it closes the connection instead, because the rest of the body is still on the wire and a connection whose next byte is the middle of an old response is worse than no connection at all. When the response is simply dropped, the source's destructor does the same thing. There is no path where the caller has to remember anything, which matters because the path a caller forgets is the error path.
+
+The lease count is decremented on all three of those paths. Getting that wrong is not a leaked socket, it is worse: the socket would be closed by its own destructor and the pool would go on counting it as in use, so a program that abandoned a few streamed responses would eventually be told its pool was full when it was empty.
+
+The pool is held through a shared handle rather than borrowed, because a streamed response outlives the call that produced it and may outlive the transport too. `httpx.stream()` is the extreme case: the one shot helper closes its client before returning, and the response still works, because the connection carrying the body was never in the pool to be closed and the pool itself stays alive as long as the source holds a handle on it.
+
 ## Parsing rule
 
 `len()` on a `String` is a hard compile error in Mojo 1.0, on the grounds that the byte count and the character count are different answers and the caller should say which one they want. That is a good decision by the language, and for this project it points somewhere useful: every parser works on `Span[UInt8]` and never touches `String` at all. Strings only appear at the boundary where a user sees a value.
