@@ -808,6 +808,33 @@ struct DigestAuth(Auth, Movable):
         return String(hex(Span(sha1(Span(material))))[byte=0:16])
 
 
+struct NoAuth(Auth, Movable):
+    """A scheme that adds nothing and answers nothing.
+
+    For turning a client's scheme off on one call. httpx spells that
+    `auth=None`, which it can only do because it has a separate sentinel for
+    `not passed`. Here `auth` is an `Optional` and empty already means take the
+    client's, so saying nothing at all needs a value rather than an absence.
+    """
+
+    def __init__(out self):
+        pass
+
+    def sign(mut self, var request: Request) raises -> Request:
+        return request^
+
+    def next_request(mut self, response: Response) raises -> Optional[Request]:
+        return None
+
+    def requires_response_body(self) -> Bool:
+        return False
+
+
+def no_auth() -> AnyAuth:
+    """`NoAuth`, for a call that should go out unauthenticated."""
+    return erase_auth(NoAuth())
+
+
 def basic_auth(username: StringSpan, password: StringSpan) -> AnyAuth:
     """`BasicAuth`, ready to hand to a client.
 

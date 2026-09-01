@@ -36,6 +36,7 @@ from httpx._redirects import DEFAULT_MAX_REDIRECTS, build_redirect_request
 from httpx._stream.config import ClientCert, SSLVerify, TlsConfig
 from httpx._transport.base import AnyTransport, erase_transport
 from httpx._transport.http import HTTPTransport
+from httpx._util.charset import DefaultEncoding
 
 comptime USER_AGENT = "mojo-httpx/0.0.1"
 """What this library calls itself.
@@ -90,7 +91,23 @@ struct Client(Movable):
     retry is a send and runs them.
     """
 
-    var _auth: Optional[AnyAuth]
+    var auth: Optional[AnyAuth]
+    """The scheme used when a request does not name its own.
+
+    Public and mutable, like httpx's property of the same name, so credentials
+    can be attached to a client that already exists. `auth=no_auth()` on a
+    single call is how one request goes out without it.
+    """
+
+    var default_encoding: DefaultEncoding
+    """What to read a body as when the response does not say.
+
+    Every response this client produces gets a copy of it. httpx puts it on the
+    client for the same reason: an API that answers `text/plain` with no charset
+    is an API where the answer is the same every time, and repeating it on every
+    call would be noise.
+    """
+
     var _transport: AnyTransport
     var _closed: Bool
 
@@ -119,7 +136,20 @@ struct Client(Movable):
         max_redirects: Int = DEFAULT_MAX_REDIRECTS,
         var auth: Optional[AnyAuth] = None,
         var event_hooks: EventHooks = EventHooks(),
+        var default_encoding: DefaultEncoding = DefaultEncoding(),
+        var transport: Optional[AnyTransport] = None,
     ) raises:
+        """Every option, all of them keyword only.
+
+        Keyword only because there are fifteen of them and no order anybody
+        would remember. httpx does the same, for the same reason.
+
+        `transport` replaces the one this would otherwise build, which is how a
+        mock goes under a client that still has its base URL, its headers and
+        its redirect policy. Giving one makes `limits`, `verify`, `cert` and
+        `trust_env` dead letters, since those describe a connection pool that no
+        longer exists, and that is httpx's behaviour too.
+        """
         self.headers = headers^
         self.params = params^
         self.base_url = base_url^
@@ -128,36 +158,29 @@ struct Client(Movable):
         self.follow_redirects = follow_redirects
         self.max_redirects = max_redirects
         self.event_hooks = event_hooks^
-        self._auth = auth^
-        var tls = TlsConfig()
-        tls.verify = verify
-        tls.cert = cert.copy()
-        tls.trust_env = trust_env
-        var transport = HTTPTransport(
-            limits.value() if limits else Limits(), tls^
-        )
-        self._transport = erase_transport(transport^)
+        self.auth = auth^
+        self.default_encoding = default_encoding^
+        if transport:
+            self._transport = transport.take()
+        else:
+            var tls = TlsConfig()
+            tls.verify = verify
+            tls.cert = cert.copy()
+            tls.trust_env = trust_env
+            var built = HTTPTransport(
+                limits.value() if limits else Limits(), tls^
+            )
+            self._transport = erase_transport(built^)
         self._closed = False
 
     def __init__(out self, var transport: AnyTransport) raises:
-        """A client over a transport the caller built.
+        """A client over a transport the caller built, and nothing else set.
 
-        This is the seam `MockTransport` plugs into. It is a constructor rather
-        than an argument on the one above because a transport cannot be an
-        `Optional` default without being copyable, and a transport that could be
-        copied silently would be a connection pool that could be duplicated.
+        A shorthand for the keyword form, since a test that swaps the transport
+        and configures nothing else is the common case. Anything more than that
+        wants `Client(transport=..., base_url=...)`.
         """
-        self.headers = Headers()
-        self.params = QueryParams()
-        self.base_url = URL()
-        self.cookies = Cookies()
-        self.timeout = Timeout()
-        self.follow_redirects = False
-        self.max_redirects = DEFAULT_MAX_REDIRECTS
-        self.event_hooks = EventHooks()
-        self._auth = None
-        self._transport = transport^
-        self._closed = False
+        self = Self(transport=Optional[AnyTransport](transport^))
 
     def __enter__(var self) -> Self:
         """Hand the client to the `with` block, which then owns it.
@@ -272,12 +295,12 @@ struct Client(Movable):
         )
 
         var scheme = auth^
-        if not scheme and self._auth:
+        if not scheme and self.auth:
             # A copy of the client's scheme rather than the scheme itself,
             # because the send path needs it mutably and the client is only
             # borrowed here. The copy shares the same state, so a digest client
             # that has already been challenged stays challenged.
-            scheme = Optional[AnyAuth](self._auth.value().copy())
+            scheme = Optional[AnyAuth](self.auth.value().copy())
         if not scheme:
             return self._send_following_redirects(
                 request^, budget, stream, follow
@@ -378,6 +401,11 @@ struct Client(Movable):
                 response = self._transport.handle_request(
                     current^, budget.deadlines()
                 )
+            # Before anything reads the body, since a hook calling `text()` on
+            # a response with no charset on it should get the client's answer
+            # rather than the bare default.
+            response.default_encoding = self.default_encoding.copy()
+
             # Every response, not just the last one. A login that answers 302
             # with the session cookie on it is the ordinary case, and a jar that
             # only read the end of the chain would miss it.

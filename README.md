@@ -100,6 +100,8 @@ def main() raises:
 
 Digest costs one extra round trip the first time, because there is nothing to answer until the server has sent a challenge, and none after that: the challenge is remembered and every later request goes out authenticated straight away. The 401 that was answered stays in `r.history()`, the same way a followed redirect does. `netrc_auth()` reads `$NETRC` or `~/.netrc` once, when you build it, so a file that changes under a running program cannot give two requests in the same session two different identities.
 
+`auth=no_auth()` on a single call sends it unauthenticated, whatever the client was built with. httpx2 writes that as `auth=None`, which it can only do because it keeps a separate sentinel for an argument that was not passed at all. Here an absent `auth` already means take the client's, so switching it off has to be a value rather than an absence.
+
 Credentials are redacted everywhere this library writes a header out. Printing a `Headers`, a `Request` or a `Response` shows `[secret, 28 bytes]` in place of `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie`, so a debug print or a logged repr cannot leak a password. Asking for the value by name still gives you the value.
 
 A client keeps a cookie jar, so a login and the request after it are a session rather than two unrelated calls.
@@ -125,6 +127,20 @@ def main() raises:
 The jar is `client.cookies` and it is a plain mutable field, so a caller can seed it before the first request with `client.cookies["session"] = "..."` and read it after any of them. `cookies=` on a single call merges over the client's for that call only. `r.cookies()` is the narrower question of what one response set, which is not the same thing as what the client is holding.
 
 RFC 6265 is followed rather than approximated. A cookie is scoped by domain, by path and by `Secure`, a `Set-Cookie` naming a domain the responding host does not belong to is dropped, so is one scoped to a public suffix, an expired one deletes rather than stores, and the `Cookie` header is ordered longest path first with creation time breaking ties, which is the order servers quietly depend on. A `Cookie` header you write yourself is left exactly as you wrote it.
+
+`r.text()` reads the body using the charset the response named. When it named none, or named one nothing can decode, the client's `default_encoding` decides, and every response a client produces carries a copy of it.
+
+```mojo
+import httpx
+from httpx import DefaultEncoding
+
+def main() raises:
+    with httpx.Client(default_encoding=DefaultEncoding("iso-8859-1")) as client:
+        var r = client.get("https://legacy.example.com/report.txt")
+        print(r.text())
+```
+
+The default is UTF-8, which is what the content nearly always is and what httpx2 falls back to as well. Setting it on the client rather than on each call is worth it against an API that answers `text/plain` with no charset, because that answer is the same on every endpoint it has. `default_encoding` also takes a function, which is the seam a statistical charset detector plugs into, the way `charset_normalizer` does in httpx2. Nothing here ships one, because a bad detector is worse than none.
 
 Event hooks are the seam for logging, metrics and tracing. A hook sees every request on its way out and every response on its way in, without anything having to be subclassed or wrapped.
 

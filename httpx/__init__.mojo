@@ -32,10 +32,12 @@ from httpx._auth import (
     BasicAuth,
     DigestAuth,
     NetRCAuth,
+    NoAuth,
     basic_auth,
     digest_auth,
     erase_auth,
     netrc_auth,
+    no_auth,
 )
 from httpx._client import Client
 from httpx._config import Timeout
