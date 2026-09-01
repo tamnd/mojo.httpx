@@ -67,6 +67,25 @@ def main() raises:
 
 Each of those carries the content type that describes it, and an explicit `Content-Type` in `headers=` wins over it, so `json=` works against an API with its own media type. Passing two bodies raises and names both, rather than dropping one and letting you find out from the server, which is what httpx2 does with `data=` and `json=` together. The one combination that is allowed is `data=` with `files=`, which is not two bodies but one multipart body carrying the fields and the files, exactly as a browser sends it. [Request bodies](docs/content.md) covers all six.
 
+On the way back, `r.status_code`, `r.text()`, `r.json()` and `r.content()` are the usual four. `r.raise_for_status()` turns anything outside 2xx into an `HTTPStatusError` naming the code, the phrase the server sent and the URL. `r.elapsed()` says how long the exchange took, as a `Duration`, once the body is in. `r.link_url("next")` reads the `Link` header a paginated API answers with and hands back somewhere to go, resolved against the URL the response came from.
+
+```mojo
+import httpx
+
+def main() raises:
+    with httpx.Client() as client:
+        var url = String("https://api.example.com/items")
+        while True:
+            var r = client.get(url)
+            r.raise_for_status()
+            print(r.json(), r.elapsed().milliseconds())
+
+            var next = r.link_url("next")
+            if not next:
+                break
+            url = String(next.value())
+```
+
 A body too large to want in memory, or one that does not end, is read with `stream` instead.
 
 ```mojo

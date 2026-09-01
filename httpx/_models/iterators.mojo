@@ -70,12 +70,21 @@ struct ByteChunks(Movable):
     var _pending: List[UInt8]
     var _size: Int
     var _ended: Bool
+    var _downloaded: Int
+    """How many bytes have come off the stream so far.
+
+    Counted here rather than on the response, because the response gives the
+    stream away when it hands out an iterator and cannot see another byte after
+    that. This is the only place that watches them arrive, so it is the only
+    place that can answer.
+    """
 
     def __init__(out self, var stream: ByteStream, size: Int = 0) raises:
         self._stream = stream^
         self._pending = List[UInt8]()
         self._size = size
         self._ended = False
+        self._downloaded = 0
         self._fill()
 
     def _fill(mut self) raises:
@@ -97,7 +106,18 @@ struct ByteChunks(Movable):
                 self._ended = True
                 self._stream.close()
                 return
+            self._downloaded += len(chunk)
             self._pending.extend(Span(chunk))
+
+    def num_bytes_downloaded(self) -> Int:
+        """How much of the body has arrived, for a progress report.
+
+        Counted as it comes off the stream, so it moves ahead of what `next` has
+        handed back when a chunk size is set and a read pulled more than one
+        chunk's worth. That is the number a progress bar wants: it is measuring
+        the download, not the caller's loop.
+        """
+        return self._downloaded
 
     def has_next(self) -> Bool:
         return len(self._pending) > 0
@@ -235,6 +255,15 @@ struct TextChunks(Movable):
             self._resolve()
             self._drain(False)
 
+    def num_bytes_downloaded(self) -> Int:
+        """How much of the body has arrived, in bytes rather than characters.
+
+        Bytes because that is what a progress report is against: the length the
+        server announced is a byte count, and the character count is not known
+        until the last one is decoded.
+        """
+        return self._bytes.num_bytes_downloaded()
+
     def has_next(self) -> Bool:
         return len(self._text) > 0
 
@@ -324,6 +353,10 @@ struct LineChunks(Movable):
             for i in range(start, n):
                 rest.append(self._pending[i])
             self._pending = rest^
+
+    def num_bytes_downloaded(self) -> Int:
+        """How much of the body has arrived, in bytes rather than lines."""
+        return self._text.num_bytes_downloaded()
 
     def has_next(self) -> Bool:
         return self._at < len(self._lines)

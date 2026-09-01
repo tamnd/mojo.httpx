@@ -66,6 +66,8 @@ from httpx._transport.base import AnyTransport, Transport, erase_transport
 from httpx._transport.http import HTTPTransport
 from httpx._transport.mock import MockRouter, MockTransport, Route
 from httpx._util.charset import DefaultEncoding
+from httpx._util.duration import Duration
+from httpx._util.links import Link, parse_links
 
 comptime __version__ = "0.0.1"
 

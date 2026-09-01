@@ -102,6 +102,16 @@ An empty chunk always means the end and never means "nothing yet". A source with
 
 The three iterators stack. `LineChunks` pulls from `TextChunks` pulls from `ByteChunks` pulls from the stream, so the buffering that makes each step safe is written once. Each step has one thing it holds back. `ByteChunks` holds bytes until it has a full chunk of the size that was asked for. `TextChunks` holds the tail of a character whose remaining bytes have not arrived, which is the whole reason it is not `decode(chunk)` in a loop: without it every multibyte character that straddled a network boundary would come out as replacement characters, and which ones broke would depend on how the server sized its writes. `LineChunks` holds a trailing carriage return, because its newline may be the first byte of the next read.
 
+## The exchange is timed by the client and stopped by the response
+
+There are two clocks. The wall clock decides whether a cookie has expired, because expiry is stated in Unix seconds by a server on the other side of the world and only the system clock is on that scale. The monotonic counter measures how long something took, because the wall clock can step backwards when it is corrected and an interval taken across a correction is a wrong answer that looks like a real one.
+
+`elapsed` is on the second one. The client reads it just before handing a request to the transport, which is the only point on the path every response takes: there are three transports and a redirect chain is several calls through one of them, so anywhere lower would be timing something other than what the caller asked. It is per hop rather than for the chain, so a caller looking at a slow redirect chain can see which hop was slow, which a single total would not tell them.
+
+Stopping is the response's job, because the client is not there when a streamed body ends. A response that arrives already read had its exchange finished by the transport and the clock stops the moment the client sets the start. One that is still open stops in `read` or in `close`, whichever the caller reaches first, and only the first of those counts: `read` then `close` is an ordinary sequence and the answer should be how long the body took rather than how long the caller sat on it. Before either has happened there is no answer and asking raises, which is what httpx2 does, because a number covering only the status line would quietly answer a different question.
+
+The byte counter has the same shape and the opposite conclusion. A response that hands its stream to an iterator cannot see another byte, so the counter lives on `ByteChunks` and the response's own number stops where the iterator took over. Putting it on the response and pretending otherwise would give a progress bar a number that never moves.
+
 ## Who owns the connection while a body is streaming
 
 The pool normally runs the whole exchange itself and never lends a connection out. A borrowed connection dropped on an error path is a leaked descriptor at best, and at worst it goes back into the pool in an unknown state and hands somebody else's response to the wrong caller.
