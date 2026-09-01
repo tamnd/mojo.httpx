@@ -114,6 +114,12 @@ httpx2 keeps the counter on the response and increments it as `iter_raw` yields.
 
 `Response.num_bytes_downloaded()` answers for a response that was read or built by hand. For a streamed body being consumed through an iterator, which is the case a progress bar exists for, the iterator is what has the number.
 
+### The one shot helpers take the TLS arguments and nothing else off `Client`
+
+`httpx.get(url)` and the eight helpers beside it take the arguments that describe one request, plus `verify`, `cert` and `trust_env`, which describe the connection it goes out on. httpx2's helpers take those three as well, so this is parity rather than a departure, but it is worth writing down why the line falls there.
+
+The client a helper builds is closed before the call returns and is never reachable from outside, so an argument left off is an argument a caller cannot supply at all. For the TLS three that would mean anybody talking to a private CA has to abandon the one line form on their first request, which is the form's whole reason to exist. Everything else that lives on a `Client`, the pool limits, the event hooks, the redirect ceiling, the base URL, describes behaviour across requests, and there is only ever one request here.
+
 ### A malformed digest challenge raises a protocol error
 
 httpx2 raises `KeyError` from `DigestAuth._parse_challenge` when the challenge names an algorithm it does not implement, because the algorithm is looked up in a dictionary with no default. It raises its own `ProtocolError` for a missing `realm` or `nonce`.
