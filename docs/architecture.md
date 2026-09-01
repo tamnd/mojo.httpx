@@ -160,6 +160,18 @@ A `Cookie` header the caller wrote themselves is never touched. That is what url
 
 Per request cookies merge over the client's for that one call and are not carried across a redirect, which is also httpx's behaviour. They were an argument about one call to one URL, and the hop is a different URL.
 
+## A hook takes the value and gives it back
+
+httpx hands a hook a request or a response and lets it mutate what it was given. `_hooks.mojo` cannot: a thin function pointer in Mojo 1.0 cannot take a `mut` parameter, and thin function pointers are the whole basis of the vtable that makes a pluggable hook storable at all. So the signature passes ownership in and takes it back out, and a hook that changes nothing writes `return request^`.
+
+It turns out to be the better contract. A hook that raises has already taken the response with it, so the response is destroyed as that frame unwinds and the connection it was holding goes back to the pool, with nothing in the client having to remember to close it. httpx has an explicit `response.close()` in its `except BaseException` for exactly that, and there is nothing here for it to do.
+
+Where the hooks run is copied from httpx and it matters. Both lists run inside the redirect loop, once per send, so a call that follows two redirects runs a request hook three times and a digest handshake runs it twice. A hook that only saw the last request of a chain would be a hook that missed the request that actually got redirected. The request hook runs after headers, cookies and auth have all been merged, so it sees what the transport is about to be handed rather than what the caller wrote. The response hook runs after cookies have been extracted, so a hook sees the jar already updated, and before the history is attached, which is where httpx runs it too.
+
+`EventHooks` holds `List[AnyRequestHook]` and `List[AnyResponseHook]`, which are the same erasure as `AnyTransport` and `AnyAuth`, and `copy` shares state rather than duplicating it so a handle the caller kept and the one in the client are the same counter. Both lists are iterated by index rather than with `for ref`, because iterating a list in Mojo 1.0 wants a copyable element and a hook is deliberately not one.
+
+Boxing a hook is what turned up a real bug in `ErasedBox`. A stateless hook, the kind that only prints a line, is a struct with no fields and therefore no size, and asking a `List` for room for one value of a zero sized type hands back the alignment sentinel rather than an allocation. Freeing that number corrupts the heap, somewhere else and much later. The box now wraps whatever it is given in a `_Cell` carrying a padding byte, so there is always something real to allocate and free.
+
 ## The hash functions are written out, not linked
 
 MD5, SHA-1, SHA-256 and SHA-512 are implemented in `_util/digest.mojo`, along with base64 in `_util/base64.mojo`. Both exist for one caller, which is digest and basic authentication.

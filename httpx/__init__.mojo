@@ -41,6 +41,15 @@ from httpx._client import Client
 from httpx._config import Timeout
 from httpx._content.multipart import FileUpload, MultipartData
 from httpx._exceptions import ErrorKind
+from httpx._hooks import (
+    AnyRequestHook,
+    AnyResponseHook,
+    EventHooks,
+    RequestHook,
+    ResponseHook,
+    erase_request_hook,
+    erase_response_hook,
+)
 from httpx._models.cookies import Cookie, CookieJar, Cookies, SameSite
 from httpx._models.headers import Headers
 from httpx._models.iterators import ByteChunks, LineChunks, TextChunks

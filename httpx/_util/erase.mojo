@@ -34,6 +34,27 @@ scope that can name its type.
 """
 
 
+struct _Cell[T: Movable & Deinitable](Movable):
+    """The boxed value, plus a byte, so the allocation is never zero sized.
+
+    An empty struct is an ordinary thing to box. A hook that only logs and an
+    auth scheme that only reads an environment variable both have no fields, and
+    both are types a user is likely to write.
+
+    They cannot be allocated directly. A `List[T]` asked for room for a type of
+    size zero hands back the alignment sentinel rather than a real allocation,
+    and passing that to `free` corrupts the heap, which shows up much later and
+    somewhere else entirely. So the box pads rather than refusing.
+    """
+
+    var value: Self.T
+    var _pad: UInt8
+
+    def __init__(out self, var value: Self.T):
+        self.value = value^
+        self._pad = 0
+
+
 struct ErasedBox(Movable):
     """A reference counted heap value that no longer knows its own type."""
 
@@ -76,11 +97,11 @@ struct ErasedBox(Movable):
             # this same `T`. `AnyTransport` and its relatives are the only
             # things that build a box, they build it and the trampolines from
             # one type parameter, and nothing hands out the address.
-            var p = Ptr[T](unsafe_from_address=address)
+            var p = Ptr[_Cell[T]](unsafe_from_address=address)
             p.unsafe_deinit_pointee()
             p.unsafe_free()
 
-        return Self(_leak[T](value^), _leak[Int](1), _drop)
+        return Self(_leak[_Cell[T]](_Cell[T](value^)), _leak[Int](1), _drop)
 
     def copy(self) -> Self:
         """Another reference to the same value.
@@ -103,7 +124,7 @@ struct ErasedBox(Movable):
             self._drop(self._value)
             refs.unsafe_free()
 
-    def get[T: AnyType](self) -> ref[MutAnyOrigin] T:
+    def get[T: Movable & Deinitable](self) -> ref[MutAnyOrigin] T:
         """The boxed value, as the type it was made from.
 
         Mutable through an immutable box, which is deliberate and is the reason
@@ -115,7 +136,7 @@ struct ErasedBox(Movable):
         a trampoline generated from the same type parameter as the box, so
         nothing outside this pattern can get the type wrong.
         """
-        return Ptr[T](unsafe_from_address=self._value)[]
+        return Ptr[_Cell[T]](unsafe_from_address=self._value)[].value
 
 
 def _leak[T: Movable & Deinitable](var value: T) -> Int:

@@ -34,6 +34,21 @@ struct Counted(Movable):
         return self.n
 
 
+struct Stateless(Movable):
+    """A struct with no fields, which is a size of zero bytes.
+
+    An ordinary thing to want boxed. A hook that only prints and an auth scheme
+    that only reads an environment variable both look like this, and both are
+    types a user writes without thinking twice about it.
+    """
+
+    def __init__(out self):
+        pass
+
+    def answer(self) -> Int:
+        return 42
+
+
 def _counter() -> ErasedBox:
     return ErasedBox.make[Int](0)
 
@@ -129,3 +144,23 @@ def test_boxes_survive_a_list() raises:
     assert_equal(boxes[2].get[Counted]().n, 2)
     boxes.clear()
     assert_equal(drops.get[Int](), 4)
+
+
+def test_a_value_with_no_fields_can_be_boxed() raises:
+    # This used to corrupt the heap. Asking a list for room for one value of a
+    # type that occupies no bytes hands back the alignment sentinel rather than
+    # an allocation, and freeing that number is not something the allocator can
+    # survive. The box pads, so there is always something real to free.
+    var box = ErasedBox.make[Stateless](Stateless())
+    assert_equal(box.get[Stateless]().answer(), 42)
+    _drop(box^)
+
+
+def test_boxes_with_no_fields_survive_a_list() raises:
+    # The shape the crash actually took: a list of hooks, cleared.
+    var boxes = List[ErasedBox]()
+    for _ in range(8):
+        boxes.append(ErasedBox.make[Stateless](Stateless()))
+    assert_equal(len(boxes), 8)
+    boxes.clear()
+    assert_true(len(boxes) == 0)

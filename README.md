@@ -126,6 +126,37 @@ The jar is `client.cookies` and it is a plain mutable field, so a caller can see
 
 RFC 6265 is followed rather than approximated. A cookie is scoped by domain, by path and by `Secure`, a `Set-Cookie` naming a domain the responding host does not belong to is dropped, so is one scoped to a public suffix, an expired one deletes rather than stores, and the `Cookie` header is ordered longest path first with creation time breaking ties, which is the order servers quietly depend on. A `Cookie` header you write yourself is left exactly as you wrote it.
 
+Event hooks are the seam for logging, metrics and tracing. A hook sees every request on its way out and every response on its way in, without anything having to be subclassed or wrapped.
+
+```mojo
+import httpx
+from httpx import EventHooks, Request, Response
+
+
+def log_request(var request: Request) raises -> Request:
+    print(">", request.method, request.url)
+    return request^
+
+
+def log_response(var response: Response) raises -> Response:
+    print("<", response.status_code, response.request().url)
+    return response^
+
+
+def main() raises:
+    var hooks = EventHooks()
+    hooks.on_request(log_request)
+    hooks.on_response(log_response)
+
+    with httpx.Client(event_hooks=hooks^) as client:
+        var r = client.get("https://example.com/", follow_redirects=True)
+        print(r.status_code)
+```
+
+A hook takes the value and gives it back rather than being handed a mutable reference, which is the one place the API differs from httpx2 and is forced by what a function pointer can carry in Mojo. Return what you were given unless you meant to change it. A hook runs once per send, so a call that follows two redirects runs it three times and a digest auth handshake runs it twice, and it sees the request the transport is about to be handed, with the client's headers and cookies already on it. A response hook runs before the body has been read, so it can read it, stream it or leave it alone. Raising from a hook stops the call and the error reaches the caller.
+
+`client.event_hooks` is a plain mutable field, so hooks can go on after the client was built. A hook that needs to remember something across calls is a struct implementing `RequestHook` or `ResponseHook`, added with `erase_request_hook`, and `state[T]()` reads it back afterwards.
+
 ## What it will look like
 
 ```mojo
@@ -141,7 +172,7 @@ def main() raises:
     resp.raise_for_status()
 ```
 
-Proxies, multipart uploads, event hooks, custom transports and a `MockTransport` for tests all work the way they do in httpx2.
+Proxies, multipart uploads, custom transports and a `MockTransport` for tests all work the way they do in httpx2.
 
 ## Planned feature set
 

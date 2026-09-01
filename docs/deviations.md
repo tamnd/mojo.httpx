@@ -52,6 +52,14 @@ httpx2 has the same rule and the same error. It is worth stating here anyway, be
 
 A body that is pulled as it is written exists once. `Request.copy()` on a request that has one produces a copy with no body at all, which remembers that it is missing one, so sending the copy raises `RequestNotRead` with a message saying to read the body into memory and use `content=` if it has to go more than once. The alternative would be a copy that quietly sent an empty body to a redirect target, which is the kind of failure that shows up as a support ticket about a missing upload rather than as an error.
 
+### An event hook returns the request or response instead of mutating it
+
+httpx2 hands a hook the object and lets it change what it was given. Here the signature is `def(var Request) raises -> Request`, so a hook takes ownership and hands it back, and one that changes nothing writes `return request^`.
+
+A thin function pointer cannot take a `mut` parameter in Mojo 1.0, and thin function pointers are what make a hook storable in a list at all. Passing ownership through is the only shape that fits. The consolation is that a hook that raises has taken the response with it, so the connection is released by destruction on the way out rather than by an explicit close in the client.
+
+Everything else about hooks matches: `client.event_hooks` is mutable, hooks run once per send rather than once per call, the request hook sees the fully merged request, and the response hook runs before the body is read.
+
 ### `httpx.stream()` does not reuse its connection
 
 `client.stream()` matches httpx2 exactly, including the `with` block, because a response has an `__enter__` and is destroyed at the end of the block. The one shot `httpx.stream()` is the one that differs.
