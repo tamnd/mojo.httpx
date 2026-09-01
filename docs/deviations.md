@@ -45,6 +45,14 @@ The reason is that the iterator would have to reach back into the response to up
 
 What the flag means in practice is the same either way: from that moment the response itself cannot produce anything, and a second reader has to be turned away. `is_stream_consumed` goes true at the same moment in both libraries.
 
+### `httpx.stream()` does not reuse its connection
+
+`client.stream()` matches httpx2 exactly, including the `with` block, because a response has an `__enter__` and is destroyed at the end of the block. The one shot `httpx.stream()` is the one that differs.
+
+In httpx2 the top level helper is a context manager, so the client it built stays alive for as long as the block runs and the connection goes back into that client's pool at the end. Here the helper is an ordinary function that has to return, which means the client is closed before the caller sees the response. The response still works: the connection carrying the body was never in the pool to be closed, and the pool stays alive as long as the response holds a handle on it. What is lost is the reuse. There is no live pool to put the connection back into by the time the body ends, so it is closed instead.
+
+That costs one connection on a call that was already the slow path, since a one shot helper pays a connect and a handshake regardless. Anything streaming more than once should hold a `Client`, which is the same advice the other one shot helpers carry.
+
 ## Judgement calls
 
 ### UTF-16 with no byte order mark decodes little endian

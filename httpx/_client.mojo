@@ -11,11 +11,11 @@ costs a round trip instead of a connect, a DNS lookup and, later, a handshake.
 That is the whole argument for `Client` existing next to `httpx.get`, and it is
 why the one shot helpers in `_api.mojo` are documented as the slow path.
 
-This is the M2 shape of it. Redirects, auth, cookies, event hooks, streaming
-and the content encoders are M4 and land as separate arguments and separate
-files. What is here now is the part the milestone promised, which is a request
-going out over TCP and a parsed response coming back, with the four timeouts
-and the client level headers, base URL and query parameters honoured.
+Redirects, auth, cookies, event hooks and the content encoders are still to
+come and land as separate arguments and separate files. What is here now is a
+request going out over TCP and a parsed response coming back, with the four
+timeouts and the client level headers, base URL and query parameters honoured,
+either read whole or streamed a chunk at a time.
 """
 
 from httpx._config import Timeout
@@ -153,18 +153,60 @@ struct Client(Movable):
         return Request(method, target^, self._headers_for(headers^), content^)
 
     def send(
-        mut self, var request: Request, timeout: Optional[Timeout] = None
+        mut self,
+        var request: Request,
+        timeout: Optional[Timeout] = None,
+        stream: Bool = False,
     ) raises -> Response:
         """Send a request that is already built.
 
         The deadlines are worked out here, at the last moment before the
         transport is called, so that all four phases start from one instant and
         a slow build does not eat the connect budget.
+
+        With `stream` set the call returns as soon as the head has arrived and
+        the body is left on the connection, which also means the connection
+        stays out of the pool until the response is read, closed or dropped.
         """
         if self._closed:
             raise Error("RuntimeError: the client is closed")
         var budget = timeout.value() if timeout else self.timeout
+        if stream:
+            return self._transport.handle_stream(request^, budget.deadlines())
         return self._transport.handle_request(request^, budget.deadlines())
+
+    def stream(
+        mut self,
+        method: StringSpan,
+        url: StringSpan,
+        *,
+        var headers: Headers = Headers(),
+        var content: List[UInt8] = List[UInt8](),
+        var params: QueryParams = QueryParams(),
+        timeout: Optional[Timeout] = None,
+    ) raises -> Response:
+        """Send a request and get the response back before the body arrives.
+
+        For a body too large to want in memory, or one that does not end, such
+        as an event stream. Walk it with `iter_bytes`, `iter_text` or
+        `iter_lines`, or call `read()` to give up and buffer it after all.
+
+        ```mojo
+        with client.stream("GET", "/big.bin") as r:
+            var chunks = r.iter_bytes(65536)
+            while chunks.has_next():
+                sink.write(chunks.next())
+        ```
+
+        The `with` is not decoration. The connection this response is holding
+        goes back to the pool when the body ends and is closed if the block is
+        left before that, and both of those happen because the response was
+        destroyed at the end of the block.
+        """
+        var built = self.build_request(
+            method, url, headers=headers^, content=content^, params=params^
+        )
+        return self.send(built^, timeout, stream=True)
 
     def request(
         mut self,

@@ -171,8 +171,8 @@ def test_a_connection_that_timed_out_is_not_put_back_in_the_pool() raises:
         _ = _send(transport, server, "/delay/3", timeout)
     except:
         pass
-    assert_equal(transport.pool.idle_count(), 0)
-    assert_equal(transport.pool.leased_count(), 0)
+    assert_equal(transport.pool[].idle_count(), 0)
+    assert_equal(transport.pool[].leased_count(), 0)
 
 
 def _send_with(

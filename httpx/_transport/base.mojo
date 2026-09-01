@@ -40,6 +40,19 @@ trait Transport(Movable):
     ) raises -> Response:
         ...
 
+    def handle_stream(
+        mut self, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        """The same, but return as soon as the head has been read.
+
+        Two methods rather than a flag on one, because the two differ in what
+        they own when they return. `handle_request` is finished with the
+        connection; `handle_stream` has handed it to the response and cannot
+        touch it again. A transport with nothing to stream from, such as a mock,
+        answers both the same way and loses nothing by it.
+        """
+        ...
+
     def close(mut self):
         """Release everything held, such as pooled connections.
 
@@ -57,6 +70,9 @@ struct AnyTransport(Movable):
     var _handle_request: def(
         ErasedBox, var Request, Deadlines
     ) raises thin -> Response
+    var _handle_stream: def(
+        ErasedBox, var Request, Deadlines
+    ) raises thin -> Response
     var _close: def(ErasedBox) thin -> None
 
     def __init__(
@@ -65,10 +81,14 @@ struct AnyTransport(Movable):
         handle_request: def(
             ErasedBox, var Request, Deadlines
         ) raises thin -> Response,
+        handle_stream: def(
+            ErasedBox, var Request, Deadlines
+        ) raises thin -> Response,
         close: def(ErasedBox) thin -> None,
     ):
         self._state = state^
         self._handle_request = handle_request
+        self._handle_stream = handle_stream
         self._close = close
 
     def copy(self) -> Self:
@@ -78,12 +98,22 @@ struct AnyTransport(Movable):
         implicit copy, and a silent bitwise copy of the handle would leave the
         reference count behind.
         """
-        return Self(self._state.copy(), self._handle_request, self._close)
+        return Self(
+            self._state.copy(),
+            self._handle_request,
+            self._handle_stream,
+            self._close,
+        )
 
     def handle_request(
         mut self, var request: Request, deadlines: Deadlines
     ) raises -> Response:
         return self._handle_request(self._state, request^, deadlines)
+
+    def handle_stream(
+        mut self, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        return self._handle_stream(self._state, request^, deadlines)
 
     def close(mut self):
         self._close(self._state)
@@ -103,7 +133,14 @@ def erase[T: Transport & Deinitable](var transport: T) -> AnyTransport:
     ) raises -> Response:
         return state.get[T]().handle_request(request^, deadlines)
 
+    def _handle_stream(
+        state: ErasedBox, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        return state.get[T]().handle_stream(request^, deadlines)
+
     def _close(state: ErasedBox) -> None:
         state.get[T]().close()
 
-    return AnyTransport(ErasedBox.make[T](transport^), _handle_request, _close)
+    return AnyTransport(
+        ErasedBox.make[T](transport^), _handle_request, _handle_stream, _close
+    )
