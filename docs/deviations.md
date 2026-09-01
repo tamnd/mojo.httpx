@@ -62,6 +62,22 @@ That costs one connection on a call that was already the slow path, since a one 
 
 ## Judgement calls
 
+### The auth tuple shorthand is a function
+
+httpx2 lets you write `auth=("user", "pass")` and turns the pair into a `BasicAuth` behind your back. Here it is `auth=basic_auth("user", "pass")`, with `digest_auth` and `netrc_auth` alongside it.
+
+The tuple form would have to be another overload of every method that takes an auth, and there are eleven of those on `Client` and nine more in `_api.mojo`, because Mojo has no runtime type dispatch to fold them back together. The function is the same amount of typing, it names the scheme it builds, and `auth=basic_auth(...)` reads as the thing it is rather than as a pair of strings that happens to be interpreted.
+
+### A malformed digest challenge raises a protocol error
+
+httpx2 raises `KeyError` from `DigestAuth._parse_challenge` when the challenge names an algorithm it does not implement, because the algorithm is looked up in a dictionary with no default. It raises its own `ProtocolError` for a missing `realm` or `nonce`.
+
+Both cases raise `ProtocolError` here. The two failures are the same failure, which is a server sending a challenge this client cannot answer, and a `KeyError` escaping an HTTP library is a bug rather than an interface.
+
+### `auth-int` is refused rather than raising `NotImplementedError`
+
+A challenge offering only `qop="auth-int"` raises `ProtocolError` here and `NotImplementedError` in httpx2. Neither library implements it. The reason it is not implemented in either is that `auth-int` covers the request body in the hash, so the entire body has to be in memory and hashed before the headers can be written, and no server in the wild asks for it.
+
 ### A cross origin redirect drops `Host` rather than rewriting it
 
 httpx2 sets `headers["Host"] = url.netloc` when a redirect crosses an origin. This library removes the stale `Host` instead and lets the head serializer put the right one back.

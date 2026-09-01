@@ -140,6 +140,16 @@ The loop is in the client. It sends, and if the response is not a redirect it re
 
 The budget is a hop count and not a cycle detector, because a server can redirect in a loop that never repeats a URL, so counting is the only check that always terminates.
 
+## Auth is a state machine, and it wraps redirects
+
+httpx writes an auth scheme as a generator. It yields the request to send, the client sends it, the response is fed back in with `send`, and the generator either yields another request or stops. The shape is right and Mojo 1.0 has no generators, so `_auth.mojo` splits it in two: `sign` returns the request that goes out first, and `next_request` is handed the response and returns either the next request or nothing. A scheme that only needs the first, like Basic, answers the second with nothing and costs no extra round trip.
+
+Nothing in `_auth.mojo` sends anything, which is what makes a scheme testable without a server and what keeps the retry policy in the client rather than spread across three schemes.
+
+Auth is the outer loop and redirects are the inner one, the same order httpx uses. A challenge can come back from the end of a redirect chain, and answering it means starting the chain again from the URL the caller asked for. The other order would answer the challenge at whichever hop produced it, which is a different server asking a different question. What that costs is one argument: the redirect loop takes the history an auth retry has already accumulated, so the `history` a caller finally sees spans both loops in the order things actually happened.
+
+`AnyAuth` is the same type erasure as `AnyTransport`, and its `copy` shares state rather than duplicating it. The client takes a copy on every send, and a digest scheme that forgot the challenge it had already been given would pay the extra round trip on every single request instead of only the first.
+
 ## The hash functions are written out, not linked
 
 MD5, SHA-1, SHA-256 and SHA-512 are implemented in `_util/digest.mojo`, along with base64 in `_util/base64.mojo`. Both exist for one caller, which is digest and basic authentication.

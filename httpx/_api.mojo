@@ -11,6 +11,7 @@ docstrings say what to use instead as soon as there is a second request, which
 is the same thing httpx does.
 """
 
+from httpx._auth import AnyAuth
 from httpx._client import Client
 from httpx._config import Timeout
 from httpx._models.headers import Headers
@@ -27,6 +28,7 @@ def request(
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
+    var auth: Optional[AnyAuth] = None,
 ) raises -> Response:
     """Send one request through a client that lives for one request.
 
@@ -44,6 +46,7 @@ def request(
             params=params^,
             timeout=timeout,
             follow_redirects=follow_redirects,
+            auth=auth^,
         )
     except e:
         # The pool has to be closed on the way out as well, or a failed one shot
@@ -63,6 +66,7 @@ def stream(
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
+    var auth: Optional[AnyAuth] = None,
 ) raises -> Response:
     """Send one request and return before the body has arrived.
 
@@ -84,6 +88,7 @@ def stream(
             params=params^,
             timeout=timeout,
             follow_redirects=follow_redirects,
+            auth=auth^,
         )
     except e:
         client.close()
@@ -99,6 +104,7 @@ def get(
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
+    var auth: Optional[AnyAuth] = None,
 ) raises -> Response:
     return request(
         "GET",
@@ -107,6 +113,7 @@ def get(
         params=params^,
         timeout=timeout,
         follow_redirects=follow_redirects,
+        auth=auth^,
     )
 
 
@@ -117,6 +124,7 @@ def head(
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
+    var auth: Optional[AnyAuth] = None,
 ) raises -> Response:
     return request(
         "HEAD",
@@ -125,6 +133,7 @@ def head(
         params=params^,
         timeout=timeout,
         follow_redirects=follow_redirects,
+        auth=auth^,
     )
 
 
@@ -135,6 +144,7 @@ def options(
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
+    var auth: Optional[AnyAuth] = None,
 ) raises -> Response:
     return request(
         "OPTIONS",
@@ -143,6 +153,7 @@ def options(
         params=params^,
         timeout=timeout,
         follow_redirects=follow_redirects,
+        auth=auth^,
     )
 
 
@@ -153,6 +164,7 @@ def delete(
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
+    var auth: Optional[AnyAuth] = None,
 ) raises -> Response:
     return request(
         "DELETE",
@@ -161,6 +173,7 @@ def delete(
         params=params^,
         timeout=timeout,
         follow_redirects=follow_redirects,
+        auth=auth^,
     )
 
 
@@ -172,6 +185,7 @@ def post(
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
+    var auth: Optional[AnyAuth] = None,
 ) raises -> Response:
     return request(
         "POST",
@@ -181,6 +195,7 @@ def post(
         params=params^,
         timeout=timeout,
         follow_redirects=follow_redirects,
+        auth=auth^,
     )
 
 
@@ -192,6 +207,7 @@ def put(
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
+    var auth: Optional[AnyAuth] = None,
 ) raises -> Response:
     return request(
         "PUT",
@@ -201,6 +217,7 @@ def put(
         params=params^,
         timeout=timeout,
         follow_redirects=follow_redirects,
+        auth=auth^,
     )
 
 
@@ -212,6 +229,7 @@ def patch(
     var params: QueryParams = QueryParams(),
     timeout: Optional[Timeout] = None,
     follow_redirects: Bool = False,
+    var auth: Optional[AnyAuth] = None,
 ) raises -> Response:
     return request(
         "PATCH",
@@ -221,4 +239,5 @@ def patch(
         params=params^,
         timeout=timeout,
         follow_redirects=follow_redirects,
+        auth=auth^,
     )

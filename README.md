@@ -2,7 +2,7 @@
 
 A full featured HTTP client for Mojo, with the same API and the same developer experience as [httpx2](https://github.com/pydantic/httpx2).
 
-**Status: pre-alpha.** HTTP/1.1 requests work over TCP and over TLS today, so `http://` and `https://` both work. Streaming works in both directions: `client.stream()` returns as soon as the head has arrived and the body is read off the wire a chunk at a time with `iter_bytes`, `iter_text` or `iter_lines`, and `content_stream=` sends a request body that is pulled as it is written. HTTP/2, redirects, auth and cookies do not exist yet. See the [roadmap](docs/roadmap.md) for what is landing and when. Do not use this in production.
+**Status: pre-alpha.** HTTP/1.1 requests work over TCP and over TLS today, so `http://` and `https://` both work. Streaming works in both directions: `client.stream()` returns as soon as the head has arrived and the body is read off the wire a chunk at a time with `iter_bytes`, `iter_text` or `iter_lines`, and `content_stream=` sends a request body that is pulled as it is written. HTTP/2 and cookies do not exist yet. See the [roadmap](docs/roadmap.md) for what is landing and when. Do not use this in production.
 
 ## Why
 
@@ -80,6 +80,28 @@ def main() raises:
 
 `follow_redirects=` is also an argument on every request method, so one call can differ from the client it was made on. Left off, a 3xx comes back as it is and `r.next_request()` holds the request that would have been sent, which is how a caller inspects or rewrites a hop before taking it. `Authorization` is dropped when a hop crosses an origin, so no server can talk this client into handing your credentials to an address you never named.
 
+Basic, digest and netrc authentication all work, on the client or on one request.
+
+```mojo
+import httpx
+from httpx import basic_auth, digest_auth
+
+def main() raises:
+    with httpx.Client(auth=basic_auth("alice", "s3cret")) as client:
+        var r = client.get("https://api.example.com/private")
+        print(r.status_code)
+
+        # And per request, which wins over whatever the client was given.
+        var other = client.get(
+            "https://api.example.com/other", auth=digest_auth("bob", "hunter2")
+        )
+        print(other.status_code)
+```
+
+Digest costs one extra round trip the first time, because there is nothing to answer until the server has sent a challenge, and none after that: the challenge is remembered and every later request goes out authenticated straight away. The 401 that was answered stays in `r.history()`, the same way a followed redirect does. `netrc_auth()` reads `$NETRC` or `~/.netrc` once, when you build it, so a file that changes under a running program cannot give two requests in the same session two different identities.
+
+Credentials are redacted everywhere this library writes a header out. Printing a `Headers`, a `Request` or a `Response` shows `[secret, 28 bytes]` in place of `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie`, so a debug print or a logged repr cannot leak a password. Asking for the value by name still gives you the value.
+
 ## What it will look like
 
 ```mojo
@@ -95,7 +117,7 @@ def main() raises:
     resp.raise_for_status()
 ```
 
-Cookies, auth, proxies, multipart uploads, event hooks, custom transports and a `MockTransport` for tests all work the way they do in httpx2.
+Cookies, proxies, multipart uploads, event hooks, custom transports and a `MockTransport` for tests all work the way they do in httpx2.
 
 ## Planned feature set
 
