@@ -168,9 +168,16 @@ def encode_string[o: ImmOrigin](data: Span[UInt8, o], mut out: Bytes) raises:
     Huffman is a win on the header text that shaped the code and a loss on
     anything else, and the only way to know which one a given value is, is to
     add up the code lengths.
+
+    A tie goes to the coded form. The two are the same size on the wire, length
+    octet included, so nothing is being traded away, and it is what the encoder
+    behind the RFC 7541 appendix C examples does, which keeps those usable as
+    test vectors for this one. The empty string is the one tie that does not,
+    because there is no code to send and `00` is what the flag being clear is
+    for.
     """
     var coded = huffman_encoded_length(data)
-    if coded < len(data):
+    if coded > 0 and coded <= len(data):
         encode_integer(coded, 7, _HUFFMAN_FLAG, out)
         huffman_encode(data, out)
         return

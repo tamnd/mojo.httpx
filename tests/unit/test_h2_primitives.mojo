@@ -192,6 +192,14 @@ def test_a_string_is_sent_plain_when_huffman_would_not_help() raises:
     assert_equal(_as_hex(out), "03000102")
 
 
+def test_a_string_that_codes_to_its_own_length_is_still_coded() raises:
+    # `307` is three octets either way, and RFC 7541 appendix C.6.2 sends it
+    # coded. Going the other way on the tie would put this implementation one
+    # byte off the appendix on a sequence that is otherwise identical, and
+    # there would be nothing gained for it.
+    assert_equal(_string_hex("307"), "83640eff")
+
+
 def test_an_empty_string_is_a_length_of_zero() raises:
     var out = Bytes()
     encode_string("".as_bytes(), out)
