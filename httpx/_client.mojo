@@ -11,18 +11,20 @@ costs a round trip instead of a connect, a DNS lookup and, later, a handshake.
 That is the whole argument for `Client` existing next to `httpx.get`, and it is
 why the one shot helpers in `_api.mojo` are documented as the slow path.
 
-Event hooks and the content encoders are still to come and land as separate
-arguments and separate files. What is here now is a request going out over TCP
-and a parsed response coming back, with the four timeouts and the client level
-headers, base URL, query parameters and cookies honoured, either read whole or
-streamed a chunk at a time, a redirect chain followed for anyone who asked for
-that, and an auth scheme answering a challenge around the outside of it.
+The content encoders are still to come and land as separate arguments and
+separate files. What is here now is a request going out over TCP and a parsed
+response coming back, with the four timeouts and the client level headers, base
+URL, query parameters and cookies honoured, either read whole or streamed a
+chunk at a time, a redirect chain followed for anyone who asked for that, an
+auth scheme answering a challenge around the outside of it, and event hooks
+watching every send.
 """
 
 from httpx._auth import AnyAuth
 from httpx._config import Timeout
 from httpx._exceptions import ErrorKind, new_error
 from httpx._ffi.clock import unix_now
+from httpx._hooks import EventHooks
 from httpx._models.cookies import Cookies
 from httpx._models.headers import Headers
 from httpx._models.request import Request
@@ -80,6 +82,14 @@ struct Client(Movable):
     var max_redirects: Int
     """How many hops before `TooManyRedirects`. Twenty, as in httpx."""
 
+    var event_hooks: EventHooks
+    """Callbacks run on every request sent and every response received.
+
+    Public and mutable, like httpx's property of the same name, so hooks can go
+    on after the client was built. Every hop of a redirect chain and every auth
+    retry is a send and runs them.
+    """
+
     var _auth: Optional[AnyAuth]
     var _transport: AnyTransport
     var _closed: Bool
@@ -108,6 +118,7 @@ struct Client(Movable):
         follow_redirects: Bool = False,
         max_redirects: Int = DEFAULT_MAX_REDIRECTS,
         var auth: Optional[AnyAuth] = None,
+        var event_hooks: EventHooks = EventHooks(),
     ) raises:
         self.headers = headers^
         self.params = params^
@@ -116,6 +127,7 @@ struct Client(Movable):
         self.timeout = timeout.value() if timeout else Timeout()
         self.follow_redirects = follow_redirects
         self.max_redirects = max_redirects
+        self.event_hooks = event_hooks^
         self._auth = auth^
         var tls = TlsConfig()
         tls.verify = verify
@@ -142,6 +154,7 @@ struct Client(Movable):
         self.timeout = Timeout()
         self.follow_redirects = False
         self.max_redirects = DEFAULT_MAX_REDIRECTS
+        self.event_hooks = EventHooks()
         self._auth = None
         self._transport = transport^
         self._closed = False
@@ -350,6 +363,12 @@ struct Client(Movable):
         var prior = earlier^
         var hops = 0
         while True:
+            # Indexed rather than `for ref`, which wants a copyable element and
+            # a hook is not one.
+            for i in range(len(self.event_hooks.request)):
+                var passed = self.event_hooks.request[i].call(current^)
+                current = passed^
+
             var response: Response
             if stream:
                 response = self._transport.handle_stream(
@@ -365,6 +384,16 @@ struct Client(Movable):
             _ = self.cookies.extract(
                 response.request().url, response.headers, unix_now()
             )
+
+            # After the jar, so a hook sees the cookies the response already
+            # stored, and before the history is attached, which is the order
+            # httpx runs them in. A hook that raises took the response with it
+            # and the connection is released as that frame unwinds, so there is
+            # nothing to close here.
+            for i in range(len(self.event_hooks.response)):
+                var passed = self.event_hooks.response[i].call(response^)
+                response = passed^
+
             if prior:
                 response.inherit_history(prior.take())
             if not response.is_redirect():
