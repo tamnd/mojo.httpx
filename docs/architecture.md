@@ -78,6 +78,8 @@ Each encoder returns bytes plus the content type that describes them, and touche
 
 `content=` produces no content type at all. Bytes with no further description are `application/octet-stream` as far as HTTP is concerned, but guessing that on the caller's behalf means silently labelling every hand built body, including ones that are already JSON or already form encoded. httpx2 sets nothing here and neither does this.
 
+Choosing between the six body arguments happens in one function above the encoders, which counts how many the caller filled in and raises when there is more than one. A precedence rule would be the other option, and it is what httpx2 has: pass `data=` and `json=` together and one of them is dropped without a word, so the caller finds out from the server, several layers away from the line that caused it. There is no reading of that call where the caller knew which body they wanted, so refusing and naming both is the more useful answer. The one pair that is not a conflict is `data=` with `files=`, which is a single multipart body carrying the fields and the files, fields written first, as a browser sends a form with a file input on it.
+
 ## Decoding a body never fails
 
 `response.text()` cannot raise on the bytes. Every undecodable sequence becomes U+FFFD, one per maximal subpart, which is what Python's `errors="replace"` produces and therefore what httpx2 gives back. The reasoning is that a body which does not decode still deserves to be shown: a client that threw here would turn a mislabelled response into one the caller cannot inspect at all, at exactly the moment they most want to look at it.

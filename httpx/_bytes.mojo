@@ -131,6 +131,21 @@ struct Bytes(Boolable, Movable, Sized, Writable):
         """
         return Span(self._data)
 
+    def take_list(mut self) -> List[UInt8]:
+        """Give the buffer up as a plain list, without copying it.
+
+        For the seam with code that holds bodies as `List[UInt8]`, which is what
+        `Request` and `Response` do. `Bytes(list^)` is the way back, and neither
+        direction moves any bytes.
+
+        Takes `mut self` and leaves an empty buffer rather than consuming the
+        value, because Mojo 1.0 has no way to move a field out of a value and
+        suppress the destructor for what is left.
+        """
+        var out = self._data^
+        self._data = List[UInt8]()
+        return out^
+
     def to_string(self) raises -> String:
         """Decode as UTF-8, or raise.
 

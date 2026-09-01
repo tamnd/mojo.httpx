@@ -26,7 +26,7 @@ Keep a `Client` as soon as there is a second request, because a client holds its
 
 ```mojo
 import httpx
-from httpx import Client, Headers, Timeout, URL
+from httpx import Client, Headers, Json, Timeout, URL
 
 def main() raises:
     var headers = Headers()
@@ -40,11 +40,32 @@ def main() raises:
         var listing = client.get("/items")
         print(listing.status_code)
 
-        var content = List[UInt8]()
-        content.extend('{"name": "widget"}'.as_bytes())
-        var created = client.post("/items", content=content^)
+        var payload = Json.object()
+        payload.set("name", Json("widget"))
+        var created = client.post("/items", json=payload^)
         print(created.status_code)
 ```
+
+A body goes on with `content=` for bytes, `text=` for a string, `data=` for a form, `files=` for a multipart upload, `json=` for a document, or `content_stream=` for one pulled as it is written. httpx2 folds the first two into a single `content=` and tells them apart at runtime, which Mojo cannot do, so they are separate arguments.
+
+```mojo
+import httpx
+from httpx import FileUpload, MultipartData, QueryParams
+
+def main() raises:
+    with httpx.Client() as client:
+        var form = QueryParams().add("q", "mojo").add("page", "2")
+        var found = client.post("https://example.com/search", data=form^)
+        print(found.status_code)
+
+        var files = MultipartData()
+        files.add("caption", "on holiday")
+        files.add_file(FileUpload("photo", "beach.jpg", "the jpeg bytes"))
+        var sent = client.post("https://example.com/upload", files=files^)
+        print(sent.status_code)
+```
+
+Each of those carries the content type that describes it, and an explicit `Content-Type` in `headers=` wins over it, so `json=` works against an API with its own media type. Passing two bodies raises and names both, rather than dropping one and letting you find out from the server, which is what httpx2 does with `data=` and `json=` together. The one combination that is allowed is `data=` with `files=`, which is not two bodies but one multipart body carrying the fields and the files, exactly as a browser sends it. [Request bodies](docs/content.md) covers all six.
 
 A body too large to want in memory, or one that does not end, is read with `stream` instead.
 
@@ -281,6 +302,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. It lists 
 
 - [Architecture](docs/architecture.md) for the layer model and the design decisions behind it
 - [TLS](docs/tls.md) for the defaults, custom CA bundles, client certificates, and reading a handshake failure
+- [Request bodies](docs/content.md) for the six body arguments, the content type each implies, and why passing two raises
 - [JSON](docs/json.md) for reading a body, building one, and what the parser refuses
 - [Deviations](docs/deviations.md) for every place this behaves differently from httpx2, and why
 - [Roadmap](docs/roadmap.md) for milestones M0 through M9
