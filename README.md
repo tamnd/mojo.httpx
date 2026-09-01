@@ -157,6 +157,34 @@ A hook takes the value and gives it back rather than being handed a mutable refe
 
 `client.event_hooks` is a plain mutable field, so hooks can go on after the client was built. A hook that needs to remember something across calls is a struct implementing `RequestHook` or `ResponseHook`, added with `erase_request_hook`, and `state[T]()` reads it back afterwards.
 
+Tests of your own code swap the transport rather than the library. A `MockRouter` is a table of routes matched in order, and everything above the transport still runs, so redirects are still followed, cookies are still stored and sent, and auth still answers a challenge.
+
+```mojo
+from httpx import Client, MockRouter, Route, erase_transport
+
+
+def main() raises:
+    var router = MockRouter()
+    router.add(Route.get("/users/1").respond_json(200, '{"name": "alice"}'))
+    router.add(Route.post("/users").respond(201))
+    router.add(Route.any().respond(404))
+
+    var transport = erase_transport(router^)
+    var handle = transport.copy()
+
+    var client = Client(transport^)
+    var r = client.get("https://api.example.com/users/1")
+    print(r.status_code, r.json()["name"].as_string())
+
+    ref seen = handle.state[MockRouter]()
+    print(seen.routes[0].call_count())
+    print(String(seen.calls[0].url))
+```
+
+A route written as a path matches that path on any host, and one written as an absolute URL pins the scheme, host and port too. `with_params` and `with_headers` narrow it further, and both are subset matches, so a tracking parameter the test does not care about does not stop the match. `respond` called more than once queues the answers and the last one repeats, which is how a fail once then succeed retry gets tested. A request that matches no route raises and says what it was, rather than answering 404 and turning a typo into a puzzling failure somewhere else.
+
+The recording is the other half. `router.calls` is every request that reached the router and `route.calls` is what each route answered, with `called()` and `call_count()` on top, and `assert_all_called()` catches a route whose pattern was wrong. Taking a `copy()` of the erased transport before handing it to the client is how you read any of that back afterwards, because a copy is the same transport. `MockTransport` is the simpler one: a single function that answers everything, for when the reply depends on the request.
+
 ## What it will look like
 
 ```mojo
@@ -172,7 +200,7 @@ def main() raises:
     resp.raise_for_status()
 ```
 
-Proxies, multipart uploads, custom transports and a `MockTransport` for tests all work the way they do in httpx2.
+Proxies, multipart uploads and custom transports all work the way they do in httpx2.
 
 ## Planned feature set
 

@@ -15,7 +15,7 @@ from httpx._models.request import Request
 from httpx._models.response import Response
 from httpx._models.url import URL
 from httpx._pool.limits import Limits
-from httpx._transport.base import AnyTransport, Transport, erase
+from httpx._transport.base import AnyTransport, Transport, erase_transport
 from httpx._transport.http import HTTPTransport
 from httpx._transport.mock import MockTransport
 from httpx._util.erase import ErasedBox
@@ -113,7 +113,7 @@ def test_a_mock_transport_records_what_it_was_given() raises:
 
 
 def test_an_erased_transport_still_answers() raises:
-    var transport = erase[MockTransport](MockTransport(_hello))
+    var transport = erase_transport[MockTransport](MockTransport(_hello))
     var response = transport.handle_request(_request("/erased"), _deadlines())
     assert_equal(response.text(), "hello from /erased")
 
@@ -122,7 +122,7 @@ def test_erasure_reaches_the_concrete_transport() raises:
     # The dispatch has to land on this type's method rather than on some
     # default, so the assertion is on something only this transport does.
     var counts = ErasedBox.make[Int](0)
-    var transport = erase[Recorder](Recorder(counts.copy()))
+    var transport = erase_transport[Recorder](Recorder(counts.copy()))
     _ = transport.handle_request(_request("/"), _deadlines())
     _ = transport.handle_request(_request("/"), _deadlines())
     assert_equal(counts.get[Int](), 2)
@@ -130,7 +130,7 @@ def test_erasure_reaches_the_concrete_transport() raises:
 
 def test_closing_an_erased_transport_reaches_it_too() raises:
     var counts = ErasedBox.make[Int](0)
-    var transport = erase[Recorder](Recorder(counts.copy()))
+    var transport = erase_transport[Recorder](Recorder(counts.copy()))
     transport.close()
     assert_equal(counts.get[Int](), 100)
 
@@ -140,7 +140,7 @@ def test_a_copied_handle_drives_the_same_transport() raises:
     # two handles on separate copies would be two connection pools and twice
     # the connection limit.
     var counts = ErasedBox.make[Int](0)
-    var transport = erase[Recorder](Recorder(counts.copy()))
+    var transport = erase_transport[Recorder](Recorder(counts.copy()))
     var second = transport.copy()
     _ = transport.handle_request(_request("/"), _deadlines())
     _ = second.handle_request(_request("/"), _deadlines())
@@ -152,9 +152,9 @@ def test_transports_of_different_types_live_in_one_list() raises:
     # runtime, and without this it could only hold one type.
     var counts = ErasedBox.make[Int](0)
     var transports = List[AnyTransport]()
-    transports.append(erase[MockTransport](MockTransport(_hello)))
-    transports.append(erase[MockTransport](MockTransport(_teapot)))
-    transports.append(erase[Recorder](Recorder(counts.copy())))
+    transports.append(erase_transport[MockTransport](MockTransport(_hello)))
+    transports.append(erase_transport[MockTransport](MockTransport(_teapot)))
+    transports.append(erase_transport[Recorder](Recorder(counts.copy())))
 
     assert_equal(
         transports[0].handle_request(_request("/a"), _deadlines()).text(),
@@ -202,7 +202,9 @@ def test_an_erased_http_transport_works_end_to_end() raises:
     # The whole stack as a client will use it: an erased transport, a real
     # socket, and a response that came back through the vtable.
     var server = TestServer()
-    var transport = erase[HTTPTransport](HTTPTransport(Limits(5, 2, 30.0)))
+    var transport = erase_transport[HTTPTransport](
+        HTTPTransport(Limits(5, 2, 30.0))
+    )
     var response = _get_erased(transport, server, "/get")
     assert_equal(response.status_code, 200)
     transport.close()
