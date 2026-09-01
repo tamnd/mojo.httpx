@@ -84,6 +84,36 @@ Here those three arguments are `Optional`, and an empty one already means use th
 
 A second sentinel type would have matched httpx2's spelling, at the cost of an `Optional`-shaped thing that is not an `Optional` on twenty method signatures, and a reader who has to learn which of the two absences they are looking at. A scheme that adds no header is the same behaviour described in terms the library already has.
 
+### `raise_for_status()` returns nothing
+
+httpx2 hands the response back so the call can be chained, as in `r.raise_for_status().json()`. Here it returns nothing and `r.raise_for_status()` goes on its own line.
+
+A `Response` is not copyable, so a method that gave one back would have to consume the receiver, and `r` would be gone afterwards. Two lines instead of one is cheaper than losing the response you were about to read. The error itself matches: `HTTPStatusError` for anything outside 2xx, naming the class of status, the code, the phrase the server sent and the URL, with the redirect location added when a 3xx got through because following was turned off.
+
+The one line httpx2 adds and this does not is the MDN link. It doubles the length of every status error in a log for a URL the reader either already knows or can search for.
+
+### `elapsed` is a `Duration`, and it covers the body
+
+httpx2 gives back a `datetime.timedelta`, which Python already had. Mojo does not have one, so `httpx.Duration` is it: a nanosecond count with `seconds()`, `milliseconds()`, `microseconds()` and comparison. Deliberately small, because measuring an interval is all it is for.
+
+The semantics match httpx2 otherwise. It is available once the body has been read or the response closed, and raises before that, because a number covering only the status line would quietly answer a different question than the one asked. It is per hop, so every response in a redirect chain's history reports its own exchange rather than the total.
+
+### `links` is a list, and `link_url` resolves
+
+httpx2's `Response.links` is a dictionary keyed on the `rel` value, falling back to the URL when there is no `rel`. Here `links()` gives back the parsed links in the order the header wrote them, and `link_url("next")` gives back the first link carrying that relation, resolved against the response URL and ready to fetch.
+
+The dictionary loses two things. Two links in one header may carry the same relation, which is legal and which a dictionary silently drops one of, and a single link may carry several relations, as in `rel="next preload"`, which the dictionary files under a key nobody would think to look up. The list keeps both, and `has_rel` matches one relation out of the several, case insensitively, which is what RFC 8288 asks for.
+
+Resolving is the other difference. A relative target is legal and common in a paginated API, and httpx2 hands it back unjoined for the caller to remember to join. `link_url` joins it, which means it raises for a response built by hand, since there is no URL to resolve against.
+
+The parser is stricter about the syntax and looser about the input than httpx2's, which uses a regular expression. A quoted parameter value holding a comma, a semicolon or an equals sign is read whole here; in httpx2 the first drops everything after it and the last two stop the parameter scan. A `title` is prose written by a person, so a comma in one is ordinary rather than exotic.
+
+### `num_bytes_downloaded` lives on the iterator too
+
+httpx2 keeps the counter on the response and increments it as `iter_raw` yields. Here a response hands its stream to the iterator and cannot see another byte afterwards, so the counter is on `ByteChunks`, `TextChunks` and `LineChunks` as well as on `Response`.
+
+`Response.num_bytes_downloaded()` answers for a response that was read or built by hand. For a streamed body being consumed through an iterator, which is the case a progress bar exists for, the iterator is what has the number.
+
 ### A malformed digest challenge raises a protocol error
 
 httpx2 raises `KeyError` from `DigestAuth._parse_challenge` when the challenge names an algorithm it does not implement, because the algorithm is looked up in a dictionary with no default. It raises its own `ProtocolError` for a missing `realm` or `nonce`.

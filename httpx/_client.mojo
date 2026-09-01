@@ -27,6 +27,7 @@ from httpx._content.encode import encode_request_body
 from httpx._content.multipart import MultipartData
 from httpx._exceptions import ErrorKind, new_error
 from httpx._ffi.clock import unix_now
+from httpx._io.deadline import now_ns
 from httpx._hooks import EventHooks
 from httpx._models.cookies import Cookies
 from httpx._models.headers import Headers
@@ -423,6 +424,11 @@ struct Client(Movable):
                 current = passed^
 
             var response: Response
+            # Per hop rather than for the chain, so every response in the
+            # history reports how long its own exchange took. A caller who wants
+            # the total adds them up; one who wants to know which hop was slow
+            # cannot recover that from a single number.
+            var started = now_ns()
             if stream:
                 response = self._transport.handle_stream(
                     current^, budget.deadlines()
@@ -431,6 +437,7 @@ struct Client(Movable):
                 response = self._transport.handle_request(
                     current^, budget.deadlines()
                 )
+            response.begin_timing(started)
             # Before anything reads the body, since a hook calling `text()` on
             # a response with no charset on it should get the client's answer
             # rather than the bare default.

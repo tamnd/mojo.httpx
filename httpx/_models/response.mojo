@@ -13,6 +13,7 @@ purpose.
 
 from httpx._exceptions import ErrorKind, new_error
 from httpx._ffi.clock import unix_now
+from httpx._io.deadline import now_ns
 from httpx._models.cookies import Cookies
 from httpx._models.headers import Headers
 from httpx._models.iterators import ByteChunks, LineChunks, TextChunks
@@ -29,7 +30,9 @@ from httpx._util.charset import (
     decode_charset,
     is_known_charset,
 )
+from httpx._util.duration import Duration
 from httpx._util.erase import ErasedBox
+from httpx._util.links import Link, parse_links
 from httpx._util.media import parse_media_type
 
 
@@ -190,6 +193,23 @@ struct Response(Movable, Writable):
     and the accessor still hands back responses.
     """
 
+    var _started_ns: UInt64
+    """The monotonic clock when the request went out, or zero if nobody timed it.
+
+    Set by the client rather than by the constructor, because the response does
+    not exist yet at the moment that matters. Zero means the response was built
+    by hand and `elapsed` has nothing to report.
+    """
+
+    var _elapsed: Optional[Duration]
+    """How long the whole exchange took, once it is over.
+
+    Filled in by `read` and by `close`, which are the two ways an exchange ends,
+    so a streamed body is timed to its last byte rather than to its headers.
+    """
+
+    var _downloaded: Int
+
     def __init__(
         out self,
         status_code: Int,
@@ -220,6 +240,9 @@ struct Response(Movable, Writable):
         self._request = None
         self._next_request = None
         self._history = List[ErasedBox]()
+        self._started_ns = 0
+        self._elapsed = None
+        self._downloaded = len(self._content)
 
     @staticmethod
     def streaming(
@@ -243,6 +266,7 @@ struct Response(Movable, Writable):
         out.is_stream_consumed = False
         out.is_closed = False
         out.default_encoding = default_encoding^
+        out._downloaded = 0
         return out^
 
     def copy(self) raises -> Self:
@@ -266,6 +290,9 @@ struct Response(Movable, Writable):
         out._content = self._content.copy()
         out.trailers = self.trailers.copy()
         out.default_encoding = self.default_encoding.copy()
+        out._started_ns = self._started_ns
+        out._elapsed = self._elapsed
+        out._downloaded = self._downloaded
         if self._request:
             out._request = Optional[Request](self._request.value().copy())
         if self._next_request:
@@ -390,6 +417,7 @@ struct Response(Movable, Writable):
         var chunks = self.iter_raw()
         while chunks.has_next():
             self._content.extend(Span(chunks.next()))
+        self._downloaded = chunks.num_bytes_downloaded()
         # Only after the last chunk, because trailers are by definition what
         # comes after the body. A response read through the iterators instead
         # never sees them, which is the price of the response not being able to
@@ -397,6 +425,7 @@ struct Response(Movable, Writable):
         self.trailers = self._stream.trailers()
         self._read = True
         self.is_closed = True
+        self._stop_timing()
 
     def content(ref self) raises -> Span[UInt8, origin_of(self._content)]:
         """The body as bytes.
@@ -419,6 +448,67 @@ struct Response(Movable, Writable):
             )
         return Span(self._content)
 
+    def num_bytes_downloaded(self) -> Int:
+        """How many bytes of the body have arrived.
+
+        For a response that was read, the whole body. For one built by hand, its
+        content. For one handed to an iterator, this stops moving at the point
+        the iterator took the stream, because from there the bytes go past the
+        iterator and the response never sees them. That is what
+        `ByteChunks.num_bytes_downloaded` is for, and it is the number a progress
+        bar over a streamed download should be reading.
+        """
+        return self._downloaded
+
+    def begin_timing(mut self, started_ns: UInt64):
+        """Record when the request went out, so `elapsed` has something to
+        subtract from.
+
+        Called by the client with a reading it took just before handing the
+        request to the transport. Not by the transport, because there are three
+        of those and only the client is on the path every response takes.
+
+        A response that is already read when it gets here is one the transport
+        buffered, so its exchange is over and the clock stops in the same call.
+        A streamed one is still open and stops later, in `read` or in `close`.
+        """
+        self._started_ns = started_ns
+        if self._read or self.is_closed:
+            self._stop_timing()
+
+    def _stop_timing(mut self):
+        """Freeze `elapsed` at the moment the exchange ended.
+
+        Only the first call counts. `read` then `close` is an ordinary sequence
+        and the answer should be how long the body took, not how long the caller
+        waited before closing.
+        """
+        if self._started_ns == 0 or self._elapsed:
+            return
+        self._elapsed = Optional[Duration](
+            Duration.between(self._started_ns, now_ns())
+        )
+
+    def elapsed(self) raises -> Duration:
+        """How long the whole exchange took, headers and body together.
+
+        Available once the body has been read or the response closed, and raises
+        before that, which is what httpx2 does. The reason is that a number
+        covering only the headers would be the answer to a question nobody asked:
+        a response is slow because of its body far more often than because of its
+        status line, and quietly reporting the smaller number would hide exactly
+        the case worth measuring.
+
+        A response built by hand was never sent, so this raises for one of those
+        no matter what has been called on it.
+        """
+        if not self._elapsed:
+            raise Error(
+                "RuntimeError: elapsed() is only available once the response"
+                " has been read or closed"
+            )
+        return self._elapsed.value()
+
     def close(mut self):
         """Give up whatever is still arriving and release the connection.
 
@@ -429,6 +519,7 @@ struct Response(Movable, Writable):
         """
         self._stream.close()
         self.is_closed = True
+        self._stop_timing()
 
     def __enter__(var self) -> Self:
         """Hand the response to the `with` block, which then owns it.
@@ -610,6 +701,88 @@ struct Response(Movable, Writable):
         A body that is not JSON raises either way.
         """
         return parse_json(self.content())
+
+    def links(self) raises -> List[Link]:
+        """The `Link` header, parsed, in the order it was written.
+
+        A list rather than the dictionary keyed on `rel` that httpx2 gives back.
+        Two links in one header may carry the same relation, which is legal and
+        which the dictionary loses, and a link may carry several relations at
+        once, which the dictionary hides under a key nobody would guess. Keeping
+        the list keeps both, and `link_url` covers the case the dictionary was
+        for.
+        """
+        return parse_links(self.headers.get("link").as_bytes())
+
+    def link_url(self, rel: StringSpan) raises -> Optional[URL]:
+        """Where the link with this relation points, ready to fetch.
+
+        The pagination case, which is nearly the whole reason the header exists:
+        `link_url("next")` and you have somewhere to go.
+
+        Resolved against this response's URL, because a relative target is legal
+        and common and resolving it needs a base the parser does not have. That
+        means this raises for a response built by hand, which has no URL to
+        resolve against. httpx2 hands back the target unresolved and leaves the
+        join to the caller, who then has to remember to do it.
+        """
+        var found = self.links()
+        for i in range(len(found)):
+            if found[i].has_rel(rel):
+                return self.url().join(found[i].url)
+        return None
+
+    def raise_for_status(self) raises:
+        """Raise if the status was not a success.
+
+        `HTTPStatusError` for anything outside 2xx, including 1xx and 3xx. A 3xx
+        reaching this means redirects were not being followed, so the caller got
+        a response they cannot use as an answer, and treating it as success would
+        hand them a body that is usually empty.
+
+        Returns nothing, where httpx2 returns the response so the call can be
+        chained onto. A `Response` here is not copyable, so a method that gave
+        one back would have to consume the receiver, and `r.raise_for_status()`
+        on its own line is a small price for `r` still being usable afterwards.
+
+        Raises a different error, about the response never having been sent, if
+        it was built by hand. There is no URL to name in the message, and a
+        status error that could not say which request failed would be worse than
+        the complaint.
+        """
+        if self.is_success():
+            return
+
+        var url = self.url()
+        var phrase = self.reason_phrase.copy()
+        if phrase == "":
+            phrase = String(status_text(self.status_code))
+
+        var kind: StaticString
+        if self.is_informational():
+            kind = "Informational response"
+        elif self.has_redirect_status():
+            kind = "Redirect response"
+        elif self.is_client_error():
+            kind = "Client error"
+        elif self.is_server_error():
+            kind = "Server error"
+        else:
+            kind = "Invalid status code"
+
+        var message = String(kind, " '", self.status_code)
+        if phrase != "":
+            # Only when there is one. A status nobody registered and no server
+            # named would otherwise be quoted with a trailing space in it.
+            message += String(" ", phrase)
+        message += String("' for url '", url, "'")
+        if self.is_redirect():
+            # Worth naming, because a 3xx arriving here means the caller turned
+            # following off and the location is the thing they will want next.
+            message += String(
+                ", redirect location '", self.headers.get("location"), "'"
+            )
+        raise new_error(ErrorKind.HTTP_STATUS_ERROR, message^)
 
     def is_informational(self) -> Bool:
         return 100 <= self.status_code and self.status_code < 200
