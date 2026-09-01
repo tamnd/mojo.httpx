@@ -2,7 +2,7 @@
 
 A full featured HTTP client for Mojo, with the same API and the same developer experience as [httpx2](https://github.com/pydantic/httpx2).
 
-**Status: pre-alpha.** HTTP/1.1 requests work over TCP and over TLS today, so `http://` and `https://` both work. Streaming works in both directions: `client.stream()` returns as soon as the head has arrived and the body is read off the wire a chunk at a time with `iter_bytes`, `iter_text` or `iter_lines`, and `content_stream=` sends a request body that is pulled as it is written. HTTP/2 and cookies do not exist yet. See the [roadmap](docs/roadmap.md) for what is landing and when. Do not use this in production.
+**Status: pre-alpha.** HTTP/1.1 requests work over TCP and over TLS today, so `http://` and `https://` both work. Streaming works in both directions: `client.stream()` returns as soon as the head has arrived and the body is read off the wire a chunk at a time with `iter_bytes`, `iter_text` or `iter_lines`, and `content_stream=` sends a request body that is pulled as it is written. HTTP/2 does not exist yet. See the [roadmap](docs/roadmap.md) for what is landing and when. Do not use this in production.
 
 ## Why
 
@@ -102,6 +102,30 @@ Digest costs one extra round trip the first time, because there is nothing to an
 
 Credentials are redacted everywhere this library writes a header out. Printing a `Headers`, a `Request` or a `Response` shows `[secret, 28 bytes]` in place of `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie`, so a debug print or a logged repr cannot leak a password. Asking for the value by name still gives you the value.
 
+A client keeps a cookie jar, so a login and the request after it are a session rather than two unrelated calls.
+
+```mojo
+import httpx
+
+def main() raises:
+    with httpx.Client() as client:
+        # Whatever the login sets is stored, including a Set-Cookie that
+        # arrives on a 302 rather than on the page at the end of it.
+        var login = client.post(
+            "https://example.com/login", follow_redirects=True
+        )
+        print(login.status_code)
+
+        # And goes back out on its own, to the hosts and paths it is scoped to.
+        var page = client.get("https://example.com/account")
+        print(client.cookies["session"])
+        print(page.status_code)
+```
+
+The jar is `client.cookies` and it is a plain mutable field, so a caller can seed it before the first request with `client.cookies["session"] = "..."` and read it after any of them. `cookies=` on a single call merges over the client's for that call only. `r.cookies()` is the narrower question of what one response set, which is not the same thing as what the client is holding.
+
+RFC 6265 is followed rather than approximated. A cookie is scoped by domain, by path and by `Secure`, a `Set-Cookie` naming a domain the responding host does not belong to is dropped, so is one scoped to a public suffix, an expired one deletes rather than stores, and the `Cookie` header is ordered longest path first with creation time breaking ties, which is the order servers quietly depend on. A `Cookie` header you write yourself is left exactly as you wrote it.
+
 ## What it will look like
 
 ```mojo
@@ -117,7 +141,7 @@ def main() raises:
     resp.raise_for_status()
 ```
 
-Cookies, proxies, multipart uploads, event hooks, custom transports and a `MockTransport` for tests all work the way they do in httpx2.
+Proxies, multipart uploads, event hooks, custom transports and a `MockTransport` for tests all work the way they do in httpx2.
 
 ## Planned feature set
 

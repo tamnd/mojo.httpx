@@ -26,6 +26,7 @@ waiting for it.
 
 from httpx._bytes import equal_ascii_ci, index_of, is_digit, to_lower
 from httpx._exceptions import ErrorKind, new_error
+from httpx._models.headers import Headers
 from httpx._models.url import URL
 from httpx._util.date import parse_cookie_date
 from httpx._util.psl import is_public_suffix
@@ -276,7 +277,11 @@ struct Cookie(Copyable, Movable, Writable):
         if self.host_only:
             if not equal_ascii_ci(host.as_bytes(), self.domain.as_bytes()):
                 return False
-        elif not domain_matches(host, self.domain):
+        elif self.domain and not domain_matches(host, self.domain):
+            # No domain at all only happens for a cookie the application set
+            # itself, since one parsed out of a response always ends up scoped
+            # to something. It means every host, which is what somebody writing
+            # `client.cookies["session"] = ...` and no domain meant.
             return False
         if not path_matches(path, self.path):
             return False
@@ -594,6 +599,20 @@ struct CookieJar(Boolable, Movable, Sized):
         self.store(cookie^)
         return True
 
+    def extract(mut self, url: URL, headers: Headers, now: Int) raises -> Int:
+        """Apply every `Set-Cookie` in a response to `url`. Returns how many stuck.
+
+        The count is returned rather than thrown away because a caller that
+        wants to know whether anything changed would otherwise have to compare
+        the size of the jar before and against after, and a refresh of a cookie
+        that was already there does not change the size.
+        """
+        var stored = 0
+        for ref header in headers.get_list("set-cookie"):
+            if self.set_cookie(url, header, now):
+                stored += 1
+        return stored
+
     def matching(self, url: URL, now: Int) raises -> List[Cookie]:
         """Every cookie that belongs on a request to `url`, in send order.
 
@@ -807,6 +826,14 @@ struct Cookies(Boolable, Movable, Sized):
     def update(mut self, other: Self):
         for ref cookie in other.jar._cookies:
             self.jar.store(cookie.copy())
+
+    def extract(mut self, url: URL, headers: Headers, now: Int) raises -> Int:
+        """Apply a response's `Set-Cookie` fields to this jar."""
+        return self.jar.extract(url, headers, now)
+
+    def header_for(self, url: URL, now: Int) raises -> String:
+        """The `Cookie` header value for a request to `url`, or empty."""
+        return self.jar.header_for(url, now)
 
     def keys(self) -> List[String]:
         var out = List[String]()

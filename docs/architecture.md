@@ -150,6 +150,16 @@ Auth is the outer loop and redirects are the inner one, the same order httpx use
 
 `AnyAuth` is the same type erasure as `AnyTransport`, and its `copy` shares state rather than duplicating it. The client takes a copy on every send, and a digest scheme that forgot the challenge it had already been given would pay the extra round trip on every single request instead of only the first.
 
+## The cookie jar knows nothing about responses
+
+`_models/cookies.mojo` sits at the bottom with `URL` and `Headers` and never imports `Response`, which would be a cycle since a response has to be able to hand back the cookies it set. So the jar's widest entry point is `extract(url, headers, now)`: a URL, the headers that came back for it, and the time. Everything above that is glue in two places, `Response.cookies()` for the one response and `Client` for the session.
+
+The client is where the interesting part is, because there are three moments and each one is easy to get wrong. Cookies are written into the jar as soon as a response comes off the transport, before the redirect loop has decided whether to follow it, because a login answering 302 with the session cookie on it is the ordinary shape and a jar that only read the last response of a chain would miss it. The `Cookie` header is computed in `build_request`, from the URL the request is actually going to. And it is computed again for every redirect hop, because the redirect builder strips `Cookie` unconditionally and a header worked out for the previous URL is wrong for the next one whether or not the origin changed.
+
+A `Cookie` header the caller wrote themselves is never touched. That is what urllib's `add_cookie_header` does underneath httpx, and the reason is that a hand written `Cookie` is nearly always somebody reproducing a captured request, where a jar folding its own values in would change the request being reproduced.
+
+Per request cookies merge over the client's for that one call and are not carried across a redirect, which is also httpx's behaviour. They were an argument about one call to one URL, and the hop is a different URL.
+
 ## The hash functions are written out, not linked
 
 MD5, SHA-1, SHA-256 and SHA-512 are implemented in `_util/digest.mojo`, along with base64 in `_util/base64.mojo`. Both exist for one caller, which is digest and basic authentication.

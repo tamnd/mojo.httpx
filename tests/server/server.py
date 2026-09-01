@@ -146,6 +146,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"cookies": self._cookies_dict()})
         if path == "/cookies/set":
             return self._set_cookies(query)
+        if path == "/cookies/delete":
+            return self._delete_cookies(query)
+        if path == "/cookies/set-raw":
+            return self._set_cookie_raw(query)
         if path == "/gzip":
             return self._compressed("gzip")
         if path == "/deflate":
@@ -424,6 +428,32 @@ class Handler(BaseHTTPRequestHandler):
         for name, values in query.items():
             self.send_header("Set-Cookie", "%s=%s; Path=/" % (name, values[0]))
         self.end_headers()
+
+    def _delete_cookies(self, query):
+        # Expiring a cookie is how a server deletes one, so this sends the same
+        # header a real logout endpoint would.
+        self._read_body()
+        self.send_response(302)
+        self.send_header("Location", "/cookies")
+        self.send_header("Content-Length", "0")
+        for name in query:
+            self.send_header("Set-Cookie", "%s=; Path=/; Max-Age=0" % name)
+        self.end_headers()
+
+    def _set_cookie_raw(self, query):
+        # One Set-Cookie per `value`, verbatim, so a test can reach attributes
+        # the tidier route does not: Secure, Max-Age, a narrow Path, a Domain
+        # that ought to be refused.
+        self._read_body()
+        body = json.dumps({"cookies": self._cookies_dict()}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        for value in query.get("value", []):
+            self.send_header("Set-Cookie", value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _compressed(self, encoding):
         self._read_body()

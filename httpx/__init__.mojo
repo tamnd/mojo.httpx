@@ -41,6 +41,7 @@ from httpx._client import Client
 from httpx._config import Timeout
 from httpx._content.multipart import FileUpload, MultipartData
 from httpx._exceptions import ErrorKind
+from httpx._models.cookies import Cookie, CookieJar, Cookies, SameSite
 from httpx._models.headers import Headers
 from httpx._models.iterators import ByteChunks, LineChunks, TextChunks
 from httpx._models.json import Json, JsonValue, parse_json
