@@ -182,6 +182,16 @@ Where the hooks run is copied from httpx and it matters. Both lists run inside t
 
 Boxing a hook is what turned up a real bug in `ErasedBox`. A stateless hook, the kind that only prints a line, is a struct with no fields and therefore no size, and asking a `List` for room for one value of a zero sized type hands back the alignment sentinel rather than an allocation. Freeing that number corrupts the heap, somewhere else and much later. The box now wraps whatever it is given in a `_Cell` carrying a padding byte, so there is always something real to allocate and free.
 
+## What the client merges, and where
+
+A client is configuration plus a transport, and every option on it is one of three shapes. Some merge with the per request value, which is headers, query parameters and cookies, and the per request side wins on a collision. Some are a fallback the request can replace outright, which is the timeout, the redirect policy and the auth scheme. And some belong to the client alone, which is the base URL, the redirect limit, the hooks and the connection pool, because a single call cannot sensibly have its own.
+
+The merging happens in `build_request`, not in `send`. That is deliberate: `client.build_request(...)` gives back the request the client would have sent, fully merged, so a caller who wants to inspect or alter it before it goes out gets the real thing rather than a sketch of it. `send` then does the parts that can only be decided at the last moment, which is the deadlines and the auth scheme.
+
+`transport=` is an ordinary argument of the same constructor rather than a separate entry point. Passing one skips building the pool, which makes `limits`, `verify`, `cert` and `trust_env` dead letters, since all four describe a pool that no longer exists. httpx behaves the same way and for the same reason. Keeping it on the main constructor is what lets a mock go underneath a client that still has its base URL, its headers and its redirect policy, which is the only version of transport swapping that tests anything.
+
+`default_encoding` is the odd one out. It is client configuration that has to end up on a response, so `_send_following_redirects` copies it onto each response as it arrives, before the cookie jar and before the hooks. Before the hooks matters: a response hook that calls `text()` is the ordinary case, and a hook that saw the bare default would decode a Latin-1 body differently from the caller who reads the same response a line later.
+
 ## The hash functions are written out, not linked
 
 MD5, SHA-1, SHA-256 and SHA-512 are implemented in `_util/digest.mojo`, along with base64 in `_util/base64.mojo`. Both exist for one caller, which is digest and basic authentication.

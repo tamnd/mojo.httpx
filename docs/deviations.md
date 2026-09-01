@@ -76,6 +76,14 @@ httpx2 lets you write `auth=("user", "pass")` and turns the pair into a `BasicAu
 
 The tuple form would have to be another overload of every method that takes an auth, and there are eleven of those on `Client` and nine more in `_api.mojo`, because Mojo has no runtime type dispatch to fold them back together. The function is the same amount of typing, it names the scheme it builds, and `auth=basic_auth(...)` reads as the thing it is rather than as a pair of strings that happens to be interpreted.
 
+### Turning auth off for one call is `no_auth()` rather than `None`
+
+httpx2 carries a private `USE_CLIENT_DEFAULT` sentinel and defaults `auth`, `follow_redirects` and `timeout` to it on every request method, so passing `None` is distinguishable from passing nothing and means send this one unauthenticated.
+
+Here those three arguments are `Optional`, and an empty one already means use the client's. That covers `timeout` and `follow_redirects` completely, since neither has a meaningful off, and it leaves one gap: a client with a scheme, and one request that should go out without it. That case is `auth=no_auth()`, which is a real scheme that signs nothing.
+
+A second sentinel type would have matched httpx2's spelling, at the cost of an `Optional`-shaped thing that is not an `Optional` on twenty method signatures, and a reader who has to learn which of the two absences they are looking at. A scheme that adds no header is the same behaviour described in terms the library already has.
+
 ### A malformed digest challenge raises a protocol error
 
 httpx2 raises `KeyError` from `DigestAuth._parse_challenge` when the challenge names an algorithm it does not implement, because the algorithm is looked up in a dictionary with no default. It raises its own `ProtocolError` for a missing `realm` or `nonce`.
