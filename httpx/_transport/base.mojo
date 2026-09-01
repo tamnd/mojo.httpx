@@ -9,10 +9,10 @@ the test exercises is the program rather than a rewritten version of it.
 
 `AnyTransport` is what a client holds. It is a vtable of thin function pointers
 over an `ErasedBox`, because Mojo 1.0 has no trait objects and a field has one
-type. `erase` turns any conforming transport into one. The cost is an indirect
-call per request, which is nothing next to the syscalls on the other side of
-it, and the return is that a user can write their own transport and pass it in
-like they would in httpx.
+type. `erase_transport` turns any conforming transport into one. The cost is an
+indirect call per request, which is nothing next to the syscalls on the other
+side of it, and the return is that a user can write their own transport and
+pass it in like they would in httpx.
 
 The generic path stays available for anyone who wants the call inlined. A
 client parameterised on a concrete transport type is monomorphised and never
@@ -105,6 +105,19 @@ struct AnyTransport(Movable):
             self._close,
         )
 
+    def state[T: Transport & Deinitable](self) -> ref[MutAnyOrigin] T:
+        """The transport back again, as the type it was before it was erased.
+
+        For a test that hands a `MockRouter` to a client and then wants to know
+        what was sent. Take a `copy()` before handing it over and read the
+        recording back through the copy, which is the same transport.
+
+        Asking for a type other than the one that went in is undefined, which is
+        the one sharp edge of erasure and the reason this is spelled out rather
+        than hidden behind a property.
+        """
+        return self._state.get[T]()
+
     def handle_request(
         mut self, var request: Request, deadlines: Deadlines
     ) raises -> Response:
@@ -119,7 +132,9 @@ struct AnyTransport(Movable):
         self._close(self._state)
 
 
-def erase[T: Transport & Deinitable](var transport: T) -> AnyTransport:
+def erase_transport[
+    T: Transport & Deinitable
+](var transport: T) -> AnyTransport:
     """Box `transport` and build the vtable that reaches back into it.
 
     The trampolines capture nothing. They recover the concrete type from `T`,

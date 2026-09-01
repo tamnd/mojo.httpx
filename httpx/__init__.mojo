@@ -60,6 +60,9 @@ from httpx._models.stream import ByteSource, ByteStream, erase_source
 from httpx._models.url import URL, QueryParams
 from httpx._pool.limits import Limits
 from httpx._stream.config import ClientCert, SSLVerify
+from httpx._transport.base import AnyTransport, Transport, erase_transport
+from httpx._transport.http import HTTPTransport
+from httpx._transport.mock import MockRouter, MockTransport, Route
 from httpx._util.charset import DefaultEncoding
 
 comptime __version__ = "0.0.1"

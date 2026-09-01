@@ -34,7 +34,7 @@ from httpx._models.url import URL, QueryParams
 from httpx._pool.limits import Limits
 from httpx._redirects import DEFAULT_MAX_REDIRECTS, build_redirect_request
 from httpx._stream.config import ClientCert, SSLVerify, TlsConfig
-from httpx._transport.base import AnyTransport, erase
+from httpx._transport.base import AnyTransport, erase_transport
 from httpx._transport.http import HTTPTransport
 
 comptime USER_AGENT = "mojo-httpx/0.0.1"
@@ -136,7 +136,7 @@ struct Client(Movable):
         var transport = HTTPTransport(
             limits.value() if limits else Limits(), tls^
         )
-        self._transport = erase(transport^)
+        self._transport = erase_transport(transport^)
         self._closed = False
 
     def __init__(out self, var transport: AnyTransport) raises:

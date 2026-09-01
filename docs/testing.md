@@ -89,6 +89,24 @@ That is the honest support statement for Windows: it works under WSL2, it is tes
 
 Registering these machines as GitHub self-hosted runners was the first thing considered and rejected. A self-hosted runner on a public repository will execute code from any pull request, which means handing an arbitrary contributor a shell on a machine on a home network. The isolation needed to make that safe is more work than the problem is worth here. Running the same suites locally from a script gets the same coverage with none of that exposure.
 
+## Mocking, for tests of your own code
+
+Everything above is about testing this library. Testing an application that uses it is a different problem, and the answer is to swap the transport rather than to stub out the client.
+
+`MockRouter` is a table of routes matched in order. `MockTransport` is a single handler function that answers everything. Either one goes under a real `Client`, so redirects are still followed, cookies are still stored and sent back, auth still answers a challenge, and the headers on the wire are the ones your program would really send. What the test loses is the socket and nothing else.
+
+```mojo
+var router = MockRouter()
+router.add(Route.get("/users/1").respond_json(200, '{"name": "alice"}'))
+router.add(Route.any().respond(404))
+
+var transport = erase_transport(router^)
+var handle = transport.copy()
+var client = Client(transport^)
+```
+
+`handle.state[MockRouter]()` reads the router back after the client has taken it, because a copy of an erased transport is the same transport. `router.calls` is every request that arrived, `route.calls` is what each route answered, and `assert_all_called()` fails a test whose route pattern was wrong and never matched. The README has a fuller example.
+
 ## Test layers
 
 The full plan, from `docs/roadmap.md`:

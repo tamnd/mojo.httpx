@@ -160,6 +160,16 @@ A `Cookie` header the caller wrote themselves is never touched. That is what url
 
 Per request cookies merge over the client's for that one call and are not carried across a redirect, which is also httpx's behaviour. They were an argument about one call to one URL, and the hop is a different URL.
 
+## The mocks are two, because there are two kinds of test
+
+`MockTransport` takes one handler and answers everything with it. That is what you want when the reply depends on the request, and it is the shape httpx ships. `MockRouter` is a table of routes tried in order, which is what you want when the test is about a handful of endpoints and hand written branching inside a single handler would bury the point. This is the ground `respx` covers for httpx2, in the tree rather than as a separate package, because the transport boundary is already here and a separate package would only be repackaging it.
+
+A route is built by chaining, and each builder takes the route and gives it back. The alternative was a constructor with a dozen optional arguments that a reader has to count commas in. It also means a route is never half built: `Route.get("/users").respond(200)` is one expression, and there is no window where a route exists with no answer attached.
+
+Matching is a subset everywhere it can be. Required headers and query parameters have to be present with the given values, and anything else on the request is ignored, because a request carrying a cache buster the test does not care about is still the request the test meant. Order decides ambiguity, first match wins, and `Route.any()` last is how a catch all is written. A request that matches nothing raises rather than answering 404, since a mock that quietly answered would turn a typo in the code under test into a plausible looking failure somewhere else entirely.
+
+Reading the recording back needed one addition. A client takes ownership of its transport and erases the type, so after handing a router over there is nothing left to ask. `AnyTransport.state[T]()` is the way back, and it works because an `ErasedBox` copy shares rather than duplicates: take a `copy()` of the erased transport before handing the original to the client and the copy is the same router.
+
 ## A hook takes the value and gives it back
 
 httpx hands a hook a request or a response and lets it mutate what it was given. `_hooks.mojo` cannot: a thin function pointer in Mojo 1.0 cannot take a `mut` parameter, and thin function pointers are the whole basis of the vtable that makes a pluggable hook storable at all. So the signature passes ownership in and takes it back out, and a hook that changes nothing writes `return request^`.
