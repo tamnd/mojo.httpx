@@ -140,6 +140,16 @@ The loop is in the client. It sends, and if the response is not a redirect it re
 
 The budget is a hop count and not a cycle detector, because a server can redirect in a loop that never repeats a URL, so counting is the only check that always terminates.
 
+## The hash functions are written out, not linked
+
+MD5, SHA-1, SHA-256 and SHA-512 are implemented in `_util/digest.mojo`, along with base64 in `_util/base64.mojo`. Both exist for one caller, which is digest and basic authentication.
+
+There was a shorter path and it was the wrong one. This library already loads OpenSSL, so binding `EVP_Digest` would have been a few lines. But OpenSSL here is optional by design: it is needed for `https://` and for nothing else, and a digest authenticated request to a plain `http://` server should not begin by hunting for a TLS library. Four hash functions come to about as much code as the binding and the fallback path would have, and they have no failure mode that depends on what is installed.
+
+None of the four is worth anything as a password hash, and MD5 and SHA-1 are not worth anything as signatures either. They are here because the server picks the algorithm in a digest challenge and most servers still pick MD5, so a client that refused would simply not be able to talk to them. Nothing else in this library uses them.
+
+They are one shot rather than incremental, because a digest challenge hashes a few hundred bytes of header and there is no body to stream.
+
 ## Parsing rule
 
 `len()` on a `String` is a hard compile error in Mojo 1.0, on the grounds that the byte count and the character count are different answers and the caller should say which one they want. That is a good decision by the language, and for this project it points somewhere useful: every parser works on `Span[UInt8]` and never touches `String` at all. Strings only appear at the boundary where a user sees a value.
