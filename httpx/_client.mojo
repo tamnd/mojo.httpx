@@ -11,17 +11,19 @@ costs a round trip instead of a connect, a DNS lookup and, later, a handshake.
 That is the whole argument for `Client` existing next to `httpx.get`, and it is
 why the one shot helpers in `_api.mojo` are documented as the slow path.
 
-Cookies, event hooks and the content encoders are still to come and land as
-separate arguments and separate files. What is here now is a request going out
-over TCP and a parsed response coming back, with the four timeouts and the
-client level headers, base URL and query parameters honoured, either read whole
-or streamed a chunk at a time, a redirect chain followed for anyone who asked
-for that, and an auth scheme answering a challenge around the outside of it.
+Event hooks and the content encoders are still to come and land as separate
+arguments and separate files. What is here now is a request going out over TCP
+and a parsed response coming back, with the four timeouts and the client level
+headers, base URL, query parameters and cookies honoured, either read whole or
+streamed a chunk at a time, a redirect chain followed for anyone who asked for
+that, and an auth scheme answering a challenge around the outside of it.
 """
 
 from httpx._auth import AnyAuth
 from httpx._config import Timeout
 from httpx._exceptions import ErrorKind, new_error
+from httpx._ffi.clock import unix_now
+from httpx._models.cookies import Cookies
 from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.response import Response
@@ -53,6 +55,14 @@ struct Client(Movable):
 
     var base_url: URL
     """What a relative URL is resolved against. Empty means there is none."""
+
+    var cookies: Cookies
+    """The jar every response writes into and every request is filled from.
+
+    Public and mutable, so a caller can seed it before the first request and
+    read it after any of them. This is the piece of a client that makes a
+    sequence of requests a session rather than a series of unrelated ones.
+    """
 
     var timeout: Timeout
     """The four phase timeout used when a request does not name its own."""
@@ -89,6 +99,7 @@ struct Client(Movable):
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
         var base_url: URL = URL(),
+        var cookies: Cookies = Cookies(),
         timeout: Optional[Timeout] = None,
         limits: Optional[Limits] = None,
         verify: SSLVerify = SSLVerify(),
@@ -101,6 +112,7 @@ struct Client(Movable):
         self.headers = headers^
         self.params = params^
         self.base_url = base_url^
+        self.cookies = cookies^
         self.timeout = timeout.value() if timeout else Timeout()
         self.follow_redirects = follow_redirects
         self.max_redirects = max_redirects
@@ -126,6 +138,7 @@ struct Client(Movable):
         self.headers = Headers()
         self.params = QueryParams()
         self.base_url = URL()
+        self.cookies = Cookies()
         self.timeout = Timeout()
         self.follow_redirects = False
         self.max_redirects = DEFAULT_MAX_REDIRECTS
@@ -169,6 +182,7 @@ struct Client(Movable):
         var content: List[UInt8] = List[UInt8](),
         var content_stream: Optional[ByteStream] = None,
         var params: QueryParams = QueryParams(),
+        var cookies: Cookies = Cookies(),
     ) raises -> Request:
         """Merge the client configuration with this call and produce a request.
 
@@ -187,11 +201,37 @@ struct Client(Movable):
         if len(params) > 0 or len(self.params) > 0:
             target = target.copy_merge_params(self.params.merge(params))
         var merged = self._headers_for(headers^)
+        self._apply_cookies(target, cookies^, merged)
         if content_stream:
             return Request.streaming(
                 method, target^, content_stream.take(), merged^
             )
         return Request(method, target^, merged^, content^)
+
+    def _apply_cookies(
+        self, url: URL, var cookies: Cookies, mut headers: Headers
+    ) raises:
+        """Write the `Cookie` header for `url` from the jar, if there is one.
+
+        A caller who wrote their own `Cookie` header keeps it exactly as they
+        wrote it. That is what urllib's `add_cookie_header` does underneath
+        httpx, and the reason is that a hand written `Cookie` is nearly always
+        somebody reproducing a captured request, where a jar quietly folding its
+        own values in would change the request being reproduced.
+
+        An empty result means no header at all rather than an empty one, because
+        `Cookie:` with nothing after it is a different message and some servers
+        read it as such.
+        """
+        if "cookie" in headers:
+            return
+        var jar = self.cookies.copy()
+        jar.update(cookies)
+        if not jar:
+            return
+        var value = jar.header_for(url, unix_now())
+        if value:
+            headers["Cookie"] = value
 
     def send(
         mut self,
@@ -319,6 +359,12 @@ struct Client(Movable):
                 response = self._transport.handle_request(
                     current^, budget.deadlines()
                 )
+            # Every response, not just the last one. A login that answers 302
+            # with the session cookie on it is the ordinary case, and a jar that
+            # only read the end of the chain would miss it.
+            _ = self.cookies.extract(
+                response.request().url, response.headers, unix_now()
+            )
             if prior:
                 response.inherit_history(prior.take())
             if not response.is_redirect():
@@ -343,6 +389,13 @@ struct Client(Movable):
                 # point and nothing above here will ever see it again.
                 response.close()
                 raise e
+
+            # The redirect builder strips `Cookie` on every hop, so this is what
+            # puts it back, computed for where the request is now going rather
+            # than carried over from where it was going before. Per request
+            # cookies are deliberately not carried across, matching httpx: they
+            # were an argument about one call to one URL.
+            self._apply_cookies(following.url, Cookies(), following.headers)
 
             if not follow:
                 response.set_next_request(following^)
@@ -370,6 +423,7 @@ struct Client(Movable):
         var content: List[UInt8] = List[UInt8](),
         var content_stream: Optional[ByteStream] = None,
         var params: QueryParams = QueryParams(),
+        var cookies: Cookies = Cookies(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
         var auth: Optional[AnyAuth] = None,
@@ -399,6 +453,7 @@ struct Client(Movable):
             content=content^,
             content_stream=content_stream^,
             params=params^,
+            cookies=cookies^,
         )
         return self.send(
             built^,
@@ -417,6 +472,7 @@ struct Client(Movable):
         var content: List[UInt8] = List[UInt8](),
         var content_stream: Optional[ByteStream] = None,
         var params: QueryParams = QueryParams(),
+        var cookies: Cookies = Cookies(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
         var auth: Optional[AnyAuth] = None,
@@ -428,6 +484,7 @@ struct Client(Movable):
             content=content^,
             content_stream=content_stream^,
             params=params^,
+            cookies=cookies^,
         )
         return self.send(
             built^, timeout, follow_redirects=follow_redirects, auth=auth^
@@ -439,6 +496,7 @@ struct Client(Movable):
         *,
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
+        var cookies: Cookies = Cookies(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
         var auth: Optional[AnyAuth] = None,
@@ -451,6 +509,7 @@ struct Client(Movable):
             url,
             headers=headers^,
             params=params^,
+            cookies=cookies^,
             timeout=timeout,
             follow_redirects=follow_redirects,
             auth=auth^,
@@ -462,6 +521,7 @@ struct Client(Movable):
         *,
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
+        var cookies: Cookies = Cookies(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
         var auth: Optional[AnyAuth] = None,
@@ -471,6 +531,7 @@ struct Client(Movable):
             url,
             headers=headers^,
             params=params^,
+            cookies=cookies^,
             timeout=timeout,
             follow_redirects=follow_redirects,
             auth=auth^,
@@ -482,6 +543,7 @@ struct Client(Movable):
         *,
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
+        var cookies: Cookies = Cookies(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
         var auth: Optional[AnyAuth] = None,
@@ -491,6 +553,7 @@ struct Client(Movable):
             url,
             headers=headers^,
             params=params^,
+            cookies=cookies^,
             timeout=timeout,
             follow_redirects=follow_redirects,
             auth=auth^,
@@ -502,6 +565,7 @@ struct Client(Movable):
         *,
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
+        var cookies: Cookies = Cookies(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
         var auth: Optional[AnyAuth] = None,
@@ -511,6 +575,7 @@ struct Client(Movable):
             url,
             headers=headers^,
             params=params^,
+            cookies=cookies^,
             timeout=timeout,
             follow_redirects=follow_redirects,
             auth=auth^,
@@ -524,6 +589,7 @@ struct Client(Movable):
         var content_stream: Optional[ByteStream] = None,
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
+        var cookies: Cookies = Cookies(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
         var auth: Optional[AnyAuth] = None,
@@ -535,6 +601,7 @@ struct Client(Movable):
             content=content^,
             content_stream=content_stream^,
             params=params^,
+            cookies=cookies^,
             timeout=timeout,
             follow_redirects=follow_redirects,
             auth=auth^,
@@ -548,6 +615,7 @@ struct Client(Movable):
         var content_stream: Optional[ByteStream] = None,
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
+        var cookies: Cookies = Cookies(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
         var auth: Optional[AnyAuth] = None,
@@ -559,6 +627,7 @@ struct Client(Movable):
             content=content^,
             content_stream=content_stream^,
             params=params^,
+            cookies=cookies^,
             timeout=timeout,
             follow_redirects=follow_redirects,
             auth=auth^,
@@ -572,6 +641,7 @@ struct Client(Movable):
         var content_stream: Optional[ByteStream] = None,
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
+        var cookies: Cookies = Cookies(),
         timeout: Optional[Timeout] = None,
         follow_redirects: Optional[Bool] = None,
         var auth: Optional[AnyAuth] = None,
@@ -583,6 +653,7 @@ struct Client(Movable):
             content=content^,
             content_stream=content_stream^,
             params=params^,
+            cookies=cookies^,
             timeout=timeout,
             follow_redirects=follow_redirects,
             auth=auth^,

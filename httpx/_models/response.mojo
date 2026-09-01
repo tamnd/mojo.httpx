@@ -12,6 +12,8 @@ purpose.
 """
 
 from httpx._exceptions import ErrorKind, new_error
+from httpx._ffi.clock import unix_now
+from httpx._models.cookies import Cookies
 from httpx._models.headers import Headers
 from httpx._models.iterators import ByteChunks, LineChunks, TextChunks
 from httpx._models.json import Json, parse_json
@@ -309,6 +311,21 @@ struct Response(Movable, Writable):
         entry of `history`.
         """
         return self.request().url.copy()
+
+    def cookies(self) raises -> Cookies:
+        """The cookies this one response set, and nothing else.
+
+        A fresh jar rather than the client's, so this answers what the server
+        just sent rather than what has accumulated over a session. The client's
+        jar is `client.cookies` and is the one that decides what goes back out.
+
+        The URL matters, because a `Set-Cookie` naming a domain the responding
+        host does not belong to is dropped, so this needs the request that
+        produced the response and raises without one.
+        """
+        var out = Cookies()
+        _ = out.extract(self.request().url, self.headers, unix_now())
+        return out^
 
     def history(self) raises -> List[Self]:
         """The redirects that led here, oldest first.
