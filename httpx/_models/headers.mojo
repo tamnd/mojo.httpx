@@ -323,12 +323,19 @@ struct Headers(Boolable, Movable, Sized, Writable):
         Set rather than append, so applying the same overrides twice gives what
         applying them once gave. A field repeated inside `other` keeps all its
         values, because the repetition there was deliberate.
+
+        The names come out of `other` in the casing they went in with. Going
+        through `keys()` instead would put every field a caller set on the wire
+        lowercased, which is legal and which nothing else does, so a request
+        would be identifiable as coming from this library by its shape alone.
         """
         for name in other.keys():
-            var values = other.get_list(name)
             _ = self.discard(name)
-            for i in range(len(values)):
-                self.append(name, values[i])
+        for i in range(len(other)):
+            self.append(
+                StringSpan(from_utf8=other.raw_name(i)),
+                StringSpan(from_utf8=other.raw_value(i)),
+            )
 
     def _is_secret(self, lowered: StringSpan) -> Bool:
         for candidate in _SECRET_NAMES.split(" "):

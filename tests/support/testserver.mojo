@@ -81,6 +81,36 @@ struct TestServer(Movable):
             _ = self._proc.wait()
         except:
             pass
+        self._wait_until_refused()
+
+    def _wait_until_refused(mut self):
+        """Block until the port stops accepting, which it does once the server
+        process is really gone.
+
+        `wait` reaps the process, so the kernel has closed its sockets, but the
+        FIN on a connection that is already open still has to be delivered. A
+        test that asserts on what happens after the server is gone was racing
+        that delivery: the pool would check an idle connection, find it not yet
+        readable, hand it out, and the request would fail as a truncated
+        response rather than as the connect error the test was written for.
+
+        One refused connection is proof the delivery has happened, because it
+        cannot be refused until the listening socket is gone, and the listening
+        socket and the FINs go at the same moment.
+        """
+        try:
+            var socket = Python.import_module("socket")
+            var target = Python.tuple(self.host, Int(self.port))
+            var at = 0
+            while at < 200:
+                try:
+                    var probe = socket.create_connection(target, 0.05)
+                    probe.close()
+                except:
+                    return
+                at += 1
+        except:
+            pass
 
     def url(self, path: StringSpan) -> String:
         """The address of `path` on this server.

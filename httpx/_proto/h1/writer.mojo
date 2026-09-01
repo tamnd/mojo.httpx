@@ -128,7 +128,10 @@ def serialize_head(
 
 
 def framing_headers(
-    method: StringSpan, headers: Headers, content_length: Optional[Int]
+    method: StringSpan,
+    headers: Headers,
+    content_length: Optional[Int],
+    streaming: Bool = False,
 ) raises -> Headers:
     """The framing fields a request needs, given what the caller already set.
 
@@ -136,6 +139,13 @@ def framing_headers(
     to the point where the word contradicts the body, because a length that
     disagrees with what is about to be written is the client side of the same
     desync this library refuses to accept from a server.
+
+    `streaming` says the body is being pulled as it is written, so there is no
+    length to declare unless the caller declared one. A caller who knows the
+    size of what they are about to stream, an upload from a file being the usual
+    case, can set `Content-Length` and get a length framed body instead, which
+    is worth doing because some servers and more proxies still handle chunked
+    request bodies badly.
     """
     var out = Headers()
     var has_length = "content-length" in headers
@@ -167,6 +177,10 @@ def framing_headers(
 
     if content_length:
         out.append("Content-Length", String(content_length.value()))
+        return out^
+
+    if streaming:
+        out.append("Transfer-Encoding", "chunked")
         return out^
 
     # No body and no framing set. A `GET` with `Content-Length: 0` is legal and

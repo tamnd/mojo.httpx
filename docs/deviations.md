@@ -13,6 +13,7 @@ Two kinds of difference show up. The first kind is forced by the language: Mojo 
 | duck typed transports | a generic transport plus an erased vtable | Mojo has no trait objects |
 | `async with AsyncClient()` | explicit `await client.aclose()` | Mojo has no async context managers |
 | `for chunk in r.iter_bytes()` | `while chunks.has_next(): chunks.next()` | Mojo has no generators, and a `for` loop swallows an error raised out of `__next__` |
+| `content=` takes bytes or an iterable | `content=` for bytes, `content_stream=` for a source | Mojo cannot tell the two apart at runtime, so they are two arguments |
 | `**kwargs` config | typed builders | Mojo has no keyword argument packing |
 | `timedelta` | `Duration` | no stdlib equivalent |
 | `json.loads` on arbitrarily nested input | an arena of nodes indexed by integer | Mojo 1.0 has no recursive structs, so a tree cannot hold itself |
@@ -44,6 +45,12 @@ httpx2 sets `is_closed` when the iterator finishes, in a `finally`. Here it goes
 The reason is that the iterator would have to reach back into the response to update it, and a back reference means a raw pointer inside `_models`, which is a layer where the unsafe lint does not allow one. The alternative would be moving the models into an unsafe layer to hold one pointer, which is a much worse trade than moving a flag one step earlier.
 
 What the flag means in practice is the same either way: from that moment the response itself cannot produce anything, and a second reader has to be turned away. `is_stream_consumed` goes true at the same moment in both libraries.
+
+### A streaming request body cannot be sent twice
+
+httpx2 has the same rule and the same error. It is worth stating here anyway, because this library enforces it a step earlier.
+
+A body that is pulled as it is written exists once. `Request.copy()` on a request that has one produces a copy with no body at all, which remembers that it is missing one, so sending the copy raises `RequestNotRead` with a message saying to read the body into memory and use `content=` if it has to go more than once. The alternative would be a copy that quietly sent an empty body to a redirect target, which is the kind of failure that shows up as a support ticket about a missing upload rather than as an error.
 
 ### `httpx.stream()` does not reuse its connection
 

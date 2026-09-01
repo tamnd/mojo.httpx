@@ -30,6 +30,7 @@ from httpx._stream.stream import Stream
 from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.response import Response
+from httpx._models.stream import ByteStream
 from httpx._proto.h1.body import BodyReader
 from httpx._proto.h1.framing import BodyMode, Framing, framing_for
 from httpx._proto.h1.head import ResponseHead, parse_head
@@ -224,12 +225,16 @@ struct H1Connection(Movable):
             )
 
         var length: Optional[Int] = None
+        var streaming = request.has_stream()
         if (
-            "transfer-encoding" not in request.headers
+            not streaming
+            and "transfer-encoding" not in request.headers
             and len(request.content) > 0
         ):
             length = Optional[Int](len(request.content))
-        var extra = framing_headers(request.method, request.headers, length)
+        var extra = framing_headers(
+            request.method, request.headers, length, streaming
+        )
         for i in range(len(extra)):
             # Copied out before appending. The spans borrow from `extra`, and
             # `multi_items` would give the lowered names, which would put this
@@ -252,7 +257,7 @@ struct H1Connection(Movable):
                 self.state = H1State.WAIT_RESPONSE
                 return
 
-        self._send_body(request, deadline)
+        self._send_body(request^, deadline)
 
     def read_response(mut self, deadline: Deadline) raises -> Response:
         """Read one response, informational ones skipped, body and all.
@@ -356,12 +361,15 @@ struct H1Connection(Movable):
             self.state = H1State.CLOSED
             self.stream.close()
 
-    def _send_body(mut self, request: Request, deadline: Deadline) raises:
+    def _send_body(mut self, var request: Request, deadline: Deadline) raises:
         # Each write starts the write budget again, because the timeout is on
         # one write and not on the upload. A body large enough to need several
         # writes is not a slow server, and treating it as one would mean the
         # write timeout doubled as a limit on how much can be sent.
-        if "transfer-encoding" in request.headers:
+        var chunked = "transfer-encoding" in request.headers
+        if request.has_stream():
+            self._pump(request.take_stream(), chunked, deadline)
+        elif chunked:
             if len(request.content) > 0:
                 self.stream.write(
                     Span(chunk(Span(request.content))), deadline.renewed()
@@ -372,6 +380,37 @@ struct H1Connection(Movable):
         elif len(request.content) > 0:
             self.stream.write(Span(request.content), deadline.renewed())
         self.state = H1State.WAIT_RESPONSE
+
+    def _pump(
+        mut self, var body: ByteStream, chunked: Bool, deadline: Deadline
+    ) raises:
+        """Write a streaming body a piece at a time, as the pieces arrive.
+
+        A source that raises halfway through leaves the connection closed rather
+        than left in `SEND_BODY`, because the server has already been told how
+        much to expect and there is no way to take back the part that went out.
+        """
+        try:
+            while True:
+                var piece = body.read_chunk()
+                if len(piece) == 0:
+                    break
+                if chunked:
+                    self.stream.write(
+                        Span(chunk(Span(piece))), deadline.renewed()
+                    )
+                else:
+                    self.stream.write(Span(piece), deadline.renewed())
+        except e:
+            body.close()
+            self.state = H1State.CLOSED
+            self.stream.close()
+            raise e
+        if chunked:
+            self.stream.write(
+                Span(terminal_chunk(Headers())), deadline.renewed()
+            )
+        body.close()
 
     def _wait_for_continue(mut self, deadline: Deadline) raises -> Bool:
         """Whether to go ahead and send the body.

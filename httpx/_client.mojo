@@ -22,6 +22,7 @@ from httpx._config import Timeout
 from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.response import Response
+from httpx._models.stream import ByteStream
 from httpx._models.url import URL, QueryParams
 from httpx._pool.limits import Limits
 from httpx._stream.config import ClientCert, SSLVerify, TlsConfig
@@ -139,6 +140,7 @@ struct Client(Movable):
         *,
         var headers: Headers = Headers(),
         var content: List[UInt8] = List[UInt8](),
+        var content_stream: Optional[ByteStream] = None,
         var params: QueryParams = QueryParams(),
     ) raises -> Request:
         """Merge the client configuration with this call and produce a request.
@@ -146,11 +148,23 @@ struct Client(Movable):
         Public because it is how a caller inspects what would be sent without
         sending it, and because `send` takes what it returns. httpx has the same
         pair for the same reason.
+
+        `content` is a body that is already in memory and `content_stream` is
+        one that is pulled as it is written. httpx2 takes either through a
+        single `content=`, because Python can tell bytes from an iterable at
+        runtime. Here they are two arguments because they are two types, and
+        naming them apart is better than a wrapper whose only job is to hide
+        which one the caller meant.
         """
         var target = self._resolve(url)
         if len(params) > 0 or len(self.params) > 0:
             target = target.copy_merge_params(self.params.merge(params))
-        return Request(method, target^, self._headers_for(headers^), content^)
+        var merged = self._headers_for(headers^)
+        if content_stream:
+            return Request.streaming(
+                method, target^, content_stream.take(), merged^
+            )
+        return Request(method, target^, merged^, content^)
 
     def send(
         mut self,
@@ -182,6 +196,7 @@ struct Client(Movable):
         *,
         var headers: Headers = Headers(),
         var content: List[UInt8] = List[UInt8](),
+        var content_stream: Optional[ByteStream] = None,
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
     ) raises -> Response:
@@ -204,7 +219,12 @@ struct Client(Movable):
         destroyed at the end of the block.
         """
         var built = self.build_request(
-            method, url, headers=headers^, content=content^, params=params^
+            method,
+            url,
+            headers=headers^,
+            content=content^,
+            content_stream=content_stream^,
+            params=params^,
         )
         return self.send(built^, timeout, stream=True)
 
@@ -215,11 +235,17 @@ struct Client(Movable):
         *,
         var headers: Headers = Headers(),
         var content: List[UInt8] = List[UInt8](),
+        var content_stream: Optional[ByteStream] = None,
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
     ) raises -> Response:
         var built = self.build_request(
-            method, url, headers=headers^, content=content^, params=params^
+            method,
+            url,
+            headers=headers^,
+            content=content^,
+            content_stream=content_stream^,
+            params=params^,
         )
         return self.send(built^, timeout)
 
@@ -279,6 +305,7 @@ struct Client(Movable):
         url: StringSpan,
         *,
         var content: List[UInt8] = List[UInt8](),
+        var content_stream: Optional[ByteStream] = None,
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
@@ -288,6 +315,7 @@ struct Client(Movable):
             url,
             headers=headers^,
             content=content^,
+            content_stream=content_stream^,
             params=params^,
             timeout=timeout,
         )
@@ -297,6 +325,7 @@ struct Client(Movable):
         url: StringSpan,
         *,
         var content: List[UInt8] = List[UInt8](),
+        var content_stream: Optional[ByteStream] = None,
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
@@ -306,6 +335,7 @@ struct Client(Movable):
             url,
             headers=headers^,
             content=content^,
+            content_stream=content_stream^,
             params=params^,
             timeout=timeout,
         )
@@ -315,6 +345,7 @@ struct Client(Movable):
         url: StringSpan,
         *,
         var content: List[UInt8] = List[UInt8](),
+        var content_stream: Optional[ByteStream] = None,
         var headers: Headers = Headers(),
         var params: QueryParams = QueryParams(),
         timeout: Optional[Timeout] = None,
@@ -324,6 +355,7 @@ struct Client(Movable):
             url,
             headers=headers^,
             content=content^,
+            content_stream=content_stream^,
             params=params^,
             timeout=timeout,
         )
