@@ -46,7 +46,9 @@ Above L4 that is what we use. Below L4, where the set of implementations is clos
 
 The sync and async versions of an HTTP client are the same state machine driven by different I/O. Writing both by hand means maintaining two copies of the smuggling defences, which is how you end up with a bug in one of them.
 
-Instead every layer from L3 up is generic over a `ByteStream` trait. `TcpStream` and `AsyncTcpStream` both satisfy it, the protocol code compiles once, and it instantiates twice. Roughly ninety percent of the code is shared.
+Instead every layer from L3 up is generic over a `ByteStream` trait, and everything that can be written without touching a descriptor is written that way. The framing rules, the header validation, HPACK, the models: none of them know what a socket is, so none of them get a second copy.
+
+This originally said `TcpStream` and `AsyncTcpStream` would both satisfy the trait and the protocol code would compile once and instantiate twice. That part does not survive contact with the language. Mojo's function colours are strict in both directions, an `async def` does not satisfy a trait method declared `def` and a `def` does not satisfy one declared `async def`, so there is no one trait that covers both. The driving loops, the code that reads until a head is complete and writes a body while watching a window, therefore get a second copy. The sync one stays the source and the async one is generated from it, and `pixi run generated-check` fails when the two drift. See [async.md](async.md) for the probe that settled it and for why the direction is the opposite of httpcore's.
 
 ## Plain and TLS streams are one type, not two
 
@@ -228,11 +230,15 @@ They are one shot rather than incremental, because a digest challenge hashes a f
 
 This also removes a whole class of protocol bug, because header parsing over anything Unicode aware is how you get header smuggling.
 
-## Async is the open risk
+## Async was the open risk
 
-Mojo has `async def` and `await`, and they compile. What it does not have is an executor, an event loop, or any async I/O. `Coroutine` is a linear type with no way to store or schedule it.
+This section used to say that Mojo has no executor and no way to store or schedule a coroutine, so M6 might have to ship a thread pool instead of a loop. Half of that turned out to be wrong once we measured it rather than assuming it, and the correction is worth keeping visible because the assumption shaped the plan for a long time.
 
-So M6 builds an event loop from scratch on kqueue and epoll. That is the single riskiest part of the plan, and the milestone opens with an explicit go or no go decision. If the language cannot support it yet, the fallback is a thread pool backed `AsyncClient` with the same API surface, so user code does not change when the real runtime lands. Everything under `httpx/_io/` is marked internal precisely so it can be replaced without a breaking release.
+Mojo 1.0.0 has a task scheduler. `std.runtime.asyncrt` gives `create_task`, `Task`, `TaskGroup` and a way to drive a coroutine from ordinary code, awaiting hands the worker back rather than sitting on it, and a scheduler round trip costs under a microsecond. What it does not have is async I/O, or any way for our own code to resume a parked coroutine when a descriptor becomes readable.
+
+So M6 builds a reactor on kqueue and epoll where waiting is polling rather than being woken, and where the one case that would otherwise spin, nothing ready anywhere, is handled by a single coroutine doing the blocking wait for everybody. The full decision, the numbers behind it and what we are taking on knowingly are in [async.md](async.md). Everything under `httpx/_io/` stays internal precisely so the polling can become a wake-up later without a breaking release.
+
+The other correction is the one in decision two above: the sans-io half of the plan holds and the two instantiations of one driver do not, because no single trait covers a socket and an async socket. The driving loops get a generated second copy.
 
 ## Distribution
 

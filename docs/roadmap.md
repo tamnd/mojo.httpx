@@ -44,7 +44,7 @@ Exit: the HPACK vectors pass, the h2 test suite passes, and the CONTINUATION flo
 
 An event loop on kqueue and epoll, and `AsyncClient` at feature parity with `Client`.
 
-This is the riskiest milestone. Mojo has `async def` and `await` but no executor and no async I/O, and `Coroutine` is a linear type that cannot be stored or scheduled. The milestone opens with a go or no go on whether the language can support a real loop yet. If it cannot, the fallback is a thread pool behind the same API, so user code does not change when the real thing lands.
+This was written as the riskiest milestone, on the assumption that Mojo has no executor at all. It has one. `std.runtime.asyncrt` schedules coroutines on a thread pool and awaiting hands the worker back, so the decision came out go rather than fallback. What is still missing is async I/O and any way to resume a parked coroutine from a callback, so waiting is polling. [async.md](async.md) has the measurements and the design.
 
 Exit: `AsyncClient` passes the same test suite as `Client`, or the fallback ships with the limitation documented.
 

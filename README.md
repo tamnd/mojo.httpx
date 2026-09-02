@@ -328,6 +328,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. It lists 
 - [Request bodies](docs/content.md) for the six body arguments, the content type each implies, and why passing two raises
 - [JSON](docs/json.md) for reading a body, building one, and what the parser refuses
 - [Deviations](docs/deviations.md) for every place this behaves differently from httpx2, and why
+- [Async](docs/async.md) for what Mojo's scheduler can and cannot do, measured, and the design that follows from it
 - [Roadmap](docs/roadmap.md) for milestones M0 through M9
 - [Testing](docs/testing.md) for the test layers, the CI matrix, and the local hardware fleet
 
