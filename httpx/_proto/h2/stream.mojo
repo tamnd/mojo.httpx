@@ -211,7 +211,7 @@ struct ResetTracker(ImplicitlyCopyable, Movable):
         self._consecutive = 0
 
 
-struct H2Stream(Movable):
+struct H2Stream(ImplicitlyCopyable, Movable):
     """One request and its response, and the flow control that goes with it."""
 
     var id: UInt32
