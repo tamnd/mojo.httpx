@@ -128,6 +128,28 @@ var client = Client(transport^)
 
 `handle.state[MockRouter]()` reads the router back after the client has taken it, because a copy of an erased transport is the same transport. `router.calls` is every request that arrived, `route.calls` is what each route answered, and `assert_all_called()` fails a test whose route pattern was wrong and never matched. The README has a fuller example.
 
+## Vendored corpora
+
+The conformance tests run against files somebody else maintains: the public suffix list and its cases, the WHATWG URL cases, the Unicode and IDNA tables, the http-state cookie tests and the http2jp HPACK stories. Those files live in `tests/data` and are committed, so a test run never reaches the network and a checkout from six months ago asserts exactly what it asserted then.
+
+```bash
+pixi run vendor-check                                     # every file matches the lock
+pixi run python tools/vendor/fetch.py --update            # refresh all of them
+pixi run python tools/vendor/fetch.py --update whatwg-url # refresh one
+```
+
+`tools/vendor/sources.toml` says where each corpus came from, what licence it carries and what it is for. Fetching rewrites `tests/data/LOCK.toml` with a digest and a size per file. Review that diff the way you would review a dependency bump, because the assertions the suite makes are about to change based on a file somebody else controls.
+
+`vendor-check` also fails on any file under `tests/data` that no source declares. That is the rule that catches the mistake people actually make, which is copying a corpus in by hand with no record of where it came from.
+
+A source that names a `files` list is one corpus made of many files, each pinned separately. The HPACK stories are the only one of those so far: forty files from four encoders, which would otherwise be forty copies of one licence and one paragraph.
+
+### The HPACK stories
+
+HPACK gives an encoder real freedom. The same header list can go out as a static index, a dynamic index, a literal with indexing, a literal without it, Huffman coded or not, with the table resized in the middle, and all of those are correct. A decoder tested only against our own encoder is tested against our own choices, so `tests/unit/test_h2_hpack_corpus.mojo` runs 340 cases from four encoders that made different ones: nghttp2, nghttp2 with table size changes, a naive Haskell encoder that indexes nothing and Huffman codes nothing, and one that Huffman codes everything including names.
+
+The stories are stateful and that is the point. One decoder runs a whole story, so case seven decodes correctly only if cases zero to six each put the right thing in the dynamic table. A failure is reported once per story and the rest of it is skipped, because every later case in a story is being decoded against a table that is already wrong.
+
 ## Test layers
 
 The full plan, from `docs/roadmap.md`:

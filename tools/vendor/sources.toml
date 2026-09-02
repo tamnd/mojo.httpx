@@ -119,3 +119,67 @@ The cookie parsing suite the web platform tests are derived from, in a form that
 can be read without a browser. RFC 6265 section 5.2 is quirky enough that reading
 it and implementing what it appears to say produces something that fails here.
 """
+
+[[source]]
+name = "hpack-test-case"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/"
+path = "tests/data/hpack/"
+license = "MIT"
+purpose = """
+Header blocks produced by four independent HPACK encoders, each with the headers
+they decode to. HPACK gives an encoder real freedom, so an implementation that
+only ever decodes its own output is only tested against its own choices, and the
+four here were picked because they make different ones. nghttp2 uses Huffman
+coding only where it is shorter and leaves some fields unindexed. The
+change-table-size variant sends dynamic table size updates, which is the path
+that changes the decoder's own state rather than its output. The Haskell naive
+encoder indexes nothing and Huffman codes nothing, so every field is a plain
+literal. The Haskell linear Huffman encoder does the opposite and Huffman codes
+everything, including field names, which nothing else here does.
+
+Stories 00 to 09 of each. The later stories are crawl captures running to
+hundreds of kilobytes apiece and they exercise the same decoding paths as the
+early ones, so vendoring them would cost megabytes to test nothing new.
+"""
+files = [
+  "nghttp2/story_00.json",
+  "nghttp2/story_01.json",
+  "nghttp2/story_02.json",
+  "nghttp2/story_03.json",
+  "nghttp2/story_04.json",
+  "nghttp2/story_05.json",
+  "nghttp2/story_06.json",
+  "nghttp2/story_07.json",
+  "nghttp2/story_08.json",
+  "nghttp2/story_09.json",
+  "nghttp2-change-table-size/story_00.json",
+  "nghttp2-change-table-size/story_01.json",
+  "nghttp2-change-table-size/story_02.json",
+  "nghttp2-change-table-size/story_03.json",
+  "nghttp2-change-table-size/story_04.json",
+  "nghttp2-change-table-size/story_05.json",
+  "nghttp2-change-table-size/story_06.json",
+  "nghttp2-change-table-size/story_07.json",
+  "nghttp2-change-table-size/story_08.json",
+  "nghttp2-change-table-size/story_09.json",
+  "haskell-http2-naive/story_00.json",
+  "haskell-http2-naive/story_01.json",
+  "haskell-http2-naive/story_02.json",
+  "haskell-http2-naive/story_03.json",
+  "haskell-http2-naive/story_04.json",
+  "haskell-http2-naive/story_05.json",
+  "haskell-http2-naive/story_06.json",
+  "haskell-http2-naive/story_07.json",
+  "haskell-http2-naive/story_08.json",
+  "haskell-http2-naive/story_09.json",
+  "haskell-http2-linear-huffman/story_00.json",
+  "haskell-http2-linear-huffman/story_01.json",
+  "haskell-http2-linear-huffman/story_02.json",
+  "haskell-http2-linear-huffman/story_03.json",
+  "haskell-http2-linear-huffman/story_04.json",
+  "haskell-http2-linear-huffman/story_05.json",
+  "haskell-http2-linear-huffman/story_06.json",
+  "haskell-http2-linear-huffman/story_07.json",
+  "haskell-http2-linear-huffman/story_08.json",
+  "haskell-http2-linear-huffman/story_09.json",
+]
