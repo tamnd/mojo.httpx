@@ -12,6 +12,7 @@ from httpx._proto.h2.frames import DEFAULT_WINDOW_SIZE
 from httpx._proto.h2.stream import (
     DEFAULT_MAX_CONSECUTIVE_RESETS,
     H2Stream,
+    MAX_HEADER_BLOCKS,
     MAX_STREAM_ID,
     ResetTracker,
     StreamIds,
@@ -131,9 +132,10 @@ def test_a_response_on_a_reset_stream_is_refused() raises:
         stream.recv_headers(end_stream=False)
 
 
-def test_trailers_are_allowed_and_a_third_block_is_not() raises:
-    # RFC 9113 section 8.1 has room for the response headers and then trailers.
-    # Without the count a third block would quietly replace the response.
+def test_header_blocks_are_counted_and_bounded() raises:
+    # A response head and a set of trailers are two, and informational responses
+    # come before both, so the bound is not two. What it is there for is that
+    # header blocks are otherwise unlimited, and each one costs a decode.
     var stream = H2Stream(1)
     stream.send_headers(end_stream=True)
     stream.recv_headers(end_stream=False)
@@ -142,6 +144,10 @@ def test_trailers_are_allowed_and_a_third_block_is_not() raises:
     stream.recv_data(10, end_stream=False)
     stream.recv_headers(end_stream=False)
     assert_equal(stream.header_blocks, 2)
+
+    for _ in range(MAX_HEADER_BLOCKS - 2):
+        stream.recv_headers(end_stream=False)
+    assert_equal(stream.header_blocks, MAX_HEADER_BLOCKS)
 
     with assert_raises():
         stream.recv_headers(end_stream=False)

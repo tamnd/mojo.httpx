@@ -36,6 +36,16 @@ comptime MAX_STREAM_ID = 0x7FFFFFFF
 comptime DEFAULT_MAX_CONSECUTIVE_RESETS = 32
 """How many streams a server may reset in a row before we stop opening them."""
 
+comptime MAX_HEADER_BLOCKS = 10
+"""How many header blocks one stream may carry.
+
+Eight informational responses, then the real one, then trailers. The eight is
+the same allowance the HTTP/1.1 side makes and for the same reason: there is no
+legitimate run of interim responses that long, and with no bound at all a server
+can send header blocks for as long as it likes, each one costing a decode and
+each one a chance to grow the dynamic table.
+"""
+
 
 def _remote(message: String) -> Error:
     return new_error(ErrorKind.REMOTE_PROTOCOL_ERROR, message)
@@ -222,9 +232,11 @@ struct H2Stream(ImplicitlyCopyable, Movable):
     var header_blocks: Int
     """How many header blocks have arrived on this stream.
 
-    RFC 9113 section 8.1 has room for exactly two: the response headers and
-    then trailers. A third is a server sending something the protocol has no
-    place for, and without the count it would silently overwrite the response.
+    RFC 9113 section 8.1 has room for the response headers, then trailers, and
+    before either of those any number of informational responses. Only the first
+    two are meaningful to a caller, so the count is here to stop the third kind
+    being unbounded rather than to enforce a shape: what the head and the
+    trailers may be is a question for whoever reads them.
     """
 
     def __init__(
@@ -287,10 +299,14 @@ struct H2Stream(ImplicitlyCopyable, Movable):
         self._refuse_if_finished("a response")
 
         self.header_blocks += 1
-        if self.header_blocks > 2:
+        if self.header_blocks > MAX_HEADER_BLOCKS:
             raise _remote(
                 String(
-                    "the server sent a third header block on stream ", self.id
+                    "the server sent ",
+                    self.header_blocks,
+                    " header blocks on stream ",
+                    self.id,
+                    ", which is more than a response can be made of",
                 )
             )
         if end_stream:

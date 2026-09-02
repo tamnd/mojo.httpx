@@ -150,6 +150,14 @@ HPACK gives an encoder real freedom. The same header list can go out as a static
 
 The stories are stateful and that is the point. One decoder runs a whole story, so case seven decodes correctly only if cases zero to six each put the right thing in the dynamic table. A failure is reported once per story and the rest of it is skipped, because every later case in a story is being decoded against a table that is already wrong.
 
+## The h2 suite cases
+
+`tests/unit/test_h2_conformance.mojo` is the python-hyper h2 test suite's cases put to this client. h2 is the HTTP/2 implementation everything in Python sits on, including httpx, so its suite is the closest thing there is to a shared reading of RFC 9113.
+
+It is Python test code rather than a corpus, so unlike everything in `tests/data` there is nothing to vendor and nothing to pin. The cases are rewritten, and each one names the rule it is about rather than pointing at a file, because a case that only says which upstream test it came from is a case nobody can maintain.
+
+Not all of them apply. Most of that suite is about the server half of the protocol, about h2's own event objects, and about the priority scheme RFC 9113 withdrew. What is left is the part a client can get wrong on its own: what makes a received message malformed under RFC 9113 section 8.2, what a client does with an informational response, and whether a bad message costs one stream or the whole connection. Roughly half the file is acceptances rather than refusals, which is what stops the suite passing on a client that refuses every response there is.
+
 ## Test layers
 
 The full plan, from `docs/roadmap.md`:
