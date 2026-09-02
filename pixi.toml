@@ -33,15 +33,19 @@ python = ">=3.12"
 [feature.parity.pypi-dependencies]
 httpx2 = "*"
 
-# The differential fuzzer needs the parser it is being compared against. h11 is
-# the reference because it is what httpx itself parses with, so a disagreement
-# is a real difference in behaviour and not a difference of opinion between two
-# libraries nobody uses.
+# The differential fuzzers need the parsers they are being compared against.
+# h11 is the reference for HTTP/1.1 because it is what httpx itself parses
+# with, so a disagreement is a real difference in behaviour and not a
+# difference of opinion between two libraries nobody uses. hpack is the
+# reference for HPACK for the same reason: it is the HPACK half of the h2
+# project, which is what httpx speaks HTTP/2 through, so the same argument
+# carries over.
 [feature.fuzz.dependencies]
 python = ">=3.12"
 
 [feature.fuzz.pypi-dependencies]
 h11 = "*"
+hpack = "*"
 
 [environments]
 default = { features = ["dev"] }
@@ -87,6 +91,13 @@ badssl = "mojo run -I . tools/interop/badssl.mojo"
 # slow test, and one without them is not something a commit can wait for. CI
 # runs it nightly with a fresh seed.
 fuzz = "python tools/fuzz/h1_diff.py"
+
+# The HPACK decoder against hpack, on encoded and randomly damaged header
+# blocks. Same environment and the same reasons for not being in `check`. A
+# case here is a run of blocks rather than one, because the dynamic table
+# outlives a block and a decoder that gets the table wrong is right about every
+# block taken on its own.
+fuzz-hpack = "python tools/fuzz/hpack_diff.py"
 
 # The same scenarios through this client and through httpx2, comparing the bytes
 # that went out and what each one made of the answer. Needs httpx2 installed, so
