@@ -94,7 +94,14 @@ FOREVER_RE = re.compile(r"\b(?:poll|wait|select|kevent|epoll_wait)\s*\([^)]*-\s*
 # a caller that supplied a deadline.
 BLOCKING_RE = re.compile(r"\b(?:poll|recv|send|connect_to|accept|resolve)\s*\(")
 
-DEF_RE = re.compile(r"^(\s*)def\s+(\w+)\s*\(")
+# `async def` counts. The async I/O layer is written entirely in coroutines, and
+# a pattern that only matched `def` would have exempted every one of them from
+# the deadline rule while still reporting success.
+DEF_RE = re.compile(r"^(\s*)(?:async\s+)?def\s+(\w+)\s*\(")
+
+# The same, for the cheap walk-back checks below that only need to know whether
+# a line starts a definition.
+HEADER_STARTS = ("def ", "async def ", "struct ")
 
 # The same rule one storey up. Above the I/O layer nothing calls a syscall, but
 # plenty of things drive a socket through a stream, run a whole exchange, or
@@ -223,20 +230,20 @@ def justified(lines: list[str], index: int) -> bool:
         stripped = lines[position].strip()
         if stripped.startswith("#") or '"""' in stripped:
             return True
-        if stripped.startswith("def ") or stripped.startswith("struct "):
+        if stripped.startswith(HEADER_STARTS):
             return False
     return False
 
 
 def in_signature(lines: list[str], index: int) -> bool:
-    """True when this line is part of a `def` or `struct` header.
+    """True when this line is part of a `def`, `async def` or `struct` header.
 
     Found by walking back to the nearest one and checking that the header has
     not already been closed by a line ending in a colon.
     """
     for position in range(index, max(index - 8, -1), -1):
         stripped = lines[position].strip()
-        if stripped.startswith("def ") or stripped.startswith("struct "):
+        if stripped.startswith(HEADER_STARTS):
             for cursor in range(position, index):
                 if lines[cursor].rstrip().endswith(":"):
                     return False
@@ -419,6 +426,16 @@ SELFTEST_CASES = [
     (
         "_io/no_deadline.mojo",
         '"""m."""\n\n\ndef read_some(fd: Int) -> Int:\n'
+        "    # Blocks with nothing to stop it.\n"
+        "    return recv(fd, 0, 0, 0)\n",
+        check_deadlines,
+    ),
+    (
+        # A coroutine blocks the same way a plain function does, and the async
+        # I/O layer is nothing but coroutines, so the deadline rule has to see
+        # through `async def` as well.
+        "_io/async_no_deadline.mojo",
+        '"""m."""\n\n\nasync def read_some(fd: Int) -> Int:\n'
         "    # Blocks with nothing to stop it.\n"
         "    return recv(fd, 0, 0, 0)\n",
         check_deadlines,

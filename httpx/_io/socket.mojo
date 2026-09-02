@@ -137,10 +137,8 @@ struct TcpStream(Movable):
         """
         while True:
             deadline.check(String("read from ", self._peer))
-            var n = self._attempt_read(buf)
+            var n = self.try_read(buf)
             if n >= 0:
-                if n == 0:
-                    self._readable = False
                 return Int(n)
             var code = errno()
             if interrupted(code):
@@ -164,7 +162,7 @@ struct TcpStream(Movable):
         var sent = 0
         while sent < data.__len__():
             deadline.check(String("write to ", self._peer))
-            var n = self._attempt_write(data[sent:])
+            var n = self.try_write(data, sent)
             if n > 0:
                 sent += Int(n)
                 continue
@@ -252,16 +250,20 @@ struct TcpStream(Movable):
         self._readable = False
         self._writable = False
 
-    def _attempt_read[o: MutOrigin](mut self, buf: Span[UInt8, o]) -> Int:
+    def try_read[o: MutOrigin](mut self, buf: Span[UInt8, o]) -> Int:
         """One `recv`, with no waiting. Negative means errno has the reason.
 
         Taking the address of the first element is sound because the caller's
         span is non empty by the check below and a span's elements are
         contiguous, so `count` bytes from that address stay inside it.
+
+        Notes end of stream itself rather than leaving it to `read`, because the
+        async stream drives this same call from its own loop and a second place
+        remembering to do the bookkeeping is a second place to forget.
         """
         if buf.__len__() == 0:
             return 0
-        return Int(
+        var n = Int(
             recv(
                 self._fd,
                 Pointer(to=buf[0]),
@@ -269,21 +271,34 @@ struct TcpStream(Movable):
                 c_int(0),
             )
         )
+        if n == 0:
+            self._readable = False
+        return n
 
-    def _attempt_write[o: ImmOrigin](mut self, data: Span[UInt8, o]) -> Int:
-        """One `send`, with no waiting. Negative means errno has the reason.
+    def try_write[
+        o: ImmOrigin
+    ](mut self, data: Span[UInt8, o], offset: Int = 0) -> Int:
+        """One `send` of everything from `offset` on, with no waiting.
 
-        Same contiguity argument as `_attempt_read`. `MSG_NOSIGNAL` is zero on
-        Darwin, where `SO_NOSIGPIPE` was set when the socket was made, so the
-        SIGPIPE suppression is covered on both platforms.
+        Negative means errno has the reason. Same contiguity argument as
+        `try_read`. `MSG_NOSIGNAL` is zero on Darwin, where `SO_NOSIGPIPE` was
+        set when the socket was made, so the SIGPIPE suppression is covered on
+        both platforms.
+
+        The caller passes an offset rather than a slice of its own because
+        `data[offset:]` inside a coroutine that suspends crashes the Mojo 1.0.0
+        compiler, and the async stream writes in exactly that shape. One
+        signature both callers can use beats a second entry point that only the
+        async one needs, so the synchronous `write` passes an offset too.
         """
-        if data.__len__() == 0:
+        var remaining = data.__len__() - offset
+        if remaining <= 0:
             return 0
         return Int(
             send(
                 self._fd,
-                Pointer(to=data[0]),
-                c_size_t(data.__len__()),
+                Pointer(to=data[offset]),
+                c_size_t(remaining),
                 MSG_NOSIGNAL,
             )
         )
