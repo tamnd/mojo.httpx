@@ -23,13 +23,15 @@ The numbers from one run on the development laptop, an M-series with four perfor
 | eight through a `TaskGroup` | 512 ms |
 | a scheduler round trip | about 740 ns |
 
+The last row is the only one that moves between runs. Repeating it on this laptop gives anywhere from 740 ns to 1187 ns depending on what else is running, and the quietest machine in the fleet, a thirty two core box under WSL2, gives 1795 ns. Everything the decision below rests on is true across that whole range, so read the row as a couple of microseconds rather than as a measurement.
+
 Three things follow from those.
 
 Tasks really do run at the same time. Four naps in the time of one is a thread pool doing its job, not an interleaving.
 
 Awaiting hands the worker back. Four coroutines that each do nothing but wait for another coroutine finish in one nap rather than two, which means a waiter is parked rather than parked on top of a thread. Without that property a client built on tasks deadlocks the first time a request waits for a connection, so it is the single most important line in the probe.
 
-Blocking work is capped at `parallelism_level()`. Eight naps take twice as long as four because a `sleep` holds its worker, and a blocking socket read is a `sleep` that happens to be waiting on a peer. The pool is sized to the performance cores, four here on a ten core machine, and no environment variable we tried changes it. It is a pool for compute, and compute is not what an HTTP client spends its time on.
+Blocking work is capped at `parallelism_level()`. Eight naps take twice as long as four because a `sleep` holds its worker, and a blocking socket read is a `sleep` that happens to be waiting on a peer. The pool is sized to the performance cores, four here on a ten core machine, and no environment variable we tried changes it. It is a pool for compute, and compute is not what an HTTP client spends its time on. The cap moves with the machine and the rule does not: on the thirty two worker host the same eight naps finish in one nap's time, and it would take thirty three of them to start queueing.
 
 ## What is missing
 
@@ -43,7 +45,7 @@ Two smaller gaps shape the API rather than the design. `Task` is not `Movable`, 
 
 Go, and build the real loop rather than the thread pool fallback.
 
-The fallback in the plan was `AsyncClient` over a pool of threads running the blocking client, with concurrency bounded by the pool. We can do better than that, and the reason is the last row of the table. A scheduler round trip costs under a microsecond, so a coroutine that has nothing to do can give way and be picked up again thousands of times in the time a network round trip takes. That turns the missing wake-up into a polling problem rather than a blocking problem, and a polling problem is one we can solve.
+The fallback in the plan was `AsyncClient` over a pool of threads running the blocking client, with concurrency bounded by the pool. We can do better than that, and the reason is the last row of the table. A scheduler round trip costs a couple of microseconds, so a coroutine that has nothing to do can give way and be picked up again thousands of times in the time a network round trip takes. That turns the missing wake-up into a polling problem rather than a blocking problem, and a polling problem is one we can solve.
 
 The shape is:
 
