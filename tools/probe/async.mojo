@@ -161,6 +161,82 @@ async def awaits_one[r: MutOrigin](result: Pointer[Int, r]):
     await suspends_once(result)
 
 
+struct Sink(Movable):
+    """Owned memory a coroutine is allowed to fill, because it is not its own.
+
+    A `List` and a `String` are exactly what a coroutine may not hold in its own
+    frame across a suspension. Put them behind a pointer and mutate them through
+    ordinary synchronous methods and it works, which is the shape
+    `httpx._proto.h1.aio` is built out of.
+    """
+
+    var bytes: List[UInt8]
+    var name: String
+
+    def __init__(out self):
+        self.bytes = List[UInt8]()
+        self.name = String()
+
+    def took(mut self, value: UInt8):
+        self.bytes.append(value)
+
+    def named(mut self, round: Int):
+        """Takes the number rather than the text on purpose.
+
+        Building the `String` here means it is allocated in this frame, not in
+        the coroutine's. Passing `String("round ", n)` in from the coroutine is
+        the same mistake as the local list, one type along.
+        """
+        self.name = String("round ", round)
+
+
+async def fills_through_a_pointer[
+    o: MutOrigin
+](sink: Pointer[Sink, o], times: Int):
+    """Two sequential suspending loops, both writing owned memory in place.
+
+    Two loops rather than one because a coroutine that suspends in a loop twice
+    over is a thing the driver needs, once to write a request and once to read
+    the answer, and it was worth checking rather than assuming.
+    """
+    var done = 0
+    while done < times:
+        sink[].took(UInt8(done))
+        done += 1
+        _ = await create_task(nothing())
+    done = 0
+    while done < times:
+        sink[].named(done)
+        done += 1
+        _ = await create_task(nothing())
+
+
+async def nested_suspending_loops[
+    o: MutOrigin
+](sink: Pointer[Sink, o], outer: Int, inner: Int):
+    """A suspending loop inside another loop. Also allowed."""
+    var i = 0
+    while i < outer:
+        var j = 0
+        while j < inner:
+            sink[].took(UInt8(i * inner + j))
+            j += 1
+            _ = await create_task(nothing())
+        i += 1
+
+
+async def both_at_once[
+    o: MutOrigin
+](sinks: Pointer[List[Sink], o], times: Int):
+    """Several of the above outstanding together, each on its own element."""
+    var group = TaskGroup()
+    for i in range(sinks[].__len__()):
+        group.create_task(
+            fills_through_a_pointer(Pointer(to=sinks[][i]), times)
+        )
+    await group
+
+
 async def spin(times: Int) -> Int:
     """Round trips through the scheduler and nothing else.
 
@@ -241,6 +317,32 @@ def main() raises:
     print("    two suspensions compiles and hangs forever, which is case two")
     print()
 
+    print("=== owned memory, as long as it is not the coroutine's own")
+    var sink = Sink()
+    _run(fills_through_a_pointer(Pointer(to=sink), 4))
+    print("    bytes:", len(sink.bytes), "and it has to be 4")
+    print("    name:", sink.name, "and it has to be round 3")
+    print("    the same list as a local comes back empty and says nothing, case five")
+    print()
+
+    print("=== a suspending loop inside another one")
+    var nested_sink = Sink()
+    _run(nested_suspending_loops(Pointer(to=nested_sink), 3, 4))
+    print("    bytes:", len(nested_sink.bytes), "and it has to be 12")
+    print()
+
+    print("=== several of those at once")
+    var sinks = List[Sink]()
+    for _ in range(6):
+        sinks.append(Sink())
+    _run(both_at_once(Pointer(to=sinks), 4))
+    var wrong = 0
+    for i in range(6):
+        if len(sinks[i].bytes) != 4:
+            wrong += 1
+    print("    six of them on", parallelism_level(), "workers,", wrong, "came up short")
+    print()
+
     print("=== what a scheduler round trip costs")
     started = perf_counter_ns()
     var spun = _run(spin(YIELDS))
@@ -275,8 +377,8 @@ def main() raises:
 # and declaring the trait method `async def` instead rejects the plain `def`
 # with the same message the other way round. So one `ByteStream` trait cannot
 # cover both a socket and an async socket, and the driving loops get a second
-# copy. docs/async.md says which ones, and why the second copy is generated
-# from the sync one rather than typed by hand.
+# copy. docs/async.md says which ones, and why that second copy is written by
+# hand over a shared sans-io machine rather than generated from the first.
 
 # Case two. Coroutines barely compose, and the two ways of getting it wrong fail
 # very differently.
@@ -373,3 +475,53 @@ def main() raises:
 # long as no `await` sits in the `try`, which is what `finish_connect` relies
 # on. All of it is why httpx._io.aio reports failure as an `Outcome` and turns
 # it back into an exception on the synchronous side.
+
+# Case five. A coroutine's own frame has to stay flat, and the loud half of that
+# is the nested struct above. The quiet half is owned memory, which is worse:
+#
+#     async def collects[r: MutOrigin](result: Pointer[Int, r], times: Int):
+#         var bytes = List[UInt8]()
+#         var done = 0
+#         while done < times:
+#             bytes.append(UInt8(done))
+#             done += 1
+#             _ = await create_task(nothing())
+#         result[] = len(bytes)
+#
+# Sometimes this fails to lower with "'pop.store' op failed to verify that
+# pointer element type". Sometimes it compiles and `result[]` comes back zero.
+# Four appends, zero bytes, no diagnostic. In a response body reader that is a
+# download that silently truncates, which is the reason this probe exists at all
+# and the reason the driver keeps every buffer behind a pointer.
+#
+# A `String` returned into the frame and an `Error` bound by `except` fail the
+# same way, with "operand #0 does not dominate this use". So does a field read
+# through two levels of struct, `conn[].fd()` where `fd` forwards to an inner
+# stream, which is why the driver hoists nothing and calls a synchronous helper
+# for every step instead.
+
+# Case six, and the one that cost the most to find because it says nothing at
+# all. A coroutine that makes a `TaskGroup` may not have an `Optional` anywhere
+# in its own frame:
+#
+#     async def _one[o: MutOrigin](p: Pointer[Int, o]):
+#         var v = Optional[Int](5)
+#         _ = v
+#         var group = TaskGroup()
+#         group.create_task(_fake(p))
+#         await group
+#
+# That is the whole reproducer. The `Optional` is dead before the group is made
+# and is never mentioned again, and the compiler still goes down with a stack
+# dump and no message. Drop the group and the same `Optional` is fine. Drop the
+# `Optional` and the same group is fine.
+#
+# It is easy to hit without ever typing `Optional`, because the conversion for an
+# `Optional` parameter happens in the caller's frame. `write_deadline(5.0)` takes
+# `Optional[Float64]`, so writing
+#
+#     group.create_task(exchange(conn, request, result, write_deadline(5.0), ...))
+#
+# crashes, and building the deadline in synchronous code and passing it in as an
+# argument does not. Every test that drives more than one exchange takes its
+# deadlines as arguments for this reason and no other.

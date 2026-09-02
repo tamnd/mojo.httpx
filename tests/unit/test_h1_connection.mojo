@@ -23,7 +23,8 @@ from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.response import Response
 from httpx._models.url import URL
-from httpx._proto.h1.connection import H1Connection, H1State
+from httpx._proto.h1.connection import H1Connection
+from httpx._proto.h1.machine import H1State
 
 from tests.support.loopback import Loopback, Peer
 
@@ -246,7 +247,7 @@ def test_a_clean_exchange_leaves_the_connection_reusable() raises:
     _ = peer.recv_until("\r\n\r\n")
     peer.send_text("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi")
     _ = conn.read_response(Deadline.after(5.0))
-    assert_true(conn.state == H1State.DONE)
+    assert_true(conn.machine.state == H1State.DONE)
     assert_true(conn.is_reusable())
     # Keeps the server end alive to here, so that "reusable" is about the
     # framing rather than about a peer that has already gone.
@@ -334,7 +335,7 @@ def test_a_101_hands_the_connection_over() raises:
     )
     var response = conn.read_response(Deadline.after(5.0))
     assert_equal(response.status_code, 101)
-    assert_true(conn.upgraded)
+    assert_true(conn.machine.upgraded)
     assert_false(conn.is_reusable())
 
 

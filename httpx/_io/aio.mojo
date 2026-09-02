@@ -35,9 +35,9 @@ workers, times the cold slice. Sixteen waiters on four workers is four
 milliseconds. That is the price of the missing wake up, written down here so
 that nobody has to rediscover it in a profile.
 
-Four properties of Mojo 1.0.0 coroutines shape everything below, and none of
-them is a style choice. `tools/probe/async.mojo` holds a reproducer for each, so
-that a later toolchain can be checked against them rather than guessed at.
+Six properties of Mojo 1.0.0 coroutines shape everything below, and none of them
+is a style choice. `tools/probe/async.mojo` holds a reproducer for each, so that
+a later toolchain can be checked against them rather than guessed at.
 
 A coroutine cannot raise. `create_task`, `TaskGroup.create_task` and `_run` all
 refuse a `RaisingCoroutine`, and the one shape that would let a non raising
@@ -68,6 +68,23 @@ performance argument and it should be deleted the day the compiler stops caring.
 
 A `Span` cannot be resliced in a suspending loop. `data[sent:]` crashes the
 compiler outright, which is why `TcpStream.try_write` takes an offset instead.
+
+A coroutine that makes a `TaskGroup` may not have an `Optional` anywhere in its
+own frame. One line, `var v = Optional[Int](5)`, next to a group that is never
+told about it, crashes the compiler with a stack dump and no message. This one
+is easy to hit by accident because plenty of ordinary functions take an
+`Optional` parameter, `write_deadline` among them, and the conversion happens in
+the caller's frame. The way round it is to build the value in synchronous code
+and pass it in as an argument, which is what the tests do.
+
+Owned memory in a coroutine's frame is unsafe more generally, and not always
+loudly. A `List` appended to across a suspension either fails to lower or comes
+back empty at run time with nothing said, which in a response body reader would
+be a silent truncation. A `String` returned into the frame and an `Error` bound
+by `except` both fail to lower. `httpx._proto.h1.aio` is the one place in the
+library with enough going on for this to matter, and the answer there is that
+the coroutine holds nothing but integers and calls synchronous helpers for
+everything else.
 
 One more thing is a rule of the runtime rather than a bug: `TaskGroup.create_task`
 only accepts a coroutine that returns nothing. A wait that cannot go into a task

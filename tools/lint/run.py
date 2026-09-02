@@ -71,13 +71,22 @@ LAYERS: dict[str, int] = {
 # Only these layers may hold a raw pointer or call into C.
 UNSAFE_LAYERS = {1, 2}
 
-# And this one module, which is not I/O at all. Storing a user's transport in a
-# client means holding a value whose type has been forgotten, Mojo 1.0 has no
-# trait objects, and the only way to do it is a pointer plus a function that
-# remembers how to destroy what is on the end of it. Named here file by file
-# rather than opened up for the whole layer, and every site in it still has to
-# carry its invariant like any other unsafe code.
-UNSAFE_MODULES = {"_util/erase.mojo"}
+# And these two modules, neither of which is I/O at all.
+#
+# _util/erase.mojo: storing a user's transport in a client means holding a value
+# whose type has been forgotten, Mojo 1.0 has no trait objects, and the only way
+# to do it is a pointer plus a function that remembers how to destroy what is on
+# the end of it.
+#
+# _proto/h1/aio.mojo: a coroutine cannot return anything and cannot hold owned
+# memory in its own frame, so every async driver reports its answer by writing
+# through a pointer to a struct the caller owns. The pointers here are `Pointer`
+# with an origin rather than raw addresses, so the compiler still checks the
+# lifetimes; what the rule is really catching is that the file exists at all.
+#
+# Named file by file rather than opening up the whole layer, and every site in
+# both still has to carry its invariant like any other unsafe code.
+UNSAFE_MODULES = {"_util/erase.mojo", "_proto/h1/aio.mojo"}
 
 IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+(httpx[\w.]*)", re.MULTILINE)
 
@@ -215,9 +224,15 @@ def justified(lines: list[str], index: int) -> bool:
     rather than before, and the formatter splits a long signature across several
     lines so the pointer type often ends up on a line of its own. For those the
     docstring below counts.
+
+    The search below a signature runs to the end of the parameter list rather
+    than a fixed few lines. An async driver takes three pointers and two
+    deadlines and its closing bracket is nine lines down, and a first parameter
+    that fell outside the window was being asked to justify itself separately
+    from the docstring that already does.
     """
     if in_signature(lines, index):
-        for offset in range(0, 4):
+        for offset in range(0, 12):
             position = index + offset
             if position < len(lines) and '"""' in lines[position]:
                 return True
