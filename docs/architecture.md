@@ -228,11 +228,13 @@ They are one shot rather than incremental, because a digest challenge hashes a f
 
 This also removes a whole class of protocol bug, because header parsing over anything Unicode aware is how you get header smuggling.
 
-## Async is the open risk
+## Async was the open risk
 
-Mojo has `async def` and `await`, and they compile. What it does not have is an executor, an event loop, or any async I/O. `Coroutine` is a linear type with no way to store or schedule it.
+This section used to say that Mojo has no executor and no way to store or schedule a coroutine, so M6 might have to ship a thread pool instead of a loop. Half of that turned out to be wrong once we measured it rather than assuming it, and the correction is worth keeping visible because the assumption shaped the plan for a long time.
 
-So M6 builds an event loop from scratch on kqueue and epoll. That is the single riskiest part of the plan, and the milestone opens with an explicit go or no go decision. If the language cannot support it yet, the fallback is a thread pool backed `AsyncClient` with the same API surface, so user code does not change when the real runtime lands. Everything under `httpx/_io/` is marked internal precisely so it can be replaced without a breaking release.
+Mojo 1.0.0 has a task scheduler. `std.runtime.asyncrt` gives `create_task`, `Task`, `TaskGroup` and a way to drive a coroutine from ordinary code, awaiting hands the worker back rather than sitting on it, and a scheduler round trip costs under a microsecond. What it does not have is async I/O, or any way for our own code to resume a parked coroutine when a descriptor becomes readable.
+
+So M6 builds a reactor on kqueue and epoll where waiting is polling rather than being woken, and where the one case that would otherwise spin, nothing ready anywhere, is handled by a single coroutine doing the blocking wait for everybody. The full decision, the numbers behind it and what we are taking on knowingly are in [async.md](async.md). Everything under `httpx/_io/` stays internal precisely so the polling can become a wake-up later without a breaking release.
 
 ## Distribution
 

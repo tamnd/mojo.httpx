@@ -91,6 +91,11 @@ badssl = "mojo run -I . tools/interop/badssl.mojo"
 # See docs/testing.md.
 interop-h2 = "bash tools/interop/h2_run.sh"
 
+# What Mojo's async actually does on the toolchain we pin, measured rather than
+# assumed. The evidence behind the M6 decision, kept runnable so that a
+# toolchain which changes one of the answers shows up here. See docs/async.md.
+probe-async = "mojo run -I . tools/probe/async.mojo"
+
 # The response parser against h11, on generated and randomly damaged input.
 # Needs its own environment for h11, so it is `pixi run -e fuzz fuzz`. Not part
 # of `check`, because a fuzzer with a fixed seed and a fixed case count is a
