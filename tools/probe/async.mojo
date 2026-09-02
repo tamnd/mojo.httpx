@@ -206,4 +206,4 @@ def main() raises:
 # with the same message the other way round. So one `ByteStream` trait cannot
 # cover both a socket and an async socket, and the driving loops get a second
 # copy. docs/async.md says which ones, and why the second copy is generated
-# rather than typed.
+# from the sync one rather than typed by hand.
