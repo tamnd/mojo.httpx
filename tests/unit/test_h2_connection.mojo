@@ -658,6 +658,42 @@ def test_a_shut_window_sends_nothing_rather_than_failing() raises:
     assert_equal(len(conn.take_outbound()), 0)
 
 
+def test_ending_a_stream_with_nothing_left_sends_an_empty_frame() raises:
+    # A body handed over in pieces gives no way to know which piece was the last
+    # until there is not another one, so the end arrives with nothing to carry.
+    var conn = _started()
+    var id = conn.send_headers(_request_fields(), end_stream=False)
+    _ = conn.take_outbound()
+
+    var nothing = Bytes()
+    assert_equal(conn.send_data(id, nothing.as_span(), end_stream=True), 0)
+
+    var out = conn.take_outbound()
+    var header = parse_frame_header(out.as_span(), 0)
+    assert_true(header.type == FrameType.DATA)
+    assert_equal(header.length, 0)
+    assert_true(header.has(FLAG_END_STREAM))
+
+
+def test_a_shut_window_does_not_stop_a_stream_being_ended() raises:
+    # The one thing a closed window has no say in. Flow control counts octets
+    # and there are none, so a client with a shut window can still say it has
+    # finished, which is what stops a request hanging on a body it has already
+    # sent all of.
+    var conn = _started()
+    var id = conn.send_headers(_request_fields(), end_stream=False)
+    _ = conn.take_outbound()
+    conn.streams[0].send.available = 0
+
+    var nothing = Bytes()
+    assert_equal(conn.send_data(id, nothing.as_span(), end_stream=True), 0)
+
+    var out = conn.take_outbound()
+    var header = parse_frame_header(out.as_span(), 0)
+    assert_true(header.type == FrameType.DATA)
+    assert_true(header.has(FLAG_END_STREAM))
+
+
 def test_a_body_larger_than_the_window_goes_out_in_pieces() raises:
     var conn = _started()
     var id = conn.send_headers(_request_fields(), end_stream=False)

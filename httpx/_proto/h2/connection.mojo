@@ -387,7 +387,13 @@ struct H2Connection(Movable):
         var room = self.send_window.allows(wanted)
         room = self.streams[index].send.allows(room)
         room = min(room, self.peer_settings.max_frame_size)
-        if room == 0:
+
+        # An empty frame carrying nothing but END_STREAM is the one case where
+        # no room is not a reason to send nothing. Flow control counts octets
+        # and there are none, so a shut window has no say in it, and it is the
+        # only way to end a stream whose body has run out.
+        var ending_empty = end_stream and wanted == 0
+        if room == 0 and not ending_empty:
             return 0
 
         var last = end_stream and room == wanted

@@ -184,7 +184,15 @@ struct Peer(Movable):
 
     def send_text(mut self, text: StringSpan) raises:
         """Write all of `text`, looping over short writes."""
-        var bytes = text.as_bytes()
+        self.send_bytes(text.as_bytes())
+
+    def send_bytes[o: ImmOrigin](mut self, bytes: Span[UInt8, o]) raises:
+        """Write all of `bytes`, looping over short writes.
+
+        The one a binary protocol needs. `send_text` cannot carry frames, since
+        a Mojo string literal has to be valid UTF-8 and an HTTP/2 frame header
+        is nine octets that very often are not.
+        """
         var at = 0
         while at < bytes.__len__():
             var n = send(
@@ -199,6 +207,50 @@ struct Peer(Movable):
                     String("test server could not write: ", strerror(errno())),
                 )
             at += Int(n)
+
+    def recv_bytes(mut self, limit: Int = 65536) raises -> List[UInt8]:
+        """Read whatever has arrived, once. Empty means the peer closed."""
+        var buf = List[UInt8](length=limit, fill=0)
+        var n = recv(self._fd, Pointer(to=buf[0]), c_size_t(limit), c_int(0))
+        if n < 0:
+            raise new_error(
+                ErrorKind.NETWORK_ERROR,
+                String("test server could not read: ", strerror(errno())),
+            )
+        var out = List[UInt8]()
+        out.extend(Span(buf)[: Int(n)])
+        return out^
+
+    def recv_exactly(
+        mut self, count: Int, ms: Int = 2000
+    ) raises -> List[UInt8]:
+        """Read exactly `count` octets, however many packets they arrive in.
+
+        Raises rather than looping forever, because a test that hangs tells you
+        nothing and a test that fails tells you where.
+        """
+        var out = List[UInt8]()
+        var waited = 0
+        while len(out) < count:
+            if waited >= ms:
+                raise new_error(
+                    ErrorKind.NETWORK_ERROR,
+                    String(
+                        "test server waited for ",
+                        count,
+                        " bytes and saw ",
+                        len(out),
+                    ),
+                )
+            var fds = PollFd(self._fd, POLLIN, Int16(0))
+            if poll(Pointer(to=fds), c_uint(1), c_int(10)) <= 0:
+                waited += 10
+                continue
+            var piece = self.recv_bytes(count - len(out))
+            if len(piece) == 0:
+                break
+            out.extend(piece^)
+        return out^
 
     def recv_text(mut self, limit: Int = 65536) raises -> String:
         """Read whatever has arrived, once. Empty means the peer closed."""
