@@ -41,6 +41,12 @@ from httpx._proto.h2.frames import (
     parse_frame_header,
 )
 from httpx._proto.h2.table import HeaderField
+from httpx._proto.h2.validate import (
+    check_field,
+    check_field_name,
+    check_field_value,
+    check_not_connection_specific,
+)
 from httpx._stream.stream import Stream
 
 comptime READ_SIZE = 16384
@@ -66,6 +72,19 @@ They describe a single hop of an HTTP/1.1 connection, and HTTP/2 does all of
 what they were for in the framing layer instead. A server that receives one is
 required to treat the message as malformed, so sending one on is a request that
 fails for a reason the caller cannot see in their own code.
+
+Wider than the five names section 8.2.2 forbids, because this is the sending
+side. Refusing to carry `trailer` and `proxy-authenticate` costs a caller
+nothing, while refusing a response over either would be refusing a message the
+specification allows. `httpx/_proto/h2/validate.mojo` has the receiving list.
+"""
+
+comptime MAX_INFORMATIONAL = 8
+"""How many 1xx responses to skip before deciding the server is not answering.
+
+The same number and the same reason as the HTTP/1.1 side. There is no legitimate
+run of them this long, and without a bound a server that sends nothing else keeps
+a client reading until its deadline.
 """
 
 
@@ -196,17 +215,45 @@ struct H2Driver(Movable):
             self._end_body(deadline)
 
     def start_response(mut self, deadline: Deadline) raises -> ResponseHead:
-        """Read until the response head has arrived."""
+        """Read until the response head has arrived.
+
+        Informational responses are read and dropped. RFC 9110 section 15.2 asks
+        a client to skip any 1xx it did not ask for, and in HTTP/2 they arrive as
+        an ordinary header block on the same stream, so the only thing marking
+        one as interim is its status code.
+        """
         if self._stream_id == 0:
             raise _local("no request has been sent on this connection")
 
+        var interim = 0
         while True:
             var event = self._next_event(deadline)
             if event.kind == H2EventKind.HEADERS:
-                self._head_seen = True
+                var head = self._head_of(event.fields, deadline)
+                if head.status_code >= 200:
+                    self._head_seen = True
+                    if event.end_stream:
+                        self._ended = True
+                    return head^
+
+                # An interim response that also ends the stream is a server
+                # promising more and then stopping, which leaves the caller
+                # with no response at all rather than with a 1xx.
                 if event.end_stream:
-                    self._ended = True
-                return _response_head(event.fields)
+                    raise _remote(
+                        String(
+                            "the server ended the stream on a ",
+                            head.status_code,
+                            ", which is not a response",
+                        )
+                    )
+                interim += 1
+                if interim > MAX_INFORMATIONAL:
+                    raise _remote(
+                        "the server sent nothing but informational responses"
+                    )
+                continue
+
             if event.kind == H2EventKind.DATA:
                 raise _remote(
                     "the server sent body bytes before any response headers"
@@ -245,10 +292,48 @@ struct H2Driver(Movable):
                 # A second header block on a stream that already had one is
                 # trailers. RFC 9113 section 8.1 puts them after the body, so
                 # this is the end of it whatever the flags happen to say.
-                self._trailers = _trailer_headers(event.fields)
+                var trailers: Headers
+                try:
+                    trailers = _trailer_headers(event.fields)
+                except e:
+                    self._reset(ErrorCode.PROTOCOL_ERROR, deadline)
+                    raise e
+                self._trailers = trailers^
                 self._ended = True
                 self._finish()
                 return List[UInt8]()
+
+    def _head_of(
+        mut self, fields: List[HeaderField], deadline: Deadline
+    ) raises -> ResponseHead:
+        """One decoded block as a response head, or a reset stream.
+
+        The reset is the point of the wrapper. RFC 9113 section 8.1.1 makes a
+        malformed message a stream error rather than a connection error, and
+        that is not a technicality: the block was decoded before it was judged,
+        so both HPACK tables are still in step and nothing on any other stream
+        is in doubt. Dropping the socket would be throwing away work that had
+        nothing to do with the bad message.
+        """
+        try:
+            return _response_head(fields)
+        except e:
+            self._reset(ErrorCode.PROTOCOL_ERROR, deadline)
+            raise e
+
+    def _reset(mut self, code: ErrorCode, deadline: Deadline):
+        """Abandon the current stream and keep the connection.
+
+        Best effort, like `_fail`, and for the same reason: this runs on a path
+        that is already reporting a failure, and a socket that will not take a
+        `RST_STREAM` is not the thing worth telling the caller about.
+        """
+        try:
+            self.conn.send_rst_stream(self._stream_id, code)
+            self._flush(deadline)
+        except:
+            pass
+        self._finish()
 
     def _start(mut self, deadline: Deadline) raises:
         if self._started:
@@ -476,6 +561,12 @@ def _response_head(fields: List[HeaderField]) raises -> ResponseHead:
 
     for i in range(len(fields)):
         var name = fields[i].name
+        # Before the field is classified, because `:Status` is not a spelling of
+        # `:status` that a receiver is allowed to accept, and a name that breaks
+        # the octet rules should be reported as that rather than as an unknown
+        # pseudo-header.
+        check_field_name(name)
+
         if name.startswith(":"):
             if name != ":status":
                 raise _remote(
@@ -492,6 +583,11 @@ def _response_head(fields: List[HeaderField]) raises -> ResponseHead:
             continue
 
         if seen_status:
+            # The name is already done, above. The rest of RFC 9113 section 8.2
+            # only applies to ordinary fields: a pseudo-header has no value rules
+            # beyond the ones its own name implies, and none of them is `te`.
+            check_field_value(name, fields[i].value)
+            check_not_connection_specific(name, fields[i].value)
             headers.append(name, fields[i].value)
             continue
 
@@ -513,6 +609,13 @@ def _response_head(fields: List[HeaderField]) raises -> ResponseHead:
 
 
 def _trailer_headers(fields: List[HeaderField]) raises -> Headers:
+    """Trailers, which are ordinary fields and nothing else.
+
+    No pseudo-headers, because those describe a message and the message is
+    already over by the time trailers arrive. Everything else that applies to a
+    response field applies here too, which is why a set of trailers cannot smuggle
+    in the `transfer-encoding` the head was not allowed to carry.
+    """
     var headers = Headers()
     for i in range(len(fields)):
         if fields[i].name.startswith(":"):
@@ -523,6 +626,7 @@ def _trailer_headers(fields: List[HeaderField]) raises -> Headers:
                     " in a set of trailers",
                 )
             )
+        check_field(fields[i].name, fields[i].value)
         headers.append(fields[i].name, fields[i].value)
     return headers^
 
