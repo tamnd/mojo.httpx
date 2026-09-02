@@ -17,6 +17,9 @@ tests/**/_generated_main.mojo
 fuzz/corpus/
 fuzz/crashes/
 
+# the CA and leaf the h2 interop suite makes for its own loopback servers
+tools/interop/.h2certs/
+
 # local
 .DS_Store
 *.log

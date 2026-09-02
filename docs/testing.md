@@ -35,6 +35,26 @@ Two things to know before believing a failure. badssl.com's own certificates exp
 
 The offline half of the TLS testing is ordinary unit tests in `tests/unit/test_tls.mojo` and runs in `pixi run check` like everything else. It covers the ALPN wire encoding, the trust store search order and the key pair failure messages, against the throwaway certificates in `tests/fixtures/tls/`.
 
+## The HTTP/2 interop suite
+
+Fourteen cases against nginx, Caddy, Envoy and nghttpx, all four in Docker on the loopback address.
+
+```bash
+pixi run interop-h2                 # all four, then take them down
+pixi run interop-h2 --keep          # leave them running to poke at
+pixi run interop-h2 --only nginx    # one server, repeat the flag for more
+```
+
+The four are not four ways of asking the same question. nginx and Caddy are web servers that grew an HTTP/2 front end, Envoy is an HTTP/2 stack that grew a proxy, and nghttpx is the reference implementation's own server, written by the people who wrote the RFC. They disagree about window sizes, about how many frames a body arrives in, about whether a header block is Huffman coded, and about how strict to be with what we send. A client tested against one of them has been tested against one set of choices.
+
+All four sit in front of the same HTTP/1.1 origin, `tools/interop/h2_origin.py`, so all four have the same answers to give and a difference in a result is a difference in the HTTP/2 rather than in what each server thinks a directory listing looks like. It is also how almost every HTTP/2 deployment in the world is actually put together, which is what makes the translation each front end performs worth testing rather than an artefact of the setup.
+
+The cases are mostly about the parts of HTTP/2 that have no HTTP/1.1 equivalent, since the rest is already covered by unit tests and by the parity suite. Flow control is the main one: a 200 KiB upload and a 1 MiB download both exceed the 65535 octet initial window and cannot complete unless both sides exchange `WINDOW_UPDATE` correctly, and nothing smaller than a real server on the other end will tell you whether that works. The last case asks a server that speaks HTTP/2 for HTTP/1.1 and checks it gets it, because a suite where every case is an HTTP/2 case passes on a client that has forgotten how to negotiate and simply assumes.
+
+The suite has already earned its keep. It found that we sent no `content-length` on a request body we had in hand. That is legal in HTTP/2, where `END_STREAM` is what frames a body, and it is fine right up to the point where a front end has to proxy the request to an HTTP/1.1 origin, because with no length the only framing left for that hop is chunked. nginx buffers the body and adds a length of its own, so it passed. The other three streamed it through as chunked and the POST arrived empty. Three implementations disagreeing with us is not three bugs.
+
+It needs Docker and it pulls four images, so it is not part of `pixi run check` and not in CI. It runs on the fleet. The certificates are generated on first use into `tools/interop/.h2certs/`, last thirty days, and are not checked in.
+
 ## The differential fuzzers
 
 There are two, one per protocol, and they are built the same way: generate input, put it through this library and through the implementation httpx itself uses, and compare the two answers.
@@ -104,6 +124,7 @@ tools/fleet/run.sh --host server3   # one host
 tools/fleet/run.sh --role fuzz      # every host with that role
 tools/fleet/run.sh -- pixi run bench
 tools/fleet/run.sh --role interop -- pixi run badssl
+tools/fleet/run.sh --role interop -- pixi run interop-h2
 ```
 
 The script copies the working tree over SSH, installs the pinned toolchain on the other end, and runs the task. It holds no credentials and needs no runner registered with GitHub. The only requirement is that `ssh <name>` already works.

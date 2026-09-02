@@ -85,6 +85,12 @@ lint-selftest = "python tools/lint/run.py --selftest"
 # of `check` and not in CI either. It runs on the fleet. See docs/testing.md.
 badssl = "mojo run -I . tools/interop/badssl.mojo"
 
+# HTTP/2 against nginx, Caddy, Envoy and nghttpx, all four in Docker on the
+# loopback address. Not part of `check` and not in CI: it needs Docker, it
+# pulls four images and it takes a couple of minutes. It runs on the fleet.
+# See docs/testing.md.
+interop-h2 = "bash tools/interop/h2_run.sh"
+
 # The response parser against h11, on generated and randomly damaged input.
 # Needs its own environment for h11, so it is `pixi run -e fuzz fuzz`. Not part
 # of `check`, because a fuzzer with a fixed seed and a fixed case count is a
