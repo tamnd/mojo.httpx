@@ -24,18 +24,16 @@ import urllib.request
 from datetime import date
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from sources import all_units, load_sources
+
 ROOT = Path(__file__).resolve().parents[2]
-SOURCES = ROOT / "tools" / "vendor" / "sources.toml"
 LOCK = ROOT / "tests" / "data" / "LOCK.toml"
 
 # Long enough that a slow mirror still finishes, short enough that a hung
 # connection does not leave somebody staring at a silent terminal.
 TIMEOUT_SECONDS = 120
-
-
-def load_sources() -> list[dict[str, str]]:
-    with SOURCES.open("rb") as handle:
-        return tomllib.load(handle)["source"]
 
 
 def load_lock() -> dict[str, dict[str, object]]:
@@ -69,7 +67,9 @@ def write_lock(entries: dict[str, dict[str, object]]) -> None:
     ]
     for name in sorted(entries):
         entry = entries[name]
-        lines.append(f"[file.{name}]")
+        # Quoted because a name can be a path inside a corpus, and a slash
+        # is not allowed in a bare TOML key.
+        lines.append(f'[file."{name}"]')
         lines.append(f'path = "{entry["path"]}"')
         lines.append(f'url = "{entry["url"]}"')
         lines.append(f'sha256 = "{entry["sha256"]}"')
@@ -104,21 +104,21 @@ def main() -> int:
 
     entries = load_lock()
     changed = False
-    for source in sources:
-        name = source["name"]
-        path = ROOT / source["path"]
+    for unit in all_units(sources):
+        name = unit.name
+        path = ROOT / unit.path
         if not args.update:
             state = "present" if path.exists() else "missing"
-            print(f"{name}: {state}, would fetch {source['url']}")
+            print(f"{name}: {state}, would fetch {unit.url}")
             continue
-        print(f"{name}: fetching {source['url']}")
-        data = fetch(source["url"])
+        print(f"{name}: fetching {unit.url}")
+        data = fetch(unit.url)
         previous = entries.get(name, {}).get("sha256")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         entries[name] = {
-            "path": source["path"],
-            "url": source["url"],
+            "path": unit.path,
+            "url": unit.url,
             "sha256": digest(data),
             "size": len(data),
             "retrieved": date.today().isoformat(),

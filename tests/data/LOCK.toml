@@ -5,63 +5,343 @@
 # this, so a file that changed without a fetch shows up as a failure
 # rather than as a test that quietly started asserting something else.
 
-[file.http-state-cookies]
+[file."hpack-test-case/haskell-http2-linear-huffman/story_00.json"]
+path = "tests/data/hpack/haskell-http2-linear-huffman/story_00.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-linear-huffman/story_00.json"
+sha256 = "00cea13c83f7f3b2c122998a07af3d80b0d86d02ef5a97d2ca7b2c83205abbb4"
+size = 1534
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-linear-huffman/story_01.json"]
+path = "tests/data/hpack/haskell-http2-linear-huffman/story_01.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-linear-huffman/story_01.json"
+sha256 = "61987379072a0130ba307b6401da999ec1e88b4d297789894859cbf95c128f2a"
+size = 1462
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-linear-huffman/story_02.json"]
+path = "tests/data/hpack/haskell-http2-linear-huffman/story_02.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-linear-huffman/story_02.json"
+sha256 = "ddf41eae970a6387e3f1bdd06101d5a30208b9fcf71e5e172363067d21a2c7fe"
+size = 12366
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-linear-huffman/story_03.json"]
+path = "tests/data/hpack/haskell-http2-linear-huffman/story_03.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-linear-huffman/story_03.json"
+sha256 = "1fd4dc8394ac4e2e9585bbd514fdd3c6f261c096b6b74d11dd9b432abfa8d383"
+size = 11657
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-linear-huffman/story_04.json"]
+path = "tests/data/hpack/haskell-http2-linear-huffman/story_04.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-linear-huffman/story_04.json"
+sha256 = "1fd4dc8394ac4e2e9585bbd514fdd3c6f261c096b6b74d11dd9b432abfa8d383"
+size = 11657
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-linear-huffman/story_05.json"]
+path = "tests/data/hpack/haskell-http2-linear-huffman/story_05.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-linear-huffman/story_05.json"
+sha256 = "0efdb438d842fbbb01eaf6bf3f6f8857592df8d0325ffda0c2a6c1871a7e9ee6"
+size = 12627
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-linear-huffman/story_06.json"]
+path = "tests/data/hpack/haskell-http2-linear-huffman/story_06.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-linear-huffman/story_06.json"
+sha256 = "9528d40f0ae45f06bf002ce19190825c60012cf389dd70a8a2c0d4c99f10c185"
+size = 12693
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-linear-huffman/story_07.json"]
+path = "tests/data/hpack/haskell-http2-linear-huffman/story_07.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-linear-huffman/story_07.json"
+sha256 = "809bb150268f2f8b2a61e7af2314b2d8ddcb2b7e6cc9a3d6ca78cee7b4fc6bd5"
+size = 12026
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-linear-huffman/story_08.json"]
+path = "tests/data/hpack/haskell-http2-linear-huffman/story_08.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-linear-huffman/story_08.json"
+sha256 = "fcf4b583b84014c47ee16975e273cdad6dd67df083f02919aabab7ff3018adf5"
+size = 13926
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-linear-huffman/story_09.json"]
+path = "tests/data/hpack/haskell-http2-linear-huffman/story_09.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-linear-huffman/story_09.json"
+sha256 = "e763ef19e9a23fc4183118e7e666707b96c0d290bd221bf2472d68f9e94c3bc4"
+size = 12263
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-naive/story_00.json"]
+path = "tests/data/hpack/haskell-http2-naive/story_00.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-naive/story_00.json"
+sha256 = "d2b7b2335eb6071edcc0b92393af2dab0379ba848fc761940697d1a25d5f9a9d"
+size = 1827
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-naive/story_01.json"]
+path = "tests/data/hpack/haskell-http2-naive/story_01.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-naive/story_01.json"
+sha256 = "ba1f4c2cba1b2a310e53a85206961ce0744418ab9424e5eeba5564923fb1647a"
+size = 1775
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-naive/story_02.json"]
+path = "tests/data/hpack/haskell-http2-naive/story_02.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-naive/story_02.json"
+sha256 = "c852b311c4d8adbb8312bc61590a02d021f7c8441d5b2684b608ec51d286d9ad"
+size = 18415
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-naive/story_03.json"]
+path = "tests/data/hpack/haskell-http2-naive/story_03.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-naive/story_03.json"
+sha256 = "1073323f90699dca80ebfb32a876666b13a8993dc1a75cb9e467909df2cce221"
+size = 17456
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-naive/story_04.json"]
+path = "tests/data/hpack/haskell-http2-naive/story_04.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-naive/story_04.json"
+sha256 = "1073323f90699dca80ebfb32a876666b13a8993dc1a75cb9e467909df2cce221"
+size = 17456
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-naive/story_05.json"]
+path = "tests/data/hpack/haskell-http2-naive/story_05.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-naive/story_05.json"
+sha256 = "c77c03fdef431f957a165bb4d22acaf536396711a4f9c0781ccc10cf38cf7b7f"
+size = 19042
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-naive/story_06.json"]
+path = "tests/data/hpack/haskell-http2-naive/story_06.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-naive/story_06.json"
+sha256 = "1ae22acd37304db261fa3f9e2425d0b8cf410fdac60d0b7ee5441360447d4d08"
+size = 18588
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-naive/story_07.json"]
+path = "tests/data/hpack/haskell-http2-naive/story_07.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-naive/story_07.json"
+sha256 = "1e26a5a63a7cb1afb2d1e0dfd68c75f082611574ae57421df04593ca72edd8bd"
+size = 17763
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-naive/story_08.json"]
+path = "tests/data/hpack/haskell-http2-naive/story_08.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-naive/story_08.json"
+sha256 = "710f7198aa01f4b7eaa4608b3f6e558c1417300e146a06ee7d2badea24a5ce02"
+size = 20635
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/haskell-http2-naive/story_09.json"]
+path = "tests/data/hpack/haskell-http2-naive/story_09.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/haskell-http2-naive/story_09.json"
+sha256 = "ebe73e53740ac4bcf5a1a82e8834ad93461ca99b2d46a7c0ff9acbb4133a995b"
+size = 18124
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2-change-table-size/story_00.json"]
+path = "tests/data/hpack/nghttp2-change-table-size/story_00.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2-change-table-size/story_00.json"
+sha256 = "fe3659321acb0865e961f2c13673d7ca06d3fdf5da776b2afa576731aaf247b7"
+size = 1463
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2-change-table-size/story_01.json"]
+path = "tests/data/hpack/nghttp2-change-table-size/story_01.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2-change-table-size/story_01.json"
+sha256 = "1a56dda47ede1da231fd77674024b3a4dca69bf361421fb2e00e07ed360c875b"
+size = 1396
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2-change-table-size/story_02.json"]
+path = "tests/data/hpack/nghttp2-change-table-size/story_02.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2-change-table-size/story_02.json"
+sha256 = "5093af89bdf85b41695836abbab8f94ec899598cd9d5d8f0ebf34a7c17a1924e"
+size = 9935
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2-change-table-size/story_03.json"]
+path = "tests/data/hpack/nghttp2-change-table-size/story_03.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2-change-table-size/story_03.json"
+sha256 = "e4911ae4f4a4f8dc648a43e7cb00739098ea53193718563740f4255fe8e19a04"
+size = 9201
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2-change-table-size/story_04.json"]
+path = "tests/data/hpack/nghttp2-change-table-size/story_04.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2-change-table-size/story_04.json"
+sha256 = "e4911ae4f4a4f8dc648a43e7cb00739098ea53193718563740f4255fe8e19a04"
+size = 9201
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2-change-table-size/story_05.json"]
+path = "tests/data/hpack/nghttp2-change-table-size/story_05.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2-change-table-size/story_05.json"
+sha256 = "3538d74518e7ab787b163d5eea88a4541c7d73a5d973fcb6dbe258a65585628b"
+size = 9971
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2-change-table-size/story_06.json"]
+path = "tests/data/hpack/nghttp2-change-table-size/story_06.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2-change-table-size/story_06.json"
+sha256 = "1ac7d79bc42d275a549d06423b3f8f111f40ab731a38f649168e98de0d1d7d20"
+size = 10237
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2-change-table-size/story_07.json"]
+path = "tests/data/hpack/nghttp2-change-table-size/story_07.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2-change-table-size/story_07.json"
+sha256 = "2c684aa9a453fb07b25e548b1768b9afc1c8899e8fe9862768506e0b56570d28"
+size = 9545
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2-change-table-size/story_08.json"]
+path = "tests/data/hpack/nghttp2-change-table-size/story_08.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2-change-table-size/story_08.json"
+sha256 = "6c9e1ab51c371498b4c048f653d054653b10d5d367b7c53349ebf7996499a158"
+size = 11295
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2-change-table-size/story_09.json"]
+path = "tests/data/hpack/nghttp2-change-table-size/story_09.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2-change-table-size/story_09.json"
+sha256 = "a5151ccfef61b01ba9d8c8b253e06f2b5e842eb173f44b40836dbc58f0582051"
+size = 9782
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2/story_00.json"]
+path = "tests/data/hpack/nghttp2/story_00.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2/story_00.json"
+sha256 = "5e81604eceb6cc9e5b4861b024f20166b82159f90ed3dec9ce44313e6652dfa4"
+size = 1383
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2/story_01.json"]
+path = "tests/data/hpack/nghttp2/story_01.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2/story_01.json"
+sha256 = "e61eda56bf4ad9f03be5a4375e2fc072593d508cc012f2888b47f59860588f51"
+size = 1316
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2/story_02.json"]
+path = "tests/data/hpack/nghttp2/story_02.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2/story_02.json"
+sha256 = "85c19598e5d019836689ffc94416a3f4c1feb9f1db341e6a6ed9467285d13037"
+size = 9855
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2/story_03.json"]
+path = "tests/data/hpack/nghttp2/story_03.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2/story_03.json"
+sha256 = "679c7de52d090e218ba0f8651e758bfef2f1d28c27caa46834a46ca42dae5bc4"
+size = 9121
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2/story_04.json"]
+path = "tests/data/hpack/nghttp2/story_04.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2/story_04.json"
+sha256 = "679c7de52d090e218ba0f8651e758bfef2f1d28c27caa46834a46ca42dae5bc4"
+size = 9121
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2/story_05.json"]
+path = "tests/data/hpack/nghttp2/story_05.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2/story_05.json"
+sha256 = "b41eca14f878ff2ba9a74ce035ae602cbd18312b1f9c7546c0445ce4b7b464f3"
+size = 9891
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2/story_06.json"]
+path = "tests/data/hpack/nghttp2/story_06.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2/story_06.json"
+sha256 = "72e63d54e0330229c31a33331e71b8f6cb6cc246cdec53eb0cc9a8df28cb289e"
+size = 10157
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2/story_07.json"]
+path = "tests/data/hpack/nghttp2/story_07.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2/story_07.json"
+sha256 = "3cf41155d9456e8bd5fd3e6e2b551bed56d3bc35f5273d8fa13bcbf51a2741b0"
+size = 9465
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2/story_08.json"]
+path = "tests/data/hpack/nghttp2/story_08.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2/story_08.json"
+sha256 = "6e984acf51c2a69c16e29b86db990cf061de37b4675372cb21aa4aab6f6fc9a5"
+size = 11215
+retrieved = "2026-09-02"
+
+[file."hpack-test-case/nghttp2/story_09.json"]
+path = "tests/data/hpack/nghttp2/story_09.json"
+url = "https://raw.githubusercontent.com/http2jp/hpack-test-case/master/nghttp2/story_09.json"
+sha256 = "e1d3eb3f914af860c20abf1fbadb9eb778ffbf22787560804840f56db813d62d"
+size = 9702
+retrieved = "2026-09-02"
+
+[file."http-state-cookies"]
 path = "tests/data/cookies/parser.json"
 url = "https://raw.githubusercontent.com/abarth/http-state/master/tests/data/parser.json"
 sha256 = "1ae5397e7cc7eaecfaca731e81583cf5259dbd1a82d8141cef2c97dcbf2b10af"
 size = 49561
 retrieved = "2026-08-31"
 
-[file.public-suffix-list]
+[file."public-suffix-list"]
 path = "tests/data/psl/public_suffix_list.dat"
 url = "https://raw.githubusercontent.com/publicsuffix/list/master/public_suffix_list.dat"
 sha256 = "df6306ec61971424ad259757b399911f4d414486629a5a00e299a2b6c7957089"
 size = 333075
 retrieved = "2026-08-31"
 
-[file.public-suffix-tests]
+[file."public-suffix-tests"]
 path = "tests/data/psl/test_psl.txt"
 url = "https://raw.githubusercontent.com/publicsuffix/list/master/tests/test_psl.txt"
 sha256 = "8f50ad958916d6a8f79fba2363501475571acce752757f9126fe9d2f17dd920d"
 size = 4308
 retrieved = "2026-08-31"
 
-[file.unicode-data]
+[file."unicode-data"]
 path = "tests/data/unicode/UnicodeData.txt"
 url = "https://www.unicode.org/Public/17.0.0/ucd/UnicodeData.txt"
 sha256 = "2e1efc1dcb59c575eedf5ccae60f95229f706ee6d031835247d843c11d96470c"
 size = 2198209
 retrieved = "2026-08-31"
 
-[file.unicode-idna]
+[file."unicode-idna"]
 path = "tests/data/idna/IdnaTestV2.txt"
 url = "https://www.unicode.org/Public/idna/latest/IdnaTestV2.txt"
 sha256 = "beb5d0be20e896189b03209a82fdc34f06351502bbd4b8e2523583fc2954d9cf"
 size = 775973
 retrieved = "2026-08-31"
 
-[file.unicode-idna-mapping]
+[file."unicode-idna-mapping"]
 path = "tests/data/unicode/IdnaMappingTable.txt"
 url = "https://www.unicode.org/Public/idna/latest/IdnaMappingTable.txt"
 sha256 = "87f05505dc026fdb2bff16132bdc68a8014675836882a9a2b1844540ad3be382"
 size = 787378
 retrieved = "2026-08-31"
 
-[file.unicode-joining-type]
+[file."unicode-joining-type"]
 path = "tests/data/unicode/DerivedJoiningType.txt"
 url = "https://www.unicode.org/Public/17.0.0/ucd/extracted/DerivedJoiningType.txt"
 sha256 = "f39ebe974825d6736aee15582250307aa532b2cfab3caf3f86bd23fddc9c5c4d"
 size = 40635
 retrieved = "2026-08-31"
 
-[file.unicode-normalization-props]
+[file."unicode-normalization-props"]
 path = "tests/data/unicode/DerivedNormalizationProps.txt"
 url = "https://www.unicode.org/Public/17.0.0/ucd/DerivedNormalizationProps.txt"
 sha256 = "71fd6a206a2c0cdd41feb6b7f656aa31091db45e9cedc926985d718397f9e488"
 size = 1377582
 retrieved = "2026-08-31"
 
-[file.whatwg-url]
+[file."whatwg-url"]
 path = "tests/data/url/urltestdata.json"
 url = "https://raw.githubusercontent.com/web-platform-tests/wpt/master/url/resources/urltestdata.json"
 sha256 = "b8767904d25029a46e0d297e1320ded3a733322f489caa5a482c886fb11e9238"

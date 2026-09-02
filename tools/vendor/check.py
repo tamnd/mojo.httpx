@@ -14,8 +14,11 @@ import sys
 import tomllib
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from sources import all_units, load_sources
+
 ROOT = Path(__file__).resolve().parents[2]
-SOURCES = ROOT / "tools" / "vendor" / "sources.toml"
 LOCK = ROOT / "tests" / "data" / "LOCK.toml"
 DATA = ROOT / "tests" / "data"
 
@@ -29,8 +32,7 @@ def main() -> int:
         )
         return 1
 
-    with SOURCES.open("rb") as handle:
-        sources = {entry["name"]: entry for entry in tomllib.load(handle)["source"]}
+    sources = {unit.name: unit for unit in all_units(load_sources())}
     with LOCK.open("rb") as handle:
         locked = tomllib.load(handle).get("file", {})
 
@@ -45,10 +47,10 @@ def main() -> int:
             )
             continue
         entry = locked[name]
-        if entry["path"] != source["path"]:
+        if entry["path"] != source.path:
             problems.append(
                 f"{name} is locked at {entry['path']} but declared at"
-                f" {source['path']}"
+                f" {source.path}"
             )
         path = ROOT / entry["path"]
         accounted.add(path)
