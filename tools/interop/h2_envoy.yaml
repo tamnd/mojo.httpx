@@ -1,0 +1,74 @@
+# Envoy as an HTTP/2 front end for the interop suite. See tools/interop/h2.mojo.
+#
+# Envoy is in the set because it is the one of the four that is an HTTP/2 stack
+# first and a web server second, and because it is the strictest: it will reset
+# a stream over things nginx forwards without comment.
+
+static_resources:
+  listeners:
+    - name: front
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 8445
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: front
+                codec_type: AUTO
+                route_config:
+                  name: all
+                  virtual_hosts:
+                    - name: all
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: origin
+                            # The drip case sends a chunk every ten
+                            # milliseconds and Envoy's default stream idle
+                            # timeout is five minutes, so this is only here to
+                            # say the number was considered.
+                            timeout: 60s
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                # Both, so that a client offering only http/1.1 still gets an
+                # answer. A listener that offered h2 alone would make the
+                # negotiation test meaningless: it would pass by having no
+                # alternative rather than by choosing.
+                alpn_protocols: ["h2", "http/1.1"]
+                tls_certificates:
+                  - certificate_chain:
+                      filename: /certs/server.pem
+                    private_key:
+                      filename: /certs/server.key
+
+  clusters:
+    - name: origin
+      connect_timeout: 5s
+      type: STRICT_DNS
+      load_assignment:
+        cluster_name: origin
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: origin
+                      port_value: 8080
+
+admin:
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 9901

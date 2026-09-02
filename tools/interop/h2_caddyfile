@@ -1,0 +1,23 @@
+# Caddy as an HTTP/2 front end for the interop suite. See tools/interop/h2.mojo.
+#
+# `auto_https off` because Caddy's whole point is getting a certificate for you,
+# and here it must use the one the suite made. Left on, it would try to reach
+# Let's Encrypt for a name that does not exist. `caddy fmt` wants the block to
+# follow the comment with no blank line between them, which is why there is not
+# one.
+{
+	auto_https off
+	admin off
+	log {
+		output discard
+	}
+}
+
+https://localhost:8444 {
+	tls /certs/server.pem /certs/server.key
+	reverse_proxy http://origin:8080 {
+		# Caddy streams by default and buffers nothing, so there is no
+		# equivalent of nginx's proxy_buffering here to turn off.
+		flush_interval -1
+	}
+}

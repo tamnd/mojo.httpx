@@ -195,7 +195,16 @@ struct H2Driver(Movable):
         self._trailers = Headers()
 
         var body_follows = request.has_stream() or len(request.content) > 0
-        var fields = _request_fields(request, form)
+        # A streamed body has no length to declare and HTTP/2 has no chunked
+        # encoding to declare one with, so the length goes unstated. A body
+        # already in hand does have a length, and saying so matters: a front end
+        # that proxies to an HTTP/1.1 origin has to pick a framing for the hop
+        # it makes, and without a length the only one left is chunked, which is
+        # the framing origins handle worst.
+        var length = Optional[Int](None)
+        if body_follows and not request.has_stream():
+            length = len(request.content)
+        var fields = _request_fields(request, form, length)
         self._stream_id = self.conn.send_headers(fields^, not body_follows)
         self._flush(deadline)
 
@@ -508,7 +517,7 @@ struct H2Driver(Movable):
 
 
 def _request_fields(
-    request: Request, form: TargetForm
+    request: Request, form: TargetForm, content_length: Optional[Int]
 ) raises -> List[HeaderField]:
     """The request as HPACK fields, pseudo-headers first.
 
@@ -517,6 +526,12 @@ def _request_fields(
     case letter in a field name makes the whole message malformed, so a header
     the caller wrote as `Content-Type` has to go out lowered or the request
     fails at the server for a reason nothing in the caller's code explains.
+
+    `content_length` is the length of the body about to go out, or nothing if
+    the body is being streamed and the length is not known yet. It is added as
+    an ordinary field unless the caller set one, and a caller who set one is
+    taken at their word right up to the point where the word contradicts the
+    body, which is the same rule the HTTP/1.1 writer follows.
     """
     var fields = List[HeaderField]()
     fields.append(HeaderField(String(":method"), request.method.copy()))
@@ -527,6 +542,7 @@ def _request_fields(
     )
 
     var items = request.headers.multi_items()
+    var declared = Optional[Int](None)
     for i in range(len(items)):
         var name = items[i][0].lower()
         if _is_hop_by_hop(name):
@@ -536,8 +552,36 @@ def _request_fields(
         # redundancy.
         if name == "host":
             continue
+        if name == "content-length":
+            declared = _declared_length(items[i][1])
         fields.append(HeaderField(name^, items[i][1].copy()))
+
+    if content_length:
+        if declared:
+            if declared.value() != content_length.value():
+                raise _local(
+                    String(
+                        "the Content-Length says ",
+                        declared.value(),
+                        " but the body is ",
+                        content_length.value(),
+                        " bytes",
+                    )
+                )
+        else:
+            fields.append(
+                HeaderField(
+                    String("content-length"), String(content_length.value())
+                )
+            )
     return fields^
+
+
+def _declared_length(text: String) raises -> Int:
+    try:
+        return Int(text)
+    except:
+        raise _local(String("the Content-Length is not a number: ", text))
 
 
 def _is_hop_by_hop(name: String) -> Bool:

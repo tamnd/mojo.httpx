@@ -23,6 +23,7 @@ from httpx._io.deadline import Deadline
 from httpx._io.socket import open_stream
 from httpx._models.headers import Headers
 from httpx._models.request import Request
+from httpx._models.stream import ByteSource, erase_source
 from httpx._models.url import URL
 from httpx._proto.h2.driver import H2Driver
 from httpx._proto.h2.frames import (
@@ -50,6 +51,30 @@ def _connect(listener: Loopback) raises -> H2Driver:
 
 def _get(url: StringSpan = "https://example.com/") raises -> Request:
     return Request("GET", URL(url))
+
+
+struct _TwoPieces(ByteSource, Movable):
+    """A body handed over in two pieces, so its length is not known up front."""
+
+    var _at: Int
+
+    def __init__(out self):
+        self._at = 0
+
+    def read_chunk(mut self) raises -> List[UInt8]:
+        var out = List[UInt8]()
+        if self._at == 0:
+            out.extend("up".as_bytes())
+        elif self._at == 1:
+            out.extend("load".as_bytes())
+        self._at += 1
+        return out^
+
+    def close(mut self):
+        self._at = 2
+
+    def trailers(self) -> Headers:
+        return Headers()
 
 
 def _frame[
@@ -269,6 +294,104 @@ def test_h2_a_host_header_becomes_the_authority() raises:
     var fields = _request_head(peer)
     assert_false(_has(fields, "host"))
     assert_equal(_value(fields, ":authority"), "example.com")
+
+
+def test_h2_a_body_in_hand_declares_its_length() raises:
+    # Optional in HTTP/2, where END_STREAM is what frames a body, and not
+    # optional at all once a front end has to proxy the request to an HTTP/1.1
+    # origin: with no length the only framing left for that hop is chunked,
+    # which is the framing origins handle worst. Three of the four servers in
+    # the interop suite dropped the body of a POST that arrived without one.
+    var listener = Loopback()
+    var driver = _connect(listener)
+    var peer = listener.accept_within()
+
+    var content: List[UInt8] = [1, 2, 3]
+    var request = Request(
+        "POST", URL("https://example.com/"), Headers(), content^
+    )
+    driver.send_request(request, Deadline.after(5.0))
+    _greet(peer)
+
+    var fields = _request_head(peer)
+    assert_equal(_value(fields, "content-length"), "3")
+
+
+def test_h2_a_request_with_no_body_declares_no_length() raises:
+    # A GET with Content-Length: 0 is legal and makes some servers and more WAFs
+    # treat the request as suspicious, which is the same call the HTTP/1.1
+    # writer makes.
+    var listener = Loopback()
+    var driver = _connect(listener)
+    var peer = listener.accept_within()
+
+    var request = _get()
+    driver.send_request(request, Deadline.after(5.0))
+    _greet(peer)
+
+    var fields = _request_head(peer)
+    assert_false(_has(fields, "content-length"))
+
+
+def test_h2_a_streamed_body_declares_no_length() raises:
+    # There is no length to declare until the source has run out, and no chunked
+    # encoding in HTTP/2 to declare one later with, so the field is left off and
+    # END_STREAM is what says the body is over.
+    var listener = Loopback()
+    var driver = _connect(listener)
+    var peer = listener.accept_within()
+
+    var request = Request.streaming(
+        "POST", URL("https://example.com/"), erase_source(_TwoPieces())
+    )
+    driver.send_request(request, Deadline.after(5.0))
+    _greet(peer)
+
+    var fields = _request_head(peer)
+    assert_false(_has(fields, "content-length"))
+
+
+def test_h2_a_caller_s_own_content_length_is_not_repeated() raises:
+    var listener = Loopback()
+    var driver = _connect(listener)
+    var peer = listener.accept_within()
+
+    var headers = Headers()
+    headers.append("Content-Length", "3")
+    var content: List[UInt8] = [1, 2, 3]
+    var request = Request(
+        "POST", URL("https://example.com/"), headers^, content^
+    )
+    driver.send_request(request, Deadline.after(5.0))
+    _greet(peer)
+
+    var fields = _request_head(peer)
+    var seen = 0
+    for i in range(len(fields)):
+        if fields[i].name == "content-length":
+            seen += 1
+    # Two of them is a malformed message under RFC 9113 section 8.1.1, so this
+    # is not a matter of tidiness.
+    assert_equal(seen, 1)
+    assert_equal(_value(fields, "content-length"), "3")
+
+
+def test_h2_a_content_length_that_disagrees_with_the_body_is_refused() raises:
+    # The same answer the HTTP/1.1 writer gives, because the request is the same
+    # request and finding out locally beats finding out as a stream reset.
+    var listener = Loopback()
+    var driver = _connect(listener)
+    var peer = listener.accept_within()
+
+    var headers = Headers()
+    headers.append("Content-Length", "7")
+    var content: List[UInt8] = [1, 2, 3]
+    var request = Request(
+        "POST", URL("https://example.com/"), headers^, content^
+    )
+    with assert_raises():
+        driver.send_request(request, Deadline.after(5.0))
+    _ = peer^
 
 
 def test_h2_a_response_head_comes_back() raises:
