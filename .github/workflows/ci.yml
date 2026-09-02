@@ -58,7 +58,13 @@ jobs:
   test:
     name: test ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    # Almost all of this is one compile. The runner generates a single main that
+    # calls every test and builds it in one go, so the time grows with the size
+    # of the library rather than with the number of tests, and the macos runner
+    # went past thirty minutes on the change that added the HTTP/2 driver. Worth
+    # watching: this is a cap being raised rather than a build getting faster,
+    # and the answer at some point is to stop building the suite as one binary.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
