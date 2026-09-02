@@ -43,13 +43,6 @@ from httpx._io.socket import open_stream, start_connect
 
 from tests.support.loopback import Loopback, Peer, dead_address
 
-comptime WAITERS = 12
-"""More waiters than any machine in the fleet has workers.
-
-`parallelism_level()` is four on the development laptop and eight on the Linux
-hosts, so twelve is above all of them and the test asserts that it is.
-"""
-
 comptime BAD_FD = c_int(9999)
 """A descriptor number nothing in this process has open.
 
@@ -238,17 +231,18 @@ def test_aio_a_connect_to_a_dead_address_fails_rather_than_hangs() raises:
 def test_aio_more_waiters_than_workers_all_get_their_bytes() raises:
     """The claim the whole loop exists to make.
 
-    Twelve reads are outstanding at once on a machine with four or eight
-    workers, and none of them has any data yet when it starts waiting. If a
-    waiting coroutine held its worker, the ones that did not get one would sit
-    in the run queue until a deadline passed, so the reads that never ran would
-    come back as timeouts rather than as bytes.
+    Twice as many reads are outstanding at once as the machine has workers, and
+    none of them has any data yet when it starts waiting. If a waiting coroutine
+    held its worker, the ones that did not get one would sit in the run queue
+    until a deadline passed, so the reads that never ran would come back as
+    timeouts rather than as bytes.
     """
-    assert_true(WAITERS > parallelism_level())
+    var waiters = _waiter_count()
+    assert_true(waiters > parallelism_level())
 
     var listener = Loopback()
     var pairs = Pairs()
-    for _ in range(WAITERS):
+    for _ in range(waiters):
         var stream = _connect(listener)
         var peer = listener.accept_within()
         pairs.streams.append(stream^)
@@ -261,9 +255,22 @@ def test_aio_more_waiters_than_workers_all_get_their_bytes() raises:
     # their workers back.
     _run(_read_all(Pointer(to=pairs), read_deadline(5.0)))
 
-    for i in range(WAITERS):
+    for i in range(waiters):
         assert_false(pairs.results[i].failed())
         assert_equal(pairs.results[i].count, 4)
+
+
+def _waiter_count() -> Int:
+    """How many reads to have outstanding, for the machine this is running on.
+
+    Twice the worker count rather than a number written down here. A constant
+    was wrong the first time it met a real machine: it was twelve, which is
+    above the four workers on the development laptop and the eight on the Linux
+    hosts but below the thirty two on the Windows one, so the test asserted
+    itself out on the only machine in the fleet big enough to make the point
+    interesting.
+    """
+    return parallelism_level() * 2
 
 
 struct Pairs(Movable):
@@ -299,7 +306,7 @@ def _text(buf: List[UInt8], count: Int) -> String:
 
 
 async def _send_all[o: MutOrigin](pairs: Pointer[Pairs, o]):
-    for i in range(WAITERS):
+    for i in range(pairs[].peers.__len__()):
         # A coroutine cannot raise, and `send_text` is synchronous, so catching
         # it here is allowed. A failure would show up as a reader that timed
         # out.
@@ -310,7 +317,7 @@ async def _send_all[o: MutOrigin](pairs: Pointer[Pairs, o]):
 
 
 async def _read_all[o: MutOrigin](pairs: Pointer[Pairs, o], deadline: Deadline):
-    """Twelve reads and one sender, all outstanding together.
+    """Every read and one sender, all outstanding together.
 
     `read` goes into the group directly rather than through a per reader helper
     that awaits it. A coroutine that suspends in a loop cannot be awaited from
@@ -319,7 +326,7 @@ async def _read_all[o: MutOrigin](pairs: Pointer[Pairs, o], deadline: Deadline):
     `create_task` insists on, is why it reports through a pointer.
     """
     var group = TaskGroup()
-    for i in range(WAITERS):
+    for i in range(pairs[].streams.__len__()):
         group.create_task(
             pairs[]
             .streams[i]
