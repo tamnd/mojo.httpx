@@ -213,7 +213,11 @@ struct Deadline(ImplicitlyCopyable, Movable, Writable):
         error an HTTP client can produce.
         """
         if self.expired():
-            raise new_error(self.kind, String("timed out trying to ", what))
+            raise new_error(self.kind, self.timeout_message(what))
+
+    def timeout_message(self, what: StringSpan) -> String:
+        """The wording of a timeout on this deadline."""
+        return timeout_message(what)
 
     def write_to[W: Writer](self, mut writer: W):
         if not self.limited:
@@ -226,6 +230,17 @@ struct Deadline(ImplicitlyCopyable, Movable, Writable):
                 self.remaining_ns() // UInt64(NANOS_PER_MS),
                 "ms",
             )
+
+
+def timeout_message(what: StringSpan) -> String:
+    """How every timeout in the library is worded.
+
+    A free function rather than only a method because the async side reports a
+    timeout as a value and has no deadline in hand by the time it needs the
+    words, and a second copy of the wording would drift from this one the first
+    time either was edited.
+    """
+    return String("timed out trying to ", what)
 
 
 def connect_deadline(seconds: Optional[Float64]) -> Deadline:
