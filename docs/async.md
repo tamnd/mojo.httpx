@@ -57,7 +57,33 @@ When nothing anywhere is ready, exactly one coroutine performs the blocking wait
 
 Deadlines are the ones from the sync path. `Deadline` already exists, already knows how to be a timeout on a syscall, and the reactor's blocking wait takes its timeout from the nearest one, so a hung peer is broken out of by the same rule in both clients.
 
-Nothing above L2 changes. Every layer from L3 up is generic over the `ByteStream` trait, so `AsyncTcpStream` satisfies the trait and the same state machines instantiate against it. That was the reason for writing them that way and this is where it pays.
+The insertion point is smaller than it sounds. `TcpStream.read` and `TcpStream.write` are already non-blocking calls in a loop, and the only thing they do when the kernel says it would block is call `self._wait(POLLIN, deadline)`. An async stream is the same two loops with a different `_wait`.
+
+## The part the plan got wrong about colours
+
+The plan also said that nothing above L2 would change, because every layer from L3 up is generic over the `ByteStream` trait, so an async stream would satisfy the trait and the same state machines would instantiate against it. That is not true and it is worth being precise about why, because it is the thing that decides how much code M6 touches.
+
+Mojo's function colours are strict in both directions. An `async def` does not satisfy a trait method declared `def`, and a `def` does not satisfy one declared `async def`. Neither of these compiles:
+
+```
+struct Async(Reader):
+    async def read(mut self) -> Int: ...
+
+    note: no 'read' candidates have type 'def(mut self: Async) thin -> Int'
+    note: candidate declared here with type 'async def(mut self: Async) thin -> Int'
+```
+
+So there is no single `ByteStream` trait that both a socket and an async socket satisfy, and no arrangement of generics that lets one driver drive both. Something has to be written twice.
+
+## What gets written twice
+
+Not the parsing. The framing rules, the header validation, HPACK, the URL and cookie code and the models are all sans-io already, they never touch a descriptor, and they stay in one copy. That was the reason for the layer split and it holds up here, which is the important part: the smuggling defences do not get a second implementation to keep in step.
+
+What has a second copy is the driving loops. `H1Connection`'s I/O half, `H2Driver`, the pool and the client: the code that reads until a head is complete, writes a body while watching a window, and gives up on a deadline.
+
+Two copies of that by hand is how one of them quietly grows a bug the other does not have. So the sync copy is generated from the async one, the same way `tools/gen_*.py` already generates the Huffman tables and the public suffix list, and `pixi run generated-check` fails when the two drift. Async is the source, because dropping `async` and `await` from a coroutine is mechanical and adding them is not. This is the trick httpcore uses under Python httpx for the same reason, so it is not an experiment.
+
+The alternative, making everything async and running the sync client as `_run` over it, was rejected on two counts: it puts a private stdlib entry point on the hot path of the sync client, and it makes every synchronous request pay a scheduler round trip for I/O that never suspends.
 
 ## What we are taking on knowingly
 

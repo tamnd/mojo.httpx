@@ -190,3 +190,20 @@ def main() raises:
 # A coroutine is linear. It cannot be dropped, so it cannot be stored anywhere
 # that might drop it, which rules out a field, a List and every hand written
 # queue. `create_task` is the only way to park one, and it is the scheduler's.
+#
+# The other thing that does not compile, and the one that decides how much code
+# M6 has to touch. Function colours are strict in both directions:
+#
+#     trait Reader:
+#         def read(mut self) -> Int: ...
+#
+#     struct Async(Reader):
+#         async def read(mut self) -> Int: ...
+#
+#     note: no 'read' candidates have type 'def(mut self: Async) thin -> Int'
+#
+# and declaring the trait method `async def` instead rejects the plain `def`
+# with the same message the other way round. So one `ByteStream` trait cannot
+# cover both a socket and an async socket, and the driving loops get a second
+# copy. docs/async.md says which ones, and why the second copy is generated
+# rather than typed.
