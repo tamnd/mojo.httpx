@@ -73,6 +73,23 @@ struct AsyncTcpStream(Movable):
         """Whether the far end hung up on an idle connection. Does not wait."""
         return self._inner.is_closed_by_peer()
 
+    def try_read[o: MutOrigin](mut self, buf: Span[UInt8, o]) -> Int:
+        """One `recv`, with no waiting. Negative means errno has the reason.
+
+        Exposed so that a driver above this layer can carry its own poll loop.
+        The whole of an HTTP exchange has to be one coroutine, because Mojo will
+        not let one coroutine await another that suspends in a loop, so the loop
+        that reads a response cannot be `read` above and has to be this call
+        plus a wait the driver writes out itself.
+        """
+        return self._inner.try_read(buf)
+
+    def try_write[
+        o: ImmOrigin
+    ](mut self, data: Span[UInt8, o], offset: Int = 0) -> Int:
+        """One `send` from `offset` on, with no waiting. See `try_read`."""
+        return self._inner.try_write(data, offset)
+
     def shutdown_write(mut self):
         """Send a FIN, leaving the socket readable."""
         self._inner.shutdown_write()
