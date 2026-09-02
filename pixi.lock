@@ -233,6 +233,7 @@ environments:
       - conda: https://conda.modular.com/max/noarch/mblack-26.5.0-release.conda
       - conda: https://conda.modular.com/max/noarch/mojo-python-1.0.0-release.conda
       - pypi: https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/71/b4/4a9fcfb2aef6ba44d9073ecd301443aa00b3dac95de5619f2a7de7ec8a91/hpack-4.2.0-py3-none-any.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/bzip2-1.0.8-h4777abc_10.conda
@@ -286,6 +287,7 @@ environments:
       - conda: https://conda.modular.com/max/noarch/mblack-26.5.0-release.conda
       - conda: https://conda.modular.com/max/noarch/mojo-python-1.0.0-release.conda
       - pypi: https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/71/b4/4a9fcfb2aef6ba44d9073ecd301443aa00b3dac95de5619f2a7de7ec8a91/hpack-4.2.0-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
@@ -333,6 +335,7 @@ environments:
       - conda: https://conda.modular.com/max/osx-arm64/mojo-1.0.0-release.conda
       - conda: https://conda.modular.com/max/osx-arm64/mojo-compiler-1.0.0-release.conda
       - pypi: https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/71/b4/4a9fcfb2aef6ba44d9073ecd301443aa00b3dac95de5619f2a7de7ec8a91/hpack-4.2.0-py3-none-any.whl
   nightly:
     channels:
     - url: https://conda.modular.com/max-nightly/
@@ -2266,6 +2269,11 @@ packages:
   - hypothesis>=6.141.1 ; extra == 'all'
   - coverage>=7.10.0 ; extra == 'all'
   requires_python: '>=3.9'
+- pypi: https://files.pythonhosted.org/packages/71/b4/4a9fcfb2aef6ba44d9073ecd301443aa00b3dac95de5619f2a7de7ec8a91/hpack-4.2.0-py3-none-any.whl
+  name: hpack
+  version: 4.2.0
+  sha256: 858ac0b02280fa582b5080d68db0899c62a80375e0e5413a74970c5e518b6986
+  requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/c8/95/411ba65569158e862368917aaf56597f3e5fa3b91b0502919638465a08f3/httpx2-2.12.0-py3-none-any.whl
   name: httpx2
   version: 2.12.0

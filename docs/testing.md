@@ -35,7 +35,11 @@ Two things to know before believing a failure. badssl.com's own certificates exp
 
 The offline half of the TLS testing is ordinary unit tests in `tests/unit/test_tls.mojo` and runs in `pixi run check` like everything else. It covers the ALPN wire encoding, the trust store search order and the key pair failure messages, against the throwaway certificates in `tests/fixtures/tls/`.
 
-## The differential fuzzer
+## The differential fuzzers
+
+There are two, one per protocol, and they are built the same way: generate input, put it through this library and through the implementation httpx itself uses, and compare the two answers.
+
+### The response parser against h11
 
 The response parser is compared against h11, one case at a time, on generated and randomly damaged input.
 
@@ -50,6 +54,22 @@ h11 is the reference because it is the parser httpx itself uses, so a disagreeme
 The comparison is deliberately asymmetric. Being stricter than h11 is recorded and allowed, because most of the rules in the parser are stricter on purpose and a run typically ends up stricter on a few percent of cases. Being looser is a failure with no allowlist, since accepting a message h11 rejects is precisely the position where this client and the hop in front of it disagree about where a response ends. Producing a different status or a different body from the same bytes is a failure too.
 
 It is not part of `pixi run check`. A fuzzer with a fixed seed and a fixed case count is a slow unit test, and one without them is not something a commit can wait for, so it runs nightly with a fresh seed and on the fleet.
+
+### The HPACK decoder against hpack
+
+```bash
+pixi run -e fuzz fuzz-hpack                              # a short default run
+pixi run -e fuzz fuzz-hpack --cases 40000 --seed 777     # a long one
+pixi run -e fuzz fuzz-hpack --cases 3000 --show 6        # print the first six disagreements
+```
+
+hpack is the reference for the same reason h11 is: it is the HPACK half of the h2 project, which is what httpx speaks HTTP/2 through. The driver builds header blocks with hpack's own encoder, mixes in a catalogue of blocks written by hand to reach the branches an encoder never produces, adds some blocks of nothing in particular, damages a share of them, and hands the batch to one Mojo process.
+
+A case is a run of one to three blocks against a single decoder, not one block. The dynamic table outlives the block that filled it, so a decoder can be right about every block taken on its own and still leave behind a table the encoder would not recognise, and every index in the next block is read against that table. Cases are independent of each other, blocks within a case are not.
+
+The summary has four numbers rather than two. Read alike and refused alike are both agreement, but they say different things: a run that refused almost everything spent its time on blocks no decoder would read, so the first number is the one that says how much was actually compared. Stricter than hpack is allowed, the same as with h11.
+
+The fourth number is a known difference and it has its own line so that it does not get mixed in with the bounds. This decoder produces `String`, so a name or a value that is not valid UTF-8 is refused, and hpack hands back the bytes. HTTP field values are octets and are not required to be text, and the HTTP/1.1 side of this library keeps them as octets and only converts when a caller asks, so the two halves of the same client do not currently agree about a latin-1 byte in a header value. Mutation produces those constantly, around three percent of cases in a long run, which is why they are counted apart.
 
 ## The parity suite
 
