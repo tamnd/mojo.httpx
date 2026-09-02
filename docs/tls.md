@@ -21,7 +21,7 @@ That connection verifies the server's certificate chain, checks the hostname aga
 | Minimum version | TLS 1.2 | TLS 1.0 and 1.1 are deprecated by RFC 8996 |
 | Maximum version | TLS 1.3 | |
 | SNI | sent, except for IP literals | RFC 6066 section 3 forbids a literal address in the extension |
-| ALPN | `http/1.1`, with `h2` first once HTTP/2 lands | |
+| ALPN | `http/1.1`, with `h2` first when the client was built with `http2=True` | What the server picks decides which state machine runs, so this is the only place the protocol is chosen |
 | Compression | off | CRIME recovered session cookies from compressed record lengths |
 | Renegotiation | off | A client has no reason to want one, and accepting them has been an attack surface twice |
 | Revocation | not checked | See below |

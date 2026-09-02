@@ -130,6 +130,19 @@ def test_a_get_through_the_client_returns_a_parsed_response() raises:
     client.close()
 
 
+def test_asking_for_http2_does_not_break_a_plain_request() raises:
+    # `http2=True` is an offer made during the TLS handshake, so over `http://`
+    # there is nowhere to make it and the request is HTTP/1.1 as it always was.
+    # Worth a test because the failure mode if the flag were taken as an
+    # instruction is not a downgrade, it is a request no server can read.
+    var server = TestServer()
+    var client = Client(http2=True)
+    var response = _get(client, server, "/get")
+    assert_equal(response.status_code, 200)
+    assert_equal(response.http_version, "HTTP/1.1")
+    client.close()
+
+
 def test_the_top_level_get_works_with_no_client_at_all() raises:
     # The exit criterion for this milestone, in one line, which is how somebody
     # who has read the first example in the README will write it.

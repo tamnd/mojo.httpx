@@ -13,6 +13,12 @@ in a few hundred for no reason the user can see. So every connection is checked
 for both age and liveness on the way out of the pool, and anything that has been
 sitting long enough to be doubtful is closed rather than handed to a request.
 
+Nothing here knows which protocol a connection speaks. That is decided once, by
+ALPN, when the connection is made, and after that a `Connection` answers the
+same questions whether it is HTTP/1.1 or HTTP/2. Reuse, expiry, limits and
+eviction are all the same problem in both, so keeping the pool protocol blind is
+what stopped HTTP/2 turning into a second pool beside this one.
+
 The pool runs the exchange itself rather than lending a connection out and
 trusting the caller to give it back. A borrowed connection that is dropped on an
 error path is a descriptor leak in the best case and a connection returned to the
@@ -43,9 +49,9 @@ from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.response import Response
 from httpx._models.stream import ByteSource, erase_source
+from httpx._pool.connection import Connection
 from httpx._pool.limits import Limits
 from httpx._pool.origin import Origin, origin_for
-from httpx._proto.h1.connection import H1Connection
 from httpx._proto.h1.head import ResponseHead
 from httpx._proto.h1.writer import TargetForm
 from httpx._stream.config import TlsConfig
@@ -63,7 +69,7 @@ struct PooledConnection(Movable):
     from when it was opened, because a connection carrying requests back to back
     is not the one a server is about to close."""
 
-    var _conn: Optional[H1Connection]
+    var _conn: Optional[Connection]
     """An optional so that the connection can be taken back out again.
 
     Mojo will not move a field whose type has a destructor out of a value that
@@ -72,16 +78,16 @@ struct PooledConnection(Movable):
     move rather than a copy of a socket.
     """
 
-    def __init__(out self, var origin: Origin, var conn: H1Connection):
+    def __init__(out self, var origin: Origin, var conn: Connection):
         self.origin = origin^
         self.idle_since_ns = now_ns()
-        self._conn = Optional[H1Connection](conn^)
+        self._conn = Optional[Connection](conn^)
 
     def idle_seconds(self) -> Float64:
         var elapsed = now_ns() - self.idle_since_ns
         return Float64(elapsed) / Float64(NANOS_PER_SECOND)
 
-    def take(mut self) -> H1Connection:
+    def take(mut self) -> Connection:
         return self._conn.take()
 
     def is_stale(self, expiry: Optional[Float64]) -> Bool:
@@ -221,8 +227,14 @@ struct ConnectionPool(Movable):
 
     def _acquire(
         mut self, origin: Origin, deadlines: Deadlines
-    ) raises -> H1Connection:
-        """A connection to `origin`, reused if there is a sound one to reuse."""
+    ) raises -> Connection:
+        """A connection to `origin`, reused if there is a sound one to reuse.
+
+        A new connection comes back already knowing which protocol it speaks.
+        `Connection` asks the stream what ALPN settled on, which is the only
+        place the answer exists and the only moment it can be had, so there is
+        no protocol decision anywhere else in the pool.
+        """
         var found = self._take_idle(origin)
         if found:
             return found.take()
@@ -232,7 +244,12 @@ struct ConnectionPool(Movable):
             self.resolver, origin.host, origin.port, deadlines.connect
         )
         if not origin.is_secure():
-            return H1Connection(Stream(tcp^))
+            # Always HTTP/1.1. HTTP/2 without TLS exists but has no negotiation
+            # in it: both ends have to have been told beforehand, and a client
+            # that assumed it would break every plain HTTP server there is. The
+            # way to ask for it is `http2=True` on the client, over https, where
+            # ALPN can settle it without guessing.
+            return Connection(Stream(tcp^))
 
         # Built here, on the first https connection, and shared by every one
         # after it. `TlsStream` takes its own reference on the context through
@@ -240,7 +257,7 @@ struct ConnectionPool(Movable):
         # keeps it alive and nothing has to order the two lifetimes by hand.
         if not self._ssl_ctx:
             self._ssl_ctx = Optional(self.tls.build())
-        return H1Connection(
+        return Connection(
             Stream(
                 TlsStream(
                     tcp^,
@@ -252,7 +269,7 @@ struct ConnectionPool(Movable):
             )
         )
 
-    def _take_idle(mut self, origin: Origin) -> Optional[H1Connection]:
+    def _take_idle(mut self, origin: Origin) -> Optional[Connection]:
         """The oldest sound idle connection to `origin`, closing any that are
         not.
 
@@ -272,7 +289,7 @@ struct ConnectionPool(Movable):
             if stale:
                 conn.close()
                 continue
-            return Optional[H1Connection](conn^)
+            return Optional[Connection](conn^)
         return None
 
     def _make_room(mut self, origin: Origin, deadlines: Deadlines) raises:
@@ -308,7 +325,7 @@ struct ConnectionPool(Movable):
         # nothing was being waited for is not a pool timeout.
         deadlines.pool.check(String("get a connection to ", origin))
 
-    def _release(mut self, var origin: Origin, var conn: H1Connection):
+    def _release(mut self, var origin: Origin, var conn: Connection):
         """Put a finished connection back, or close it.
 
         A connection only goes back if it says it can carry another request. The
@@ -365,7 +382,7 @@ struct PooledSource(ByteSource, Movable):
 
     var _pool: SharedPool
     var _origin: Origin
-    var _conn: Optional[H1Connection]
+    var _conn: Optional[Connection]
     """Nothing once the connection has gone back or been closed.
 
     Which is also how `read_chunk` knows there is no more body: an empty chunk
@@ -386,12 +403,12 @@ struct PooledSource(ByteSource, Movable):
         out self,
         var pool: SharedPool,
         origin: Origin,
-        var conn: H1Connection,
+        var conn: Connection,
         deadline: Deadline,
     ):
         self._pool = pool^
         self._origin = origin
-        self._conn = Optional[H1Connection](conn^)
+        self._conn = Optional[Connection](conn^)
         self._deadline = deadline
         self._trailers = Headers()
 
@@ -418,6 +435,12 @@ struct PooledSource(ByteSource, Movable):
         that would have been reusable. Whatever is left of the body is still on
         the wire, and a connection whose next byte is the middle of somebody
         else's response is not one to hand to the next request.
+
+        HTTP/2 does not have to lose the connection for this. An abandoned
+        stream can be reset and the connection kept, because the frames say
+        which stream they belong to and the leftovers of one are not in anybody
+        else's way. Not done yet, so an abandoned HTTP/2 body costs a
+        connection the same as an HTTP/1.1 one does.
         """
         self._drop()
 

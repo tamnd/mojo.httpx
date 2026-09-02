@@ -137,6 +137,7 @@ struct Client(Movable):
         verify: SSLVerify = SSLVerify(),
         cert: Optional[ClientCert] = None,
         trust_env: Bool = True,
+        http2: Bool = False,
         follow_redirects: Bool = False,
         max_redirects: Int = DEFAULT_MAX_REDIRECTS,
         var auth: Optional[AnyAuth] = None,
@@ -146,14 +147,21 @@ struct Client(Movable):
     ) raises:
         """Every option, all of them keyword only.
 
-        Keyword only because there are fifteen of them and no order anybody
+        Keyword only because there are sixteen of them and no order anybody
         would remember. httpx does the same, for the same reason.
 
         `transport` replaces the one this would otherwise build, which is how a
         mock goes under a client that still has its base URL, its headers and
-        its redirect policy. Giving one makes `limits`, `verify`, `cert` and
-        `trust_env` dead letters, since those describe a connection pool that no
-        longer exists, and that is httpx's behaviour too.
+        its redirect policy. Giving one makes `limits`, `verify`, `cert`,
+        `trust_env` and `http2` dead letters, since those describe a connection
+        pool that no longer exists, and that is httpx's behaviour too.
+
+        `http2` offers HTTP/2 in the TLS handshake rather than demanding it. A
+        server that does not want it says so and gets HTTP/1.1, and a plain
+        `http://` request is HTTP/1.1 whatever this says, because there is no
+        handshake to negotiate in. Off by default, the same as httpx, since
+        offering it costs a few bytes on every connection and the answer for
+        most servers is no.
         """
         self.headers = headers^
         self.params = params^
@@ -172,6 +180,7 @@ struct Client(Movable):
             tls.verify = verify
             tls.cert = cert.copy()
             tls.trust_env = trust_env
+            tls.http2 = http2
             var built = HTTPTransport(
                 limits.value() if limits else Limits(), tls^
             )
