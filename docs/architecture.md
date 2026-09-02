@@ -50,9 +50,17 @@ Instead every layer from L3 up is generic over a `ByteStream` trait. `TcpStream`
 
 ## Plain and TLS streams are one type, not two
 
-`H1Connection` holds a `Stream`, which is either a plain socket or a TLS session over one, and nothing in the protocol code branches on which. `http://` and `https://` differ in how the bytes are carried and in nothing the state machine cares about, so that is the only place the difference should live.
+`H1Connection` and `H2Driver` both hold a `Stream`, which is either a plain socket or a TLS session over one, and nothing in the protocol code branches on which. `http://` and `https://` differ in how the bytes are carried and in nothing the state machine cares about, so that is the only place the difference should live.
 
 `Stream` is a tagged union of the two concrete stream types rather than a vtable, which is the opposite of the choice at L4. The reason is that the two sets are different shapes. The set of transports is open, because users pass their own, so it needs runtime dispatch. The set of streams is closed and always will be, because a stream is either a socket or TLS over a socket, and adding a third would be our change to make and not a user's. A closed set gets a union, an open one gets a vtable, and paying for indirection on every read of every byte to support an implementation nobody can write is not a trade worth making.
+
+## The pool holds one connection type, not one per protocol
+
+The same trick one layer up. `Connection` is a tagged union of `H1Connection` and `H2Driver`, and the pool never asks which one it is holding. Reuse, keepalive expiry, liveness checks, the per host and total limits and eviction are the same problem in both protocols, so a second pool for HTTP/2 would have been the first pool copied with two type names changed in it.
+
+What makes the union cheap is that the two state machines were written to the same surface on purpose. `exchange`, `send_request`, `start_response`, `read_chunk`, `take_trailers`, `is_idle`, `is_reusable` and `close` mean the same thing in both, so `Connection` forwards and never translates. Where they genuinely differ is inside those methods and stays there: `is_reusable` is false on an HTTP/1.1 connection while a response is being read and true on an HTTP/2 one, because another stream could carry another request alongside it, and that is a sentence each state machine answers for itself.
+
+The choice is made once, by ALPN, at the moment the connection is made, and there is nowhere else in the client that decides which protocol to speak. A plain `http://` connection is always HTTP/1.1, because HTTP/2 without TLS has no negotiation in it and both ends have to have been told beforehand.
 
 ## JSON is an arena, and the parser has its own stack
 

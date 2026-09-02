@@ -19,6 +19,7 @@ from httpx._models.response import Response
 from httpx._models.url import URL
 from httpx._pool.limits import Limits
 from httpx._pool.pool import ConnectionPool
+from httpx._stream.config import TlsConfig
 
 from tests.support.testserver import TestServer
 
@@ -299,6 +300,21 @@ def test_an_error_status_is_a_response_and_not_a_failure() raises:
     var pool = _pool(Limits())
     var response = _get(pool, server, "/status/418")
     assert_equal(response.status_code, 418)
+    assert_equal(pool.idle_count(), 1)
+
+
+def test_a_plain_connection_stays_http1_even_when_http2_is_offered() raises:
+    # There is no handshake on a plain connection, so there is nothing for the
+    # offer to happen in. A pool that took the flag as an instruction would send
+    # a preface to a server expecting a request line, which is a protocol error
+    # rather than a downgrade.
+    var server = TestServer()
+    var tls = TlsConfig()
+    tls.http2 = True
+    var pool = ConnectionPool(Limits(), tls=tls^)
+    var response = _get(pool, server, "/get")
+    assert_equal(response.status_code, 200)
+    assert_equal(response.http_version, "HTTP/1.1")
     assert_equal(pool.idle_count(), 1)
 
 
