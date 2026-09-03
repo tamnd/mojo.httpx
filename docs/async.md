@@ -141,6 +141,10 @@ What that leaves is a batch. `AsyncTransport.handle_many` takes a list of reques
 
 A batch fails the way `asyncio.gather` fails by default: the first failure is raised and the other responses are dropped. Every request still runs to the end first, so no connection is left leased, and a variant that hands back failures alongside successes is worth having and is not written yet.
 
+What a user sees is `httpx.gather(client, requests)`, in `httpx/_aio_client.mojo`. A free function rather than a method, because that is what it is in httpx, and because it belongs to the async client alone while everything else on the client belongs to both. It is the transport's batch with the client's work wrapped round it, and the wrapping is the part worth reading: a request that comes back redirected is a request again, so a batch is not a list of requests and a list of responses. Each slot is a small state machine holding either something to send or an answer, along with its own history, its own auth scheme and its own hop count. A round is one call into the transport, and the slots that are not finished go out again in the next one, together. A batch where one request redirects twice and the rest are done in one hop costs three rounds rather than three sequential requests.
+
+Redirects are resolved before the auth scheme is consulted, which is the order the synchronous client uses. Each slot carries its own copy of the scheme, so a digest challenge answered for one request does not become an answer the others give as well.
+
 The alternative, making everything async and running the sync client as `_run` over it, was rejected on two counts: it puts a private stdlib entry point on the hot path of the sync client, and it makes every synchronous request pay a scheduler round trip for I/O that never suspends.
 
 ## What the async client cannot do yet
