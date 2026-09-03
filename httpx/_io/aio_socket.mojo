@@ -34,7 +34,7 @@ from httpx._ffi.errno import Op, interrupted, would_block
 from httpx._ffi.socket import POLLIN, POLLOUT
 from httpx._io.aio import Outcome, poll_slice, slice_for, yield_now
 from httpx._io.deadline import Deadline
-from httpx._io.socket import PendingConnect, TcpStream
+from httpx._io.socket import INVALID_FD, PendingConnect, TcpStream
 
 
 struct AsyncTcpStream(Movable):
@@ -48,6 +48,40 @@ struct AsyncTcpStream(Movable):
     var _inner: TcpStream
 
     def __init__(out self, var inner: TcpStream):
+        self._inner = inner^
+
+    @staticmethod
+    def detached() -> Self:
+        """A stream with no descriptor, which every method treats as closed.
+
+        For a caller that has to own the field before it owns the connection.
+        The pool is the one that needs it: a request whose connection does not
+        exist yet still has to have somewhere to put it, because a coroutine
+        cannot hold the connection in its own frame and cannot create one there
+        either. So the slot is made first, empty, and filled in by synchronous
+        code once the race has a winner.
+
+        Also what gets left behind when a connection is taken back out of a
+        pool entry, since Mojo will not move a field with a destructor out of a
+        value that still has to be destroyed and a swap needs something to swap
+        in.
+
+        `INVALID_FD` is what `TcpStream` already puts in a stream that has been
+        closed, so nothing downstream has to learn a new state. Reading from one
+        of these fails the way reading from a closed socket fails, and so does
+        writing.
+        """
+        return Self(TcpStream(INVALID_FD, String()))
+
+    def adopt(mut self, var inner: TcpStream):
+        """Put a connected socket into a detached stream.
+
+        Closes whatever was here first, which for the only caller is nothing.
+        Doing it anyway means a second call cannot leak a descriptor, and this
+        is the kind of place where a leak would be found much later and blamed
+        on something else.
+        """
+        self._inner.close()
         self._inner = inner^
 
     def fd(self) -> c_int:

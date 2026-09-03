@@ -676,8 +676,9 @@ def main() raises:
 # So the rule has two halves. The dereference belongs in a synchronous helper
 # the coroutine calls, never in the coroutine itself, and what the helper reads
 # has to be a scalar field rather than anything derived from owned memory. A
-# count kept beside a list satisfies both, which is why `Stages` has one and why
-# the pool keeps its own counters rather than asking its lists how long they are.
+# count kept beside a list satisfies both, which is why `Stages` has one, and it
+# is why `pooled_exchange` is told whether it has to connect rather than working
+# it out from the race it was handed.
 #
 # The suspension form matters here too. Every probe above gives way with
 # `_ = await create_task(nothing())` and it makes no difference to them, but in
@@ -685,3 +686,80 @@ def main() raises:
 # fails to lower with `Instruction does not dominate all uses`. `give_way` keeps
 # the handle in its own frame instead. That is why `httpx._io.aio.yield_now`
 # exists as a function rather than as a line repeated at each call site.
+#
+# The next four came out of the connection pool, which is the longest coroutine
+# in the library and the first one that wanted three loops. All four are things
+# that work in a shorter coroutine and stop working in that one, so none of them
+# would have been found by making the probes above bigger.
+#
+# Case eight. A coroutine may call a given function once after a suspension and
+# not twice. The pool's exchange started out shaped like the driver's, leaving
+# early on each thing that could go wrong:
+#
+#     async def pooled[...](...):
+#         while _race_step(race, connect_at) == RACING:
+#             await give_way()
+#         if not _adopt_winner(race, conn, result):
+#             _abandon(conn)
+#             return
+#         if not _prepare(conn, request, result, form):
+#             _abandon(conn)
+#             return
+#         ...
+#
+#     -:0:0: error: invalid value index: 75
+#     -:0:0: note: in bytecode version 6 produced by: MLIR24.0.0git
+#
+# Either `_abandon` on its own compiles and runs. Two different functions in
+# those same two places compile and run. It is the second call to the same one
+# that does it, and only when both are after a suspension, which is why the
+# driver in `httpx/_proto/h1/aio.mojo` has two `_abandon` calls and is fine: its
+# first one is before the first loop. The pool has one exit instead, and a
+# failure there makes every later step do nothing rather than leaving.
+#
+# Case nine. Nothing may stand between a second suspending loop and a third.
+# Three loops in a row are fine, which is case seven. Three loops with one call
+# in the second gap are not:
+#
+#     while _race_step(race, connect_at) == RACING:
+#         await give_way()
+#     _load_request(conn, request, result, form)   # this gap is fine
+#     while _write_call(conn, result, write_at, rounds) == _WAIT:
+#         await give_way()
+#     _turn_around(conn, result)                   # this one crashes
+#     while _read_call(conn, result, read_at, rounds) == _WAIT:
+#         await give_way()
+#
+# A stack dump and no message. It is not what the call does: a call taking
+# nothing but pointers already in the frame and returning nothing is enough, and
+# the same call moved up into the first gap is fine. So `pooled_exchange` has
+# two loops rather than three, and sending and receiving are one step that knows
+# from the connection which of the two it is doing.
+#
+# Case ten. A value a coroutine throws away is still a value in its frame:
+#
+#     while _write_call(conn, result, write_at, rounds) == _WAIT:
+#         await give_way()
+#     _ = _start_reading(conn, result)   # crashes
+#     _settle(conn, result)              # returns nothing, and is fine
+#
+# Same position, same arguments, and the difference is that one of them has an
+# answer nobody wants. The discard has to happen inside a helper's frame. This
+# is case seven's discarded task handle again, and it earns its own case because
+# `_ =` looks like nothing at all.
+#
+# Case eleven, and the only one of the four that is about a caller rather than
+# about a coroutine's own shape. Two `create_task` calls in a row have to be
+# inside loop bodies:
+#
+#     var group = TaskGroup()
+#     group.create_task(pooled_exchange(...))       # on its own, fine
+#     group.create_task(_answer_one(work, ...))     # the pair crashes
+#     await group
+#
+# A stack dump and no message again. Hoisting the arguments into locals first
+# does not help. Wrapping each call in a `for` of one iteration does, which is
+# what `tests/unit/test_aio_pool.mojo` does to start one request and the one
+# server that answers it. The test in the same file that starts a request per
+# worker writes real loops and never hit this, which is what pointed at the loop
+# rather than at anything in the arguments.

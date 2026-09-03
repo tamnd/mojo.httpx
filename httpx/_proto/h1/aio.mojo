@@ -64,6 +64,7 @@ from httpx._ffi.socket import POLLIN, POLLOUT
 from httpx._io.aio import Outcome, poll_slice, slice_for, yield_now
 from httpx._io.aio_socket import AsyncTcpStream
 from httpx._io.deadline import Deadline
+from httpx._io.socket import TcpStream
 from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.response import Response
@@ -198,6 +199,25 @@ struct AsyncH1Connection(Movable):
         self.outbox = List[UInt8]()
         self.written = 0
         self.scratch = List[UInt8](length=READ_SIZE, fill=0)
+
+    @staticmethod
+    def detached() -> Self:
+        """A connection with no socket yet, for a caller that has to own the
+        field before it owns the connection. See `AsyncTcpStream.detached`."""
+        return Self(AsyncTcpStream.detached())
+
+    def adopt(mut self, var inner: TcpStream):
+        """Take the socket a connect just produced and start a fresh exchange.
+
+        The machine is rebuilt rather than reused, because a detached connection
+        has never spoken to anybody and a recycled one is not what this is for.
+        The pool reuses a connection by keeping the whole `AsyncH1Connection`,
+        not by putting a new socket into an old one.
+        """
+        self.stream.adopt(inner^)
+        self.machine = H1Machine()
+        self.outbox = List[UInt8]()
+        self.written = 0
 
     def fd(self) -> c_int:
         return self.stream.fd()
