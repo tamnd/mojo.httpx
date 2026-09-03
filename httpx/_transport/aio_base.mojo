@@ -1,0 +1,171 @@
+"""The boundary a user can replace, for the async client.
+
+The same idea as `httpx._transport.base` and deliberately the same shape: a
+transport takes a finished request, sends it somewhere and hands back a
+response, and everything above it stays the client's work so that swapping the
+transport under a client leaves redirects, auth and cookies in place.
+
+It is a second trait rather than an extra method on the first one because the
+two do not have the same methods, and a trait with a method nobody outside the
+async client can implement usefully would be a worse lie than two traits. The
+sync transport has `handle_stream` and this one does not yet, and this one has
+`handle_many` and the sync one never will.
+
+## Why concurrency is a method rather than something the caller does
+
+`handle_many` looks like it belongs above the transport: take a list of
+requests, start one task each, wait for all of them. In Mojo 1.0.0 it cannot
+live there. A request is driven by a coroutine that suspends inside a loop, and
+such a coroutine can only be handed to `_run` or to `TaskGroup.create_task`,
+never awaited by another coroutine. So the group and the tasks have to be in the
+same function as the thing that knows how to run one request, which is the
+transport. `httpx._io.aio` has the whole list of what coroutines here can and
+cannot do.
+
+That is why the vtable has three entries instead of two. Concurrency crosses the
+erasure boundary as a call taking a list, because it cannot cross it as a
+coroutine: a `Coroutine` is a linear type, so it cannot be stored, returned
+through a function pointer, or held in a field.
+
+## What a transport that is not the real one has to do
+
+`handle_many` on a transport with no network under it, such as a mock, is a loop
+over `handle_request`. That is a correct implementation and not a placeholder:
+the promise is that the requests all get sent and the responses come back in the
+order the requests went in, not that anything overlaps. Only a transport with
+something to wait for has anything to gain from overlapping.
+"""
+
+from httpx._io.deadline import Deadlines
+from httpx._models.request import Request
+from httpx._models.response import Response
+from httpx._util.erase import ErasedBox
+
+
+trait AsyncTransport(Movable):
+    """What an async transport has to be able to do.
+
+    The deadlines are an argument for the reason they are one on `Transport`: a
+    transport that cannot see the deadline cannot honour it.
+
+    There is no `handle_stream` here yet. An async streaming response has to
+    hold a connection out of the pool while the caller reads the body, and the
+    reading is a coroutine the caller drives, so the shape of it is a design
+    question rather than a missing method. It arrives with the async iterators.
+    """
+
+    def handle_request(
+        mut self, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        ...
+
+    def handle_many(
+        mut self, var requests: List[Request], deadlines: Deadlines
+    ) raises -> List[Response]:
+        """Send all of them at once, and answer in the order they came in.
+
+        The first failure is raised and the other responses are dropped, which
+        is what `asyncio.gather` does by default. Every request is still run to
+        the end first, so nothing is left holding a connection.
+        """
+        ...
+
+    def close(mut self):
+        """Release everything held, such as pooled connections.
+
+        Does not raise, for the reason `Transport.close` does not.
+        """
+        ...
+
+
+struct AnyAsyncTransport(Movable):
+    """An async transport whose type has been forgotten, ready to be stored."""
+
+    var _state: ErasedBox
+    var _handle_request: def(
+        ErasedBox, var Request, Deadlines
+    ) raises thin -> Response
+    var _handle_many: def(
+        ErasedBox, var List[Request], Deadlines
+    ) raises thin -> List[Response]
+    var _close: def(ErasedBox) thin -> None
+
+    def __init__(
+        out self,
+        var state: ErasedBox,
+        handle_request: def(
+            ErasedBox, var Request, Deadlines
+        ) raises thin -> Response,
+        handle_many: def(
+            ErasedBox, var List[Request], Deadlines
+        ) raises thin -> List[Response],
+        close: def(ErasedBox) thin -> None,
+    ):
+        self._state = state^
+        self._handle_request = handle_request
+        self._handle_many = handle_many
+        self._close = close
+
+    def copy(self) -> Self:
+        """Another handle on the same transport, sharing its connection pool.
+
+        Explicit for the reason `AnyTransport.copy` is explicit: Mojo 1.0 does
+        not run a written copy hook for an implicit copy, and a silent bitwise
+        copy would leave the reference count behind.
+        """
+        return Self(
+            self._state.copy(),
+            self._handle_request,
+            self._handle_many,
+            self._close,
+        )
+
+    def state[T: AsyncTransport & Deinitable](self) -> ref[MutAnyOrigin] T:
+        """The transport back again, as the type it was before it was erased.
+
+        Asking for a type other than the one that went in is undefined, which is
+        the one sharp edge of erasure and the reason this is spelled out rather
+        than hidden behind a property.
+        """
+        return self._state.get[T]()
+
+    def handle_request(
+        mut self, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        return self._handle_request(self._state, request^, deadlines)
+
+    def handle_many(
+        mut self, var requests: List[Request], deadlines: Deadlines
+    ) raises -> List[Response]:
+        return self._handle_many(self._state, requests^, deadlines)
+
+    def close(mut self):
+        self._close(self._state)
+
+
+def erase_async_transport[
+    T: AsyncTransport & Deinitable
+](var transport: T) -> AnyAsyncTransport:
+    """Box `transport` and build the vtable that reaches back into it.
+
+    The trampolines capture nothing. They recover the concrete type from `T`,
+    which is a compile time parameter, so each one is an ordinary function with
+    a nameable type rather than a closure.
+    """
+
+    def _handle_request(
+        state: ErasedBox, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        return state.get[T]().handle_request(request^, deadlines)
+
+    def _handle_many(
+        state: ErasedBox, var requests: List[Request], deadlines: Deadlines
+    ) raises -> List[Response]:
+        return state.get[T]().handle_many(requests^, deadlines)
+
+    def _close(state: ErasedBox) -> None:
+        state.get[T]().close()
+
+    return AnyAsyncTransport(
+        ErasedBox.make[T](transport^), _handle_request, _handle_many, _close
+    )

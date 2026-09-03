@@ -25,10 +25,11 @@ from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.response import Response
 from httpx._models.url import URL, QueryParams
+from httpx._transport.aio_base import AsyncTransport
 from httpx._transport.base import Transport
 
 
-struct MockTransport(Transport):
+struct MockTransport(AsyncTransport, Transport):
     """Answers every request by calling `handler`."""
 
     var handler: def(var Request) raises thin -> Response
@@ -73,6 +74,22 @@ struct MockTransport(Transport):
         an already read body iterates out of the buffer.
         """
         return self.handle_request(request^, deadlines)
+
+    def handle_many(
+        mut self, var requests: List[Request], deadlines: Deadlines
+    ) raises -> List[Response]:
+        """One at a time, in order, because there is nothing here to overlap.
+
+        A mock answers out of memory, so a batch has nothing to wait for and
+        overlapping would only make the recording arrive in an order the test
+        cannot predict. What it promises is what the real transport promises:
+        every request sent, every response back in the order the requests went
+        in. That is what lets a mock stand in under an `AsyncClient`.
+        """
+        var responses = List[Response]()
+        while len(requests) > 0:
+            responses.append(self.handle_request(requests.pop(0), deadlines))
+        return responses^
 
     def close(mut self):
         """Nothing to release. Kept so this is a transport like any other."""
@@ -354,7 +371,7 @@ struct Route(Movable):
         )
 
 
-struct MockRouter(Transport):
+struct MockRouter(AsyncTransport, Transport):
     """A table of routes, matched in order, answering as a transport.
 
     First match wins, so the specific routes go first and `Route.any()` goes
@@ -444,6 +461,19 @@ struct MockRouter(Transport):
     ) raises -> Response:
         """Exactly `handle_request`, because there is nothing to stream from."""
         return self.handle_request(request^, deadlines)
+
+    def handle_many(
+        mut self, var requests: List[Request], deadlines: Deadlines
+    ) raises -> List[Response]:
+        """One at a time, in order, as in `MockTransport`.
+
+        Order matters more here than it does there, because a router records
+        what each route was called with and a test reads that recording back.
+        """
+        var responses = List[Response]()
+        while len(requests) > 0:
+            responses.append(self.handle_request(requests.pop(0), deadlines))
+        return responses^
 
     def close(mut self):
         """Nothing to release. Kept so this is a transport like any other."""
