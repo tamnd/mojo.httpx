@@ -183,6 +183,8 @@ An `https://` URL is refused, and it raises with a message saying so rather than
 
 Streaming request bodies and `Expect: 100-continue` are refused the same way, one layer down, by the async driver. Both need a second source driven between writes, which is another suspending loop.
 
+HTTP/2 is out for the same reason https is, since it is negotiated in the TLS handshake. [limitations.md](limitations.md) collects these together with everything else the library does not do yet, so a reader deciding whether this fits does not have to assemble the list from the design pages.
+
 ## What we are taking on knowingly
 
 `_run` is underscore prefixed, which is the stdlib saying it is not public API. We depend on it anyway, because it is the only way into the scheduler from ordinary code and an `async def main` is not allowed. It is called in exactly one place inside `httpx/_io/`, so a rename costs one line.

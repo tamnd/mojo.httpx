@@ -875,7 +875,7 @@ struct BaseClient[
         out.setdefault("Accept", "*/*")
         # `identity` rather than the `gzip, deflate` httpx sends, because asking
         # for a coding this client cannot undo would mean handing the caller
-        # compressed bytes and calling them the body. The codecs land in M4 and
+        # compressed bytes and calling them the body. The codecs land in M7 and
         # this becomes the list of what is compiled in, so the header follows
         # what the client can actually do rather than what it hopes for.
         out.setdefault("Accept-Encoding", "identity")

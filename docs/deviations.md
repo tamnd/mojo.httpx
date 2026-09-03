@@ -2,6 +2,8 @@
 
 The goal is that code written against httpx2 reads the same here, and that a request going out over the wire has the same bytes in it. Where that is not possible, the difference is deliberate and it is written down on this page rather than left for somebody to find at three in the morning.
 
+This page is about behaving differently while doing the same job. Things that are simply not here yet, such as proxies and the content codecs, are on [limitations.md](limitations.md) instead.
+
 Two kinds of difference show up. The first kind is forced by the language: Mojo has no dynamic `Any`, no exception subclassing, no generators and no keyword argument packing, so anything built on those has to be spelled differently. The second kind is a judgement call, where copying httpx2 exactly was possible and we chose not to. The second kind is much shorter and each entry says what the alternative was.
 
 ## Forced by the language
