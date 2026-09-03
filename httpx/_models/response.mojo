@@ -11,6 +11,7 @@ client that reported `200 OK` instead would be making debugging harder to no
 purpose.
 """
 
+from httpx._codec.decode import Decoder, decoders_for
 from httpx._exceptions import ErrorKind, new_error
 from httpx._ffi.clock import unix_now
 from httpx._io.deadline import now_ns
@@ -107,6 +108,28 @@ def status_text(code: Int) -> StaticString:
     if code == 504:
         return "Gateway Timeout"
     return ""
+
+
+def _decoded(headers: Headers, var content: List[UInt8]) raises -> List[UInt8]:
+    """Undo whatever `Content-Encoding` says was done to `content`.
+
+    Given back unchanged for the ordinary response, which has no such header,
+    and that case costs one lookup and no copy.
+
+    The whole body at once rather than in chunks, because this is the path where
+    it is already in memory. The bound still applies: the compressed bytes are
+    in hand but the decoded ones are not, and those are the ones a compressed
+    body gets to choose the size of.
+    """
+    var decoders = decoders_for(headers.get("content-encoding"))
+    if len(decoders) == 0:
+        return content^
+    for i in range(len(decoders)):
+        var plain = decoders[i].push(Span(content))
+        content = plain^
+    for i in range(len(decoders)):
+        decoders[i].finish()
+    return content^
 
 
 struct Response(Movable, Writable):
@@ -219,18 +242,26 @@ struct Response(Movable, Writable):
         var content: List[UInt8] = List[UInt8](),
         var trailers: Headers = Headers(),
         var default_encoding: DefaultEncoding = DefaultEncoding(),
-    ):
+    ) raises:
         """A response whose body is already in hand.
 
         What a test double builds and what the transport returns for a body it
         read to the end. Nothing is left to arrive, so the response starts read
         and closed and `content()` works straight away.
+
+        The content is decoded here when the headers name a coding, which is
+        what makes `Content-Encoding` mean the same thing on a buffered response
+        as on a streamed one. It is also why this raises: a body that is not the
+        format its own header claimed has no content to hand over, and the
+        alternative is a response that quietly holds compressed bytes and calls
+        them text.
         """
+        var arrived = len(content)
         self.status_code = status_code
         self.reason_phrase = reason_phrase^
         self.http_version = http_version^
         self.headers = headers^
-        self._content = content^
+        self._content = _decoded(self.headers, content^)
         self._stream = empty_stream()
         self._read = True
         self.is_stream_consumed = True
@@ -242,7 +273,9 @@ struct Response(Movable, Writable):
         self._history = List[ErasedBox]()
         self._started_ns = 0
         self._elapsed = None
-        self._downloaded = len(self._content)
+        # What arrived rather than what came out of the decoder, so that the
+        # number means the same thing here as it does on a streamed response.
+        self._downloaded = arrived
 
     @staticmethod
     def streaming(
@@ -252,13 +285,16 @@ struct Response(Movable, Writable):
         var http_version: String = String("HTTP/1.1"),
         var headers: Headers = Headers(),
         var default_encoding: DefaultEncoding = DefaultEncoding(),
-    ) -> Self:
+    ) raises -> Self:
         """A response whose body has not been read yet.
 
         A separate constructor rather than an overload, because the difference
         between the two is not one argument, it is which half of the state
         machine the response starts in, and a reader should not have to work
         that out from an argument type.
+
+        Raising only because it borrows the other constructor, which decodes.
+        There is no body here to decode yet, so nothing this reaches can fail.
         """
         var out = Self(status_code, reason_phrase^, http_version^, headers^)
         out._stream = stream^
@@ -414,7 +450,11 @@ struct Response(Movable, Writable):
         """
         if self._read:
             return
-        var chunks = self.iter_raw()
+        # Before the stream is taken, so that a `Content-Encoding` we cannot
+        # undo leaves the response untouched rather than half consumed.
+        var decoders = self._decoders()
+        var stream = self._take_stream()
+        var chunks = ByteChunks(stream^, 0, decoders^)
         while chunks.has_next():
             self._content.extend(Span(chunks.next()))
         self._downloaded = chunks.num_bytes_downloaded()
@@ -564,18 +604,22 @@ struct Response(Movable, Writable):
     def iter_bytes(mut self, chunk_size: Int = 0) raises -> ByteChunks:
         """The body with any content encoding undone.
 
-        The same bytes as `iter_raw` today, because the codecs are not written
-        yet. The two are separate calls anyway, because they answer different
-        questions and only one of them changes when gzip lands.
+        The same bytes as `iter_raw` for the ordinary response, which has no
+        `Content-Encoding` on it at all. For a gzipped one this is the document
+        and `iter_raw` is the compressed form of it, which is the whole reason
+        the two are separate calls.
 
         Works on a response that has already been read, where `iter_raw` would
         refuse. That is httpx2's behaviour and it is the right one: re-reading
         bytes that are sitting in memory costs nothing and asks nothing of the
-        connection.
+        connection. Nothing is decoded on that path, because `read` decoded them
+        on the way in and `_content` already holds the document.
         """
         if self._read:
             return ByteChunks(buffered_stream(self._content.copy()), chunk_size)
-        return self.iter_raw(chunk_size)
+        var decoders = self._decoders()
+        var stream = self._take_stream()
+        return ByteChunks(stream^, chunk_size, decoders^)
 
     def iter_text(mut self, chunk_size: Int = 0) raises -> TextChunks:
         """The body decoded to text, in chunks of that many characters.
@@ -590,8 +634,9 @@ struct Response(Movable, Writable):
             return TextChunks(
                 buffered_stream(self._content.copy()), id, chunk_size
             )
+        var decoders = self._decoders()
         var stream = self._take_stream()
-        return TextChunks(stream^, id, chunk_size)
+        return TextChunks(stream^, id, chunk_size, decoders^)
 
     def iter_lines(mut self) raises -> LineChunks:
         """The body decoded to text and split into lines, terminators removed.
@@ -604,8 +649,9 @@ struct Response(Movable, Writable):
         var id = self._encoding_id()
         if self._read:
             return LineChunks(buffered_stream(self._content.copy()), id)
+        var decoders = self._decoders()
         var stream = self._take_stream()
-        return LineChunks(stream^, id)
+        return LineChunks(stream^, id, decoders^)
 
     def aiter_raw(mut self, chunk_size: Int = 0) raises -> ByteChunks:
         """`iter_raw`, under the name httpx gives it on an async response.
@@ -642,6 +688,19 @@ struct Response(Movable, Writable):
     def aclose(mut self):
         """`close`, under the name httpx gives it on an async response."""
         self.close()
+
+    def _decoders(self) raises -> List[Decoder]:
+        """The decoders this body needs, read off its `Content-Encoding`.
+
+        Empty for almost every response, because the header is absent and an
+        absent header comes back from `get` as the empty string, which is a list
+        of no codings.
+
+        The bounds are the default ones. A caller who wants a larger body than
+        `DecodeLimits` allows has `iter_raw`, which hands over the compressed
+        bytes and lets them decide what to do with them.
+        """
+        return decoders_for(self.headers.get("content-encoding"))
 
     def _take_stream(mut self) raises -> ByteStream:
         """Hand the live stream over, with the same guards `iter_raw` applies.

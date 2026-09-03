@@ -40,10 +40,10 @@ ACCEPTED = [
     (
         "*",
         "header:accept-encoding",
-        "We ask for `identity` because we cannot yet undo `gzip` or `deflate`."
-        " Asking for a coding the client cannot decode would mean handing the"
-        " caller compressed bytes and calling them the body. This entry goes"
-        " away with the decoders.",
+        "We ask for `gzip, deflate` and httpx2 also asks for `zstd`, which we"
+        " cannot yet undo. Asking for a coding the client cannot decode would"
+        " mean handing the caller compressed bytes and calling them the body."
+        " This entry goes away with brotli and zstd.",
     ),
     (
         "*",

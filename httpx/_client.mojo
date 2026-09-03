@@ -43,6 +43,7 @@ the choice of default belongs to the client: it is the client that was handed
 
 from httpx._auth import AnyAuth
 from httpx._bytes import Bytes
+from httpx._codec.decode import accept_encoding
 from httpx._config import Timeout
 from httpx._content.encode import encode_request_body
 from httpx._content.multipart import MultipartData
@@ -873,12 +874,12 @@ struct BaseClient[
         var out = self.headers.copy()
         out.update(headers^)
         out.setdefault("Accept", "*/*")
-        # `identity` rather than the `gzip, deflate` httpx sends, because asking
-        # for a coding this client cannot undo would mean handing the caller
-        # compressed bytes and calling them the body. The codecs land in M7 and
-        # this becomes the list of what is compiled in, so the header follows
-        # what the client can actually do rather than what it hopes for.
-        out.setdefault("Accept-Encoding", "identity")
+        # What this process can actually undo, which is decided at run time by
+        # whether libz loaded rather than at build time by what was compiled in.
+        # Asking for a coding we cannot decode would mean handing the caller
+        # compressed bytes and calling them the body, so a machine without zlib
+        # sends `identity` and gets plain responses.
+        out.setdefault("Accept-Encoding", accept_encoding())
         out.setdefault("Connection", "keep-alive")
         out.setdefault("User-Agent", USER_AGENT)
         return out^

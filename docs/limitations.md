@@ -31,8 +31,8 @@ Everything here is either tracked on the [roadmap](roadmap.md) or written up in 
 
 ## Content
 
-- No content decoding at all. `Accept-Encoding: identity` is sent on purpose, because asking for a coding the client cannot undo would mean handing back compressed bytes and calling them the body. gzip, deflate, brotli and zstd are M7.
-- `iter_bytes` and `aiter_bytes` produce the same bytes as `iter_raw` until then. They are separate calls anyway, because they answer different questions and only one of them changes when the codecs land.
+- gzip and deflate are decoded and brotli and zstd are not. `Accept-Encoding` names only what the process can undo, so a server is never asked for `br` or `zstd`, and one that sends either anyway gets a protocol error rather than a body of compressed bytes calling itself text. Both are M7, loaded at run time the way zlib is.
+- A response whose body is compressed is bounded at 256 MiB of output. httpx2 has no such bound. `iter_raw` is the way past it, and [deviations.md](deviations.md) says why the default is what it is.
 - Trailers arrive on `read()` and not through the iterators. A response read through an iterator never sees them, because the response cannot reach back into an iterator it has already handed out.
 
 ## Proxies

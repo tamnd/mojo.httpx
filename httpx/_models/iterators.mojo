@@ -37,6 +37,7 @@ it meant.
 """
 
 from httpx._bytes import utf8_width
+from httpx._codec.decode import Decoder
 from httpx._exceptions import ErrorKind, new_error
 from httpx._models.stream import ByteStream, buffered_stream
 from httpx._util.charset import (
@@ -67,6 +68,16 @@ struct ByteChunks(Movable):
     """Raw or decoded bytes, re-chunked to a size the caller asked for."""
 
     var _stream: ByteStream
+    var _decoders: List[Decoder]
+    """The content codings to undo, outermost first, or nothing for raw bytes.
+
+    Held here rather than wrapped around the stream so that `_downloaded` below
+    can go on counting what arrived rather than what came out. A decoding source
+    would have made the two the same number, and the one a progress bar needs is
+    the compressed one, because that is the one the server announced a length
+    for.
+    """
+
     var _pending: List[UInt8]
     var _size: Int
     var _ended: Bool
@@ -79,8 +90,14 @@ struct ByteChunks(Movable):
     place that can answer.
     """
 
-    def __init__(out self, var stream: ByteStream, size: Int = 0) raises:
+    def __init__(
+        out self,
+        var stream: ByteStream,
+        size: Int = 0,
+        var decoders: List[Decoder] = List[Decoder](),
+    ) raises:
         self._stream = stream^
+        self._decoders = decoders^
         self._pending = List[UInt8]()
         self._size = size
         self._ended = False
@@ -94,6 +111,11 @@ struct ByteChunks(Movable):
         `_pending` holds something or the body is over. That is what lets
         `has_next` be an ordinary non raising method, which is what lets the
         error from a failed read come out of `next` where a caller can catch it.
+
+        With a decoder in the way a read can produce nothing at all, because a
+        chunk can land entirely inside a gzip header. That is why the loop is
+        written against `_pending` rather than against the read: it goes back
+        for more bytes until something comes out or the body is over.
         """
         while not self._ended:
             if self._size > 0:
@@ -105,9 +127,20 @@ struct ByteChunks(Movable):
             if len(chunk) == 0:
                 self._ended = True
                 self._stream.close()
+                # After the close, so that a body which stopped in the middle
+                # still gives its connection back before the error goes up.
+                for i in range(len(self._decoders)):
+                    self._decoders[i].finish()
                 return
             self._downloaded += len(chunk)
-            self._pending.extend(Span(chunk))
+            self._pending.extend(Span(self._decode(chunk^)))
+
+    def _decode(mut self, var chunk: List[UInt8]) raises -> List[UInt8]:
+        """Run one raw chunk through the codings, outermost first."""
+        for i in range(len(self._decoders)):
+            var plain = self._decoders[i].push(Span(chunk))
+            chunk = plain^
+        return chunk^
 
     def num_bytes_downloaded(self) -> Int:
         """How much of the body has arrived, for a progress report.
@@ -116,6 +149,10 @@ struct ByteChunks(Movable):
         handed back when a chunk size is set and a read pulled more than one
         chunk's worth. That is the number a progress bar wants: it is measuring
         the download, not the caller's loop.
+
+        On a compressed body it is the compressed bytes, for the same reason:
+        the length the server announced is the compressed one, so a bar drawn
+        against the decoded count would run past its own end.
         """
         return self._downloaded
 
@@ -181,8 +218,9 @@ struct TextChunks(Movable):
         var stream: ByteStream,
         encoding_id: Int = UTF_8,
         size: Int = 0,
+        var decoders: List[Decoder] = List[Decoder](),
     ) raises:
-        self._bytes = ByteChunks(stream^)
+        self._bytes = ByteChunks(stream^, 0, decoders^)
         self._held = List[UInt8]()
         self._text = List[UInt8]()
         self._id = encoding_id
@@ -306,9 +344,12 @@ struct LineChunks(Movable):
     """
 
     def __init__(
-        out self, var stream: ByteStream, encoding_id: Int = UTF_8
+        out self,
+        var stream: ByteStream,
+        encoding_id: Int = UTF_8,
+        var decoders: List[Decoder] = List[Decoder](),
     ) raises:
-        self._text = TextChunks(stream^, encoding_id)
+        self._text = TextChunks(stream^, encoding_id, 0, decoders^)
         self._pending = List[UInt8]()
         self._lines = List[String]()
         self._at = 0

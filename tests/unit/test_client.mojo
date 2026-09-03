@@ -17,6 +17,7 @@ from std.testing import assert_equal, assert_false, assert_true
 
 import httpx
 from httpx._client import USER_AGENT, Client
+from httpx._codec.decode import accept_encoding
 from httpx._config import Timeout
 from httpx._models.headers import Headers
 from httpx._models.response import Response
@@ -184,9 +185,10 @@ def test_the_default_headers_are_sent() raises:
     var response = _get(client, server, "/headers")
     assert_equal(_sent_header(response, "user-agent"), USER_AGENT)
     assert_equal(_sent_header(response, "accept"), "*/*")
-    # Not `gzip, deflate`. Asking for a coding this client cannot undo would
-    # mean handing the caller compressed bytes and calling them the body.
-    assert_equal(_sent_header(response, "accept-encoding"), "identity")
+    # What loaded rather than what was compiled in. A machine with no libz on
+    # it asks for nothing, because a coding this process cannot undo would come
+    # back as compressed bytes calling themselves the body.
+    assert_equal(_sent_header(response, "accept-encoding"), accept_encoding())
     client.close()
 
 
