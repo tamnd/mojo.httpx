@@ -50,6 +50,7 @@ from std.sys import CompilationTarget
 
 from httpx._exceptions import ErrorKind, new_error
 from httpx._ffi.c import CStr, Ptr, c_string, cstr_to_string, getenv
+from httpx._ffi.socket import ignore_sigpipe_for_the_process
 
 comptime MIN_VERSION_NUM = 0x30000000
 """OpenSSL 3.0.0, as `OPENSSL_VERSION_NUMBER` encodes it.
@@ -239,6 +240,11 @@ struct _Loaded(Movable):
                 self.crypto = Optional(crypto^)
                 self.path = candidate.copy()
                 self._check_version()
+                # Here rather than anywhere else because this runs exactly once
+                # and only for a program that is actually going to speak TLS.
+                # `ignore_sigpipe_for_the_process` says why it has to happen at
+                # all and what it refuses to do.
+                _ = ignore_sigpipe_for_the_process()
                 return
             except e:
                 self.ssl = None

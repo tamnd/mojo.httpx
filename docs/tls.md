@@ -116,6 +116,16 @@ The search order is `$CONDA_PREFIX/lib` first, since that is where the Mojo tool
 
 If nothing loads, the error lists every path that was tried, because "OpenSSL not found" on a machine with four copies of OpenSSL installed is not a useful thing to be told.
 
+## Loading OpenSSL changes one process wide setting
+
+The first time the library loads OpenSSL it sets SIGPIPE to ignored, and on Linux only. This is the one thing in the library that reaches outside its own objects, so it is written down here rather than left to be found.
+
+Every socket write the library makes itself goes through `send` with `MSG_NOSIGNAL`, and on macOS the listening and connecting sockets get `SO_NOSIGPIPE` as well, so nothing on that path can raise the signal. OpenSSL is not on that path. Its socket BIO writes with plain `write`, there is no flag to change that, and on Linux there is no per socket suppression either. So a handshake against a server that has already hung up kills the whole program with signal 13 and prints nothing at all. That is not a failure a caller can catch or even see.
+
+The change is made once, on load, and only for a program that is going to speak TLS. If some other part of the program already installed a SIGPIPE handler, that handler is put back and the signal is left alone, on the grounds that a program with an opinion about SIGPIPE outranks this one. macOS is already covered by `SO_NOSIGPIPE` and is not touched.
+
+The real fix is a memory BIO, where OpenSSL never touches the file descriptor and the library does all the writing under its own rules. That is wanted anyway for the async client, and when it lands this goes away.
+
 ## Testing
 
 The offline half lives in `tests/unit/test_tls.mojo`: the ALPN wire encoding, the trust store search order, and every one of the key pair failure messages, using the throwaway certificates in `tests/fixtures/tls/`.

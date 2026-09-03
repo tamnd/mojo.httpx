@@ -66,6 +66,7 @@ from httpx._ffi.socket import (
     setsockopt_int,
     socket,
     suppress_sigpipe,
+    ignore_sigpipe_for_the_process,
     O_NONBLOCK,
 )
 
@@ -208,6 +209,18 @@ def test_a_fresh_socket_accepts_the_options_we_set() raises:
     assert_equal(Int(err), 0)
 
     assert_equal(Int(close(fd)), 0)
+
+
+def test_ignoring_sigpipe_says_it_worked_and_stays_worked() raises:
+    """The disposition OpenSSL's writes depend on, and asking twice.
+
+    Twice matters more than once. The second call finds the signal already
+    ignored, and the code that puts an existing handler back has to tell that
+    apart from a handler somebody else installed, or a program that made two
+    TLS connections would end up with SIGPIPE turned back on by the second one.
+    """
+    assert_true(ignore_sigpipe_for_the_process())
+    assert_true(ignore_sigpipe_for_the_process())
 
 
 def test_set_nonblocking_adds_the_bit_without_clearing_the_others() raises:
