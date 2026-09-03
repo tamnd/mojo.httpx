@@ -123,7 +123,7 @@ def connect_to_addresses[
             next_start_ns = now_ns() + UInt64(ATTEMPT_DELAY_MS * NANOS_PER_MS)
 
         var lost = len(failures)
-        var winner = _winner_index(pending, failures)
+        var winner = winner_index(pending, failures)
         if winner >= 0:
             var won = pending.pop(winner)
             # The losers are dropped here rather than left to fall out of scope
@@ -141,12 +141,12 @@ def connect_to_addresses[
             next_start_ns = now_ns()
 
         if len(pending) == 0 and next_address >= len(addresses):
-            raise _all_failed(peer, failures)
+            raise all_failed(peer, failures)
 
-        _wait_a_moment(deadline)
+        park_briefly(deadline, WAIT_SLICE_MS)
 
 
-def _winner_index(
+def winner_index(
     mut pending: List[PendingConnect], mut failures: List[String]
 ) raises -> Int:
     """Check every attempt in flight and report the first that connected.
@@ -159,6 +159,11 @@ def _winner_index(
     one address failing says nothing about the others and the caller only cares
     once they have all gone. Walking backwards so removing an entry does not
     shift the ones not yet looked at.
+
+    Shared with the async race in `httpx._io.aio_connect` rather than copied.
+    The loop around the attempts is what differs between the two clients; how an
+    attempt is judged is not, and the two giving different answers would be a
+    bug nobody would look for.
     """
     var found = -1
     var i = len(pending) - 1
@@ -177,12 +182,14 @@ def _winner_index(
     return found
 
 
-def _all_failed(peer: String, failures: List[String]) -> Error:
+def all_failed(peer: String, failures: List[String]) -> Error:
     """One error naming every attempt, rather than whichever failed last.
 
     A host whose IPv6 address is refused and whose IPv4 address times out is a
     different problem from one where both are refused, and the only way for a
     user to tell them apart is to be shown both.
+
+    Shared with the async race, for the reason on `winner_index`.
     """
     if len(failures) == 1:
         return new_error(ErrorKind.CONNECT_ERROR, failures[0])
@@ -192,8 +199,9 @@ def _all_failed(peer: String, failures: List[String]) -> Error:
     return new_error(ErrorKind.CONNECT_ERROR, message)
 
 
-def _wait_a_moment(deadline: Deadline):
-    """Park briefly, never past the deadline, while the attempts make progress.
+def park_briefly(deadline: Deadline, slice_ms: Int):
+    """Park for at most `slice_ms`, never past the deadline, while the attempts
+    make progress.
 
     `poll` with no descriptors at all is the portable way to wait for a fixed
     time without a sleep call. Waiting on the sockets themselves would be the
@@ -204,10 +212,14 @@ def _wait_a_moment(deadline: Deadline):
 
     The deadline is what bounds the wait rather than decorating it: a request
     with three milliseconds left does not park for longer than that.
+
+    The slice is an argument because the async race wants a zero length one for
+    its first rounds. A coroutine that parks before it has given way once is a
+    coroutine that made every other task wait for a syscall it did not need.
     """
     var slice = deadline.remaining_ms()
-    if slice > WAIT_SLICE_MS:
-        slice = WAIT_SLICE_MS
+    if slice > slice_ms:
+        slice = slice_ms
     # Ignored, because `nfds` is zero. `poll` still wants an address.
     var unused = PollFd(c_int(-1), Int16(0), Int16(0))
     _ = poll(Pointer(to=unused), c_uint(0), c_int(slice))
