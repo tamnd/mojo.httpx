@@ -51,6 +51,12 @@ LAYERS: dict[str, int] = {
     # Data types. No I/O, which is why they sit below the protocol layer rather
     # than beside the client that mostly uses them.
     "_models/": 3,
+    # Beside the data types rather than under them. A content coding is undone
+    # by the response, so the response has to be able to import it, and it
+    # needs nothing above _ffi itself. Not put in with the I/O layers because
+    # it holds no pointers and calls no syscalls, and being there would hand it
+    # a latitude it has no use for.
+    "_codec/": 3,
     "_content/": 4,
     # L1 to L5.
     "_stream/": 5,
