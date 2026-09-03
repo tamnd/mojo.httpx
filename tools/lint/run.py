@@ -62,10 +62,14 @@ LAYERS: dict[str, int] = {
     "_redirects.mojo": 9,
     "_hooks.mojo": 9,
     "_client.mojo": 10,
+    # Above the client rather than beside it. It is the client with its
+    # transport parameter filled in, so it imports the client, and the client
+    # must never learn that it exists.
+    "_aio_client.mojo": 11,
     # L6, the public surface.
-    "_api.mojo": 11,
-    "__init__.mojo": 11,
-    "cli/": 12,
+    "_api.mojo": 12,
+    "__init__.mojo": 12,
+    "cli/": 13,
 }
 
 # Only these layers may hold a raw pointer or call into C.

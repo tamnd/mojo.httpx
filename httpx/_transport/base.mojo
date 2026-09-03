@@ -22,6 +22,7 @@ touches this file.
 from httpx._io.deadline import Deadlines
 from httpx._models.request import Request
 from httpx._models.response import Response
+from httpx._transport.handle import TransportHandle
 from httpx._util.erase import ErasedBox
 
 
@@ -63,7 +64,7 @@ trait Transport(Movable):
         ...
 
 
-struct AnyTransport(Movable):
+struct AnyTransport(TransportHandle):
     """A transport whose type has been forgotten, ready to be stored."""
 
     var _state: ErasedBox

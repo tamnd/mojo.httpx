@@ -123,9 +123,13 @@ The staggered connect went the same way and is the clearest case, because there 
 
 The connection pool is the third case and the one where the split is cleanest, because none of what a pool decides is a wait. Reuse by origin, expiry by age, liveness before handing a connection out, eviction under the total limit and whether a finished connection is fit to go back are all in `httpx/_pool/aio_pool.mojo` word for word as `httpx/_pool/pool.mojo` has them, and they are the same rules because they were copied deliberately rather than rewritten. What is different is the middle: `pooled_exchange` runs a connect and an exchange in one coroutine, because an awaited coroutine may suspend once and not in a loop, so a connect that loops and an exchange that loops cannot be two coroutines with one on top. Everything the pool does around that coroutine is ordinary synchronous code, which is why `open` and `finish` raise like the sync pool does and only the part in between reports failure as a value.
 
-The transport is the fourth case, and it is the one where almost nothing is written twice. `httpx/_transport/aio_http.mojo` is a pool handle and three one line methods, the same as `httpx/_transport/http.mojo`, because everything hard is below it. What is genuinely different is the trait it satisfies. `AsyncTransport` is a second trait rather than a method added to the first, and the two do not have the same methods: the sync one has `handle_stream` and the async one does not have it yet, and the async one has `handle_many` which the sync one will never have.
+The transport is the fourth case, and it is the one where almost nothing is written twice. `httpx/_transport/aio_http.mojo` is a pool handle and four short methods, the same as `httpx/_transport/http.mojo`, because everything hard is below it. What is genuinely different is the trait it satisfies. `AsyncTransport` is a second trait rather than a method added to the first, because the async one has `handle_many` and the sync one never will: a transport with nothing to wait for has nothing to overlap.
 
-So both drivers are written by hand, they share the machine, and what keeps them honest is that they are tested against the same behaviour rather than diffed against each other. `AsyncClient` will follow the same split when it lands: pooling, redirects, auth and cookies are decisions rather than waits, and they belong on the sans-io side of the line.
+The client is the fifth case, and it is not written twice at all. This is where the layering stops paying out in shared parsing and starts paying out in shared decisions. Merging headers, resolving a relative URL against the base, writing the `Cookie` header, running the event hooks, following a redirect chain and answering an auth challenge are the whole of what a client does, and not one of them is a wait. They all happen either side of the transport call rather than inside it, so they do not care which transport they got.
+
+So `httpx/_client.mojo` holds a `BaseClient` parameterised on the transport handle, and `Client` and `AsyncClient` are two aliases for it. `httpx/_transport/handle.mojo` is the three calls a client makes on a transport, which is the part `Transport` and `AsyncTransport` have in common. There is no async redirect loop and no async cookie jar to keep in step with the synchronous ones, because there is one of each. `tests/unit/test_aio_client.mojo` runs the behaviours again anyway, over the async transport, because sharing the implementation is a claim about how the parameter was wired up rather than a proof.
+
+So both drivers are written by hand, they share the machine, and what keeps them honest is that they are tested against the same behaviour rather than diffed against each other. Above the transport there is one implementation of everything, which is what the sans-io split was for.
 
 ## Why concurrency is a method on the transport
 
@@ -138,6 +142,18 @@ What that leaves is a batch. `AsyncTransport.handle_many` takes a list of reques
 A batch fails the way `asyncio.gather` fails by default: the first failure is raised and the other responses are dropped. Every request still runs to the end first, so no connection is left leased, and a variant that hands back failures alongside successes is worth having and is not written yet.
 
 The alternative, making everything async and running the sync client as `_run` over it, was rejected on two counts: it puts a private stdlib entry point on the hot path of the sync client, and it makes every synchronous request pay a scheduler round trip for I/O that never suspends.
+
+## What the async client cannot do yet
+
+Two things, and both of them raise with a message saying which one it is rather than doing something almost right.
+
+An `https://` URL is refused. There is no async TLS handshake, because OpenSSL's socket BIO does its own blocking reads and writes on the descriptor, which is exactly what the async path exists to avoid. Doing it properly means memory BIOs, where OpenSSL never touches the socket and the library does all the reading and writing under its own rules. That is wanted anyway, since it would also let the SIGPIPE workaround in `docs/tls.md` go away. Until then the answer is a refusal, because sending in the clear because the secure path is unfinished is not a thing this library will do.
+
+`stream` is refused on a real connection. A streamed response holds a connection out of the pool while the caller reads the body a chunk at a time, and on the synchronous path the reading is a blocking read on a socket the response owns. Here it would have to be a coroutine the response owns and the caller resumes, and a `Coroutine` cannot be stored in a field. So the response cannot hold the thing that would do the reading. That is the async iterators' problem to solve and it is the next piece of this milestone.
+
+The refusal is the transport's rather than the client's, which matters more than it sounds. An async client over a mock transport streams normally, so the streaming tests a user writes against a double work today and only a real connection is missing.
+
+Streaming request bodies and `Expect: 100-continue` are refused in the same way, one layer down, by the async driver.
 
 ## What we are taking on knowingly
 

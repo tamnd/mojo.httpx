@@ -6,10 +6,11 @@ response, and everything above it stays the client's work so that swapping the
 transport under a client leaves redirects, auth and cookies in place.
 
 It is a second trait rather than an extra method on the first one because the
-two do not have the same methods, and a trait with a method nobody outside the
-async client can implement usefully would be a worse lie than two traits. The
-sync transport has `handle_stream` and this one does not yet, and this one has
-`handle_many` and the sync one never will.
+two do not have the same methods. This one has `handle_many` and the
+synchronous one never will, since a transport with nothing to wait for has
+nothing to overlap. The parts a client actually uses are common to both and are
+spelled out in `httpx._transport.handle`, which is what lets one client serve
+as `Client` and `AsyncClient` rather than the second being a copy of the first.
 
 ## Why concurrency is a method rather than something the caller does
 
@@ -39,6 +40,7 @@ something to wait for has anything to gain from overlapping.
 from httpx._io.deadline import Deadlines
 from httpx._models.request import Request
 from httpx._models.response import Response
+from httpx._transport.handle import TransportHandle
 from httpx._util.erase import ErasedBox
 
 
@@ -47,16 +49,25 @@ trait AsyncTransport(Movable):
 
     The deadlines are an argument for the reason they are one on `Transport`: a
     transport that cannot see the deadline cannot honour it.
-
-    There is no `handle_stream` here yet. An async streaming response has to
-    hold a connection out of the pool while the caller reads the body, and the
-    reading is a coroutine the caller drives, so the shape of it is a design
-    question rather than a missing method. It arrives with the async iterators.
     """
 
     def handle_request(
         mut self, var request: Request, deadlines: Deadlines
     ) raises -> Response:
+        ...
+
+    def handle_stream(
+        mut self, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        """The same, but return as soon as the head has been read.
+
+        Here so that an async client can be handed a mock and stream from it,
+        which is most of what the streaming tests do. The real async transport
+        cannot do it yet and says so: a streamed response holds a connection
+        out of the pool while the caller reads the body, and reading it is a
+        coroutine the caller drives, so the shape of that is a design question
+        rather than a missing method. It arrives with the async iterators.
+        """
         ...
 
     def handle_many(
@@ -78,7 +89,7 @@ trait AsyncTransport(Movable):
         ...
 
 
-struct AnyAsyncTransport(Movable):
+struct AnyAsyncTransport(TransportHandle):
     """An async transport whose type has been forgotten, ready to be stored."""
 
     var _state: ErasedBox
@@ -88,6 +99,9 @@ struct AnyAsyncTransport(Movable):
     var _handle_many: def(
         ErasedBox, var List[Request], Deadlines
     ) raises thin -> List[Response]
+    var _handle_stream: def(
+        ErasedBox, var Request, Deadlines
+    ) raises thin -> Response
     var _close: def(ErasedBox) thin -> None
 
     def __init__(
@@ -99,11 +113,15 @@ struct AnyAsyncTransport(Movable):
         handle_many: def(
             ErasedBox, var List[Request], Deadlines
         ) raises thin -> List[Response],
+        handle_stream: def(
+            ErasedBox, var Request, Deadlines
+        ) raises thin -> Response,
         close: def(ErasedBox) thin -> None,
     ):
         self._state = state^
         self._handle_request = handle_request
         self._handle_many = handle_many
+        self._handle_stream = handle_stream
         self._close = close
 
     def copy(self) -> Self:
@@ -117,6 +135,7 @@ struct AnyAsyncTransport(Movable):
             self._state.copy(),
             self._handle_request,
             self._handle_many,
+            self._handle_stream,
             self._close,
         )
 
@@ -138,6 +157,11 @@ struct AnyAsyncTransport(Movable):
         mut self, var requests: List[Request], deadlines: Deadlines
     ) raises -> List[Response]:
         return self._handle_many(self._state, requests^, deadlines)
+
+    def handle_stream(
+        mut self, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        return self._handle_stream(self._state, request^, deadlines)
 
     def close(mut self):
         self._close(self._state)
@@ -163,9 +187,18 @@ def erase_async_transport[
     ) raises -> List[Response]:
         return state.get[T]().handle_many(requests^, deadlines)
 
+    def _handle_stream(
+        state: ErasedBox, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        return state.get[T]().handle_stream(request^, deadlines)
+
     def _close(state: ErasedBox) -> None:
         state.get[T]().close()
 
     return AnyAsyncTransport(
-        ErasedBox.make[T](transport^), _handle_request, _handle_many, _close
+        ErasedBox.make[T](transport^),
+        _handle_request,
+        _handle_many,
+        _handle_stream,
+        _close,
     )

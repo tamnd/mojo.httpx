@@ -11,7 +11,7 @@ Two kinds of difference show up. The first kind is forced by the language: Mojo 
 | `r.json()` returns `Any` | returns a typed `Json` value with accessors | Mojo has no dynamic `Any`, so the type check has to happen at the point of access |
 | `except httpx.TimeoutException` | `if httpx.is_timeout(e)` | Mojo has one error type and no exception subclassing |
 | duck typed transports | a generic transport plus an erased vtable | Mojo has no trait objects |
-| `async with AsyncClient()` | explicit `await client.aclose()` | Mojo has no async context managers |
+| `async with AsyncClient()` | `with AsyncClient() as client` | Mojo has no async context managers, and nothing about closing a client suspends, so the ordinary one does the job. `aclose()` exists as a second name for `close()` |
 | `for chunk in r.iter_bytes()` | `while chunks.has_next(): chunks.next()` | Mojo has no generators, and a `for` loop swallows an error raised out of `__next__` |
 | `content=` takes bytes or an iterable | `content=` for bytes, `content_stream=` for a source | Mojo cannot tell the two apart at runtime, so they are two arguments |
 | `**kwargs` config | typed builders | Mojo has no keyword argument packing |

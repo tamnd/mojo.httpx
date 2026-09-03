@@ -243,6 +243,20 @@ A route written as a path matches that path on any host, and one written as an a
 
 The recording is the other half. `router.calls` is every request that reached the router and `route.calls` is what each route answered, with `called()` and `call_count()` on top, and `assert_all_called()` catches a route whose pattern was wrong. Taking a `copy()` of the erased transport before handing it to the client is how you read any of that back afterwards, because a copy is the same transport. `MockTransport` is the simpler one: a single function that answers everything, for when the reply depends on the request.
 
+`AsyncClient` is the same client over a pool that does not hold a runtime worker while a request waits on a socket. Everything is spelled the same, because it is the same code with a different transport in it.
+
+```mojo
+import httpx
+from httpx import AsyncClient, URL
+
+def main() raises:
+    with AsyncClient(base_url=URL("http://api.example.com")) as client:
+        var r = client.get("/users")
+        print(r.status_code)
+```
+
+Two things it will not do yet, and it says so rather than doing something almost right: `https://`, because there is no async TLS handshake, and streaming over a real connection, because a response cannot yet hold the thing that would read the body. Both are the next pieces of the async work. `close()` and `aclose()` are the same call, since nothing about closing a client suspends. See [async](docs/async.md) for the whole picture, including what Mojo 1.0.0 does and does not allow a coroutine to do.
+
 ## What it will look like
 
 ```mojo
@@ -285,7 +299,7 @@ Mojo is not Python, and a few things cannot be copied directly. Every deviation 
 | `r.json()` returns `Any` | returns a typed `Json` value with accessors | Mojo has no dynamic `Any` |
 | `except httpx.TimeoutException` | `if httpx.is_timeout(e)` | Mojo has one error type and no exception subclassing |
 | duck typed transports | a generic transport plus an erased vtable | Mojo has no trait objects |
-| `async with AsyncClient()` | explicit `await client.aclose()` | Mojo has no async context managers |
+| `async with AsyncClient()` | `with AsyncClient() as client` | Mojo has no async context managers, and nothing about closing a client suspends, so the ordinary one does the job. `aclose()` exists as a second name for `close()` |
 | generator based iterators | iterator structs | Mojo has no generators |
 | `**kwargs` config | typed builders | Mojo has no keyword argument packing |
 | `timedelta` | `Duration` | no stdlib equivalent |
