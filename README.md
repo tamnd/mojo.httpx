@@ -2,7 +2,7 @@
 
 A full featured HTTP client for Mojo, with the same API and the same developer experience as [httpx2](https://github.com/pydantic/httpx2).
 
-**Status: pre-alpha.** HTTP/1.1 requests work over TCP and over TLS today, so `http://` and `https://` both work. Streaming works in both directions: `client.stream()` returns as soon as the head has arrived and the body is read off the wire a chunk at a time with `iter_bytes`, `iter_text` or `iter_lines`, and `content_stream=` sends a request body that is pulled as it is written. HTTP/2 works over TLS when you ask for it with `Client(http2=True)`, which offers `h2` in the handshake and speaks it if the server agrees, though a connection still carries one request at a time rather than multiplexing. See the [roadmap](docs/roadmap.md) for what is landing and when. Do not use this in production.
+**Status: pre-alpha.** HTTP/1.1 requests work over TCP and over TLS today, so `http://` and `https://` both work. Streaming works in both directions: `client.stream()` returns as soon as the head has arrived and the body is read off the wire a chunk at a time with `iter_bytes`, `iter_text` or `iter_lines`, and `content_stream=` sends a request body that is pulled as it is written. HTTP/2 works over TLS when you ask for it with `Client(http2=True)`, which offers `h2` in the handshake and speaks it if the server agrees, though a connection still carries one request at a time rather than multiplexing. See the [roadmap](docs/roadmap.md) for what is landing and when, and [limitations](docs/limitations.md) for what is not here yet in one list. Do not use this in production.
 
 ## Why
 
@@ -379,6 +379,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. It lists 
 - [TLS](docs/tls.md) for the defaults, custom CA bundles, client certificates, and reading a handshake failure
 - [Request bodies](docs/content.md) for the six body arguments, the content type each implies, and why passing two raises
 - [JSON](docs/json.md) for reading a body, building one, and what the parser refuses
+- [Limitations](docs/limitations.md) for everything that is missing or does less than it should, in one list
 - [Deviations](docs/deviations.md) for every place this behaves differently from httpx2, and why
 - [Async](docs/async.md) for what Mojo's scheduler can and cannot do, measured, and the design that follows from it
 - [Roadmap](docs/roadmap.md) for milestones M0 through M9
