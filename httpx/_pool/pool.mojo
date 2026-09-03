@@ -32,6 +32,15 @@ caller has finished with it, so `stream_request` does lend one out, wrapped in a
 anything else happens first, including the caller simply dropping the response.
 That is why the pool is held through a shared handle: the source has to be able
 to reach it long after the call that made it returned.
+
+A pool is either a direct pool or a proxy pool, decided once when it is built.
+That is httpcore's arrangement and it is the one that cannot go wrong: a pool
+keys its idle connections by origin, and if the same pool could serve some
+requests directly and some through a proxy then a connection to the proxy and a
+connection to the server would be filed under different keys for the same host,
+or worse, under the same one. Deciding at the pool rather than at the request
+means the connection to the proxy is only ever reused by another request that is
+also going through it.
 """
 
 from std.memory import ArcPointer
@@ -52,6 +61,7 @@ from httpx._models.stream import ByteSource, erase_source
 from httpx._pool.connection import Connection
 from httpx._pool.limits import Limits
 from httpx._pool.origin import Origin, origin_for
+from httpx._pool.proxy import Hop, Proxy, route_through
 from httpx._proto.h1.head import ResponseHead
 from httpx._proto.h1.writer import TargetForm
 from httpx._stream.config import TlsConfig
@@ -131,6 +141,13 @@ struct ConnectionPool(Movable):
     because this is where a connection is made and so the only place that can
     apply it."""
 
+    var proxy: Optional[Proxy]
+    """The proxy every request from this pool goes through, if there is one.
+
+    Fixed for the life of the pool. See the note at the top of the module about
+    why this is not decided per request.
+    """
+
     var _ssl_ctx: Optional[SslCtx]
     """Built on the first https connection, then shared by every later one.
 
@@ -161,10 +178,12 @@ struct ConnectionPool(Movable):
         var limits: Limits,
         ttl_seconds: Int = 60,
         var tls: TlsConfig = TlsConfig(),
+        var proxy: Optional[Proxy] = None,
     ):
         self.limits = limits^
         self.resolver = Resolver(ttl_seconds)
         self.tls = tls^
+        self.proxy = proxy^
         self._ssl_ctx = None
         self._idle = List[PooledConnection]()
         self._leased = 0
@@ -206,14 +225,14 @@ struct ConnectionPool(Movable):
         the client above follow a redirect or answer a challenge without having
         kept a copy of every request it has ever sent.
         """
-        var origin = origin_for(request.url)
-        var conn = self._acquire(origin, deadlines)
+        var route = self._route(request, form)
+        var conn = self._acquire(route.origin, deadlines)
         self._leased += 1
 
         var response: Response
         try:
             response = conn.exchange(
-                request, deadlines.write, deadlines.read, form
+                request, deadlines.write, deadlines.read, route.form
             )
         except e:
             self._leased -= 1
@@ -221,9 +240,13 @@ struct ConnectionPool(Movable):
             raise e
 
         self._leased -= 1
-        self._release(origin, conn^)
+        self._release(route.origin, conn^)
         response.set_request(request^)
         return response^
+
+    def _route(mut self, mut request: Request, form: TargetForm) raises -> Hop:
+        """Where this request goes, once the pool's proxy has had its say."""
+        return route_through(self.proxy, request, form)
 
     def _acquire(
         mut self, origin: Origin, deadlines: Deadlines
@@ -492,20 +515,20 @@ def stream_request(
     the body ends, or is closed when the response is closed or dropped, and
     either way the caller does not have to do anything for that to happen.
     """
-    var origin = origin_for(request.url)
-    var conn = pool[]._acquire(origin, deadlines)
+    var route = pool[]._route(request, form)
+    var conn = pool[]._acquire(route.origin, deadlines)
     pool[]._leased += 1
 
     var head: ResponseHead
     try:
-        conn.send_request(request, deadlines.write, form)
+        conn.send_request(request, deadlines.write, route.form)
         head = conn.start_response(deadlines.read)
     except e:
         pool[]._leased -= 1
         conn.close()
         raise e
 
-    var source = PooledSource(pool^, origin, conn^, deadlines.read)
+    var source = PooledSource(pool^, route.origin, conn^, deadlines.read)
     var response = Response.streaming(
         head.status_code,
         erase_source(source^),

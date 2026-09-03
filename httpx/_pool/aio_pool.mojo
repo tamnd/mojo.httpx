@@ -81,6 +81,7 @@ from httpx._models.response import Response
 from httpx._models.stream import ByteSource, erase_source
 from httpx._pool.limits import Limits
 from httpx._pool.origin import Origin, origin_for
+from httpx._pool.proxy import Proxy, route_through
 from httpx._proto.h1.aio import (
     _DONE,
     _WAIT,
@@ -485,6 +486,15 @@ struct AsyncConnectionPool(Movable):
     var limits: Limits
     var resolver: Resolver
 
+    var proxy: Optional[Proxy]
+    """The proxy every request from this pool goes through, if there is one.
+
+    Fixed for the life of the pool, for the reason the synchronous pool fixes
+    it: a pool keys its connections by origin, and a pool that proxied some
+    requests and not others would be filing the proxy and the server under keys
+    that do not tell them apart.
+    """
+
     var _idle: List[AsyncPooledConnection]
     """Idle connections, oldest first.
 
@@ -497,9 +507,15 @@ struct AsyncConnectionPool(Movable):
     var _leased: Int
     """Connections currently carrying a request, so not in `_idle`."""
 
-    def __init__(out self, var limits: Limits, ttl_seconds: Int = 60):
+    def __init__(
+        out self,
+        var limits: Limits,
+        ttl_seconds: Int = 60,
+        var proxy: Optional[Proxy] = None,
+    ):
         self.limits = limits^
         self.resolver = Resolver(ttl_seconds)
+        self.proxy = proxy^
         self._idle = List[AsyncPooledConnection]()
         self._leased = 0
 
@@ -617,7 +633,7 @@ struct AsyncConnectionPool(Movable):
 
     def open(
         mut self,
-        request: Request,
+        mut request: Request,
         deadlines: Deadlines,
         form: TargetForm = TargetForm.ORIGIN,
     ) raises -> PoolCall:
@@ -632,22 +648,31 @@ struct AsyncConnectionPool(Movable):
         was opened and never driven still counts against the limit until it is
         finished. That is the honest accounting: the pool cannot tell a request
         that is about to run from one that has been abandoned.
+
+        `request` is taken mutably because a proxy adds its headers to it here.
+        Nothing else in this method changes it.
         """
-        var origin = origin_for(request.url)
-        if origin.is_secure():
+        var target = origin_for(request.url)
+        if target.is_secure():
             raise new_error(
                 ErrorKind.INVALID_ARGUMENT,
                 String(
                     "the async pool cannot speak https yet, so ",
-                    origin,
+                    target,
                     " has to go through the synchronous client for now",
                 ),
             )
 
+        # After the https check, so that an https request through a proxy is
+        # turned away by the reason that is actually stopping it here.
+        var route = route_through(self.proxy, request, form)
+        var origin = route.origin
+        var wire = route.form
+
         var found = self._take_idle(origin)
         if found:
             self._leased += 1
-            return PoolCall.reusing(origin, form, found.take())
+            return PoolCall.reusing(origin, wire, found.take())
 
         self._make_room(origin, deadlines)
         # Resolution blocks, and it is done here rather than inside the
@@ -656,7 +681,7 @@ struct AsyncConnectionPool(Movable):
         # would hold its worker for the whole lookup.
         var race = start_race(self.resolver, origin.host, origin.port)
         self._leased += 1
-        return PoolCall.opening(origin, form, race^)
+        return PoolCall.opening(origin, wire, race^)
 
     def finish(mut self, mut call: PoolCall) raises -> Response:
         """The response, or the failure that stopped it from being one.

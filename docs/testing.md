@@ -220,6 +220,16 @@ It is Python test code rather than a corpus, so unlike everything in `tests/data
 
 Not all of them apply. Most of that suite is about the server half of the protocol, about h2's own event objects, and about the priority scheme RFC 9113 withdrew. What is left is the part a client can get wrong on its own: what makes a received message malformed under RFC 9113 section 8.2, what a client does with an informational response, and whether a bad message costs one stream or the whole connection. Roughly half the file is acceptances rather than refusals, which is what stops the suite passing on a client that refuses every response there is.
 
+## The local server and the local proxy
+
+Integration tests run against two Python processes, `tests/server/server.py` and `tests/server/proxy.py`. Both are Python on purpose. The point of an integration test is that this client talks to somebody else's implementation, and a server built out of our own parser and our own writer would agree with our client about every mistake both of them made.
+
+Each is started per test on a port the kernel picks, and prints `PORT <n>` on stdout once it is listening. Waiting for that line rather than sleeping is what keeps this from being the flaky part of the suite, and taking the port from it is what lets tests run in parallel and in any order. `tests/support/testserver.mojo` and `tests/support/testproxy.mojo` are the Mojo side.
+
+The proxy is a real forward proxy and is strict about the part that matters. A request that arrives in origin form gets a 400 rather than a guess, so a passing proxy test is proof the absolute form went out rather than proof that something lenient let it through. It answers with three headers no real proxy sends, `X-Proxy-Target`, `X-Proxy-Auth` and `X-Proxy-Conn`, which is the whole channel back to the test: the URL that arrived in the request line, the credential that came with it, and an id for the client connection so the reuse test can see that two requests shared one. `--auth user:pass` makes it demand credentials and answer 407 without them.
+
+Both have the same lifetime trap and it is worth knowing before it costs an afternoon. Mojo ends a value's life at its last use, so a test that reads the address and then makes the request has already torn the process down, and the failure is a connection refused on a port that existed a moment ago. Every test here passes the server and the proxy into a helper that makes the call, which is what keeps them borrowed until it returns.
+
 ## Test layers
 
 The full plan, from `docs/roadmap.md`:

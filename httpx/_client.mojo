@@ -59,6 +59,7 @@ from httpx._models.response import Response
 from httpx._models.stream import ByteStream
 from httpx._models.url import URL, QueryParams
 from httpx._pool.limits import Limits
+from httpx._pool.proxy import Proxy
 from httpx._redirects import DEFAULT_MAX_REDIRECTS, build_redirect_request
 from httpx._stream.config import ClientCert, SSLVerify, TlsConfig
 from httpx._transport.base import AnyTransport, erase_transport
@@ -77,7 +78,9 @@ release checklist checks the two agree.
 
 struct BaseClient[
     H: TransportHandle,
-    make_default: def(var Limits, var TlsConfig) raises thin -> H,
+    make_default: def(
+        var Limits, var TlsConfig, var Optional[Proxy]
+    ) raises thin -> H,
 ](Movable):
     """A configured HTTP client with a transport behind it.
 
@@ -169,6 +172,7 @@ struct BaseClient[
         cert: Optional[ClientCert] = None,
         trust_env: Bool = True,
         http2: Bool = False,
+        var proxy: Optional[Proxy] = None,
         follow_redirects: Bool = False,
         max_redirects: Int = DEFAULT_MAX_REDIRECTS,
         var auth: Optional[AnyAuth] = None,
@@ -184,8 +188,14 @@ struct BaseClient[
         `transport` replaces the one this would otherwise build, which is how a
         mock goes under a client that still has its base URL, its headers and
         its redirect policy. Giving one makes `limits`, `verify`, `cert`,
-        `trust_env` and `http2` dead letters, since those describe a connection
-        pool that no longer exists, and that is httpx's behaviour too.
+        `trust_env`, `http2` and `proxy` dead letters, since those describe a
+        connection pool that no longer exists, and that is httpx's behaviour too.
+
+        `proxy` sends every request through a forward proxy. It is a `Proxy`
+        rather than a string because building one parses a URL and so can raise,
+        and `Proxy("http://localhost:3128")` is the one extra call that buys.
+        Only `http://` targets can go through it today: an `https://` one needs a
+        CONNECT tunnel and raises a message saying so.
 
         `http2` offers HTTP/2 in the TLS handshake rather than demanding it. A
         server that does not want it says so and gets HTTP/1.1, and a plain
@@ -213,7 +223,7 @@ struct BaseClient[
             tls.trust_env = trust_env
             tls.http2 = http2
             self._transport = Self.make_default(
-                limits.value() if limits else Limits(), tls^
+                limits.value() if limits else Limits(), tls^, proxy^
             )
         self._closed = False
 
@@ -886,10 +896,10 @@ struct BaseClient[
 
 
 def _default_transport(
-    var limits: Limits, var tls: TlsConfig
+    var limits: Limits, var tls: TlsConfig, var proxy: Optional[Proxy]
 ) raises -> AnyTransport:
     """The pool a synchronous client gets when the caller named no transport."""
-    return erase_transport(HTTPTransport(limits^, tls^))
+    return erase_transport(HTTPTransport(limits^, tls^, proxy^))
 
 
 comptime Client = BaseClient[AnyTransport, _default_transport]

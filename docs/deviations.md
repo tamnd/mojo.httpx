@@ -2,7 +2,7 @@
 
 The goal is that code written against httpx2 reads the same here, and that a request going out over the wire has the same bytes in it. Where that is not possible, the difference is deliberate and it is written down on this page rather than left for somebody to find at three in the morning.
 
-This page is about behaving differently while doing the same job. Things that are simply not here yet, such as proxies and the content codecs, are on [limitations.md](limitations.md) instead.
+This page is about behaving differently while doing the same job. Things that are simply not here yet, such as CONNECT tunnelling and the brotli and zstd codecs, are on [limitations.md](limitations.md) instead.
 
 Two kinds of difference show up. The first kind is forced by the language: Mojo has no dynamic `Any`, no exception subclassing, no generators and no keyword argument packing, so anything built on those has to be spelled differently. The second kind is a judgement call, where copying httpx2 exactly was possible and we chose not to. The second kind is much shorter and each entry says what the alternative was.
 
@@ -95,6 +95,14 @@ A caller who really is downloading something larger has `iter_raw`, which hands 
 Both clients send the same headers with the same values; they order them differently. We put the ones the caller set immediately after `Host`, so a trace shows what the request was about before it shows the boilerplate, and the framing headers last, because the writer is what adds them. httpx2 puts its own defaults first and the caller's after, and writes `Content-Length` before `Content-Type`.
 
 Field order carries no meaning in HTTP for any header either client sends, so there is nothing to be right about here. It is written down because the parity suite compares order and would otherwise be reporting a difference with no explanation attached.
+
+### `proxy=` takes a `Proxy` and not a string
+
+httpx2 accepts `proxy="http://localhost:3128"` or `proxy=httpx.Proxy(...)` and sorts out which it got at runtime. Here it is `proxy=Optional[Proxy](Proxy("http://localhost:3128"))`.
+
+Mojo has no runtime type dispatch, so the string form would have to be a second overload of the client constructor, which already has seventeen keyword arguments. And building a `Proxy` parses a URL, which can fail, so the string form would move that failure from where the mistake was written to somewhere inside the first request. The extra call names what it builds and puts the error where it belongs.
+
+The same reasoning as the auth tuple below, and the same shape of answer.
 
 ### The auth tuple shorthand is a function
 

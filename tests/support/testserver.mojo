@@ -47,7 +47,7 @@ struct TestServer(Movable):
         # instead, the pipe closes and this comes back empty rather than
         # hanging, which turns a broken server into a readable failure.
         var line = String(self._proc.stdout.readline().decode("utf-8"))
-        self.port = _port_from(line)
+        self.port = port_from(line)
 
     def __moveinit__(out self, deinit other: Self):
         self.host = other.host^
@@ -128,8 +128,12 @@ struct TestServer(Movable):
         return String(self.host, ":", self.port)
 
 
-def _port_from(line: StringSpan) raises -> UInt16:
-    """Read the port out of the server's `PORT <n>` greeting."""
+def port_from(line: StringSpan) raises -> UInt16:
+    """Read the port out of a `PORT <n>` greeting.
+
+    Shared with `TestProxy`, which speaks the same handshake, so this is public
+    rather than private to this module.
+    """
     var text = String(line).strip()
     if not text.startswith("PORT "):
         raise new_error(
