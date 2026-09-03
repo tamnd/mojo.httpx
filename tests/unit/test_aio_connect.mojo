@@ -7,9 +7,9 @@ worker back, that a failure comes out of `take_stream` as an exception rather
 than out of a coroutine as a raise, and, the reason the file exists, that more
 connects can be in flight at once than there are workers.
 
-The two tests that need an address which refuses use `dead_address()` and so do
-not work under WSL2, for the reason written up in issue 43. They are in the same
-position as the four in test_connect.mojo that already use it.
+The two tests that need an address which refuses get one from `dead_address()`,
+which picks a different address on a host where the usual technique does not
+produce a refusal. Its docstring says why.
 """
 
 from std.runtime.asyncrt import TaskGroup, _run, parallelism_level

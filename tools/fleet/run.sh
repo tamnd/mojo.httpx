@@ -77,25 +77,61 @@ while IFS="$(printf '\t')" read -r name shell roles <&3; do
 
   # On the Windows box everything runs inside the WSL2 guest, because Mojo has
   # no native Windows build.
+  copied=0
   if [ "$shell" = "wsl" ]; then
     # The outer shell on this host is cmd.exe, which cannot parse a quoted bash
     # command, so every remote command goes in over stdin instead.
-    remote_dir="/tmp/mojo-httpx-fleet"
     remote_sh="wsl -- bash -l -s"
-    echo "rm -rf $remote_dir; mkdir -p $remote_dir" | ssh "$name" "$remote_sh"
-    # macOS tar writes xattr headers that GNU tar does not know, and it warns
-    # once per file about them. The data is fine, so tell the far end to be
-    # quiet about it.
-    COPYFILE_DISABLE=1 tar -C "$ROOT" \
-      --exclude .git --exclude .pixi --exclude build -czf - . \
-      | ssh "$name" "wsl -- tar -C $remote_dir --warning=no-unknown-keyword -xzf -"
+    # Retried, because only one `wsl` session at a time works against this host
+    # and anything else on the local machine that holds one makes the copy fail
+    # outright with Wsl/Service/0x8007274c. Waiting is the whole fix; the session
+    # that was in the way is usually short.
+    attempt=1
+    while [ "$attempt" -le 3 ]; do
+      # Not /tmp. Inside the guest that is a tmpfs, and WSL stops the distro
+      # once the last process in it exits, so a tree copied in by one ssh
+      # session is gone before the next session runs the tests. The home
+      # directory is on the guest's own disk and survives the shutdown.
+      #
+      # Asked for rather than written out, because the tar below cannot expand
+      # it. That command reaches the guest through cmd.exe as an argument list
+      # and never sees a shell, so the path has to be absolute by then.
+      remote_home="$(echo 'printf %s "$HOME"' | ssh "$name" "$remote_sh" 2>/dev/null | tr -d '\r\000' || true)"
+      if [ -n "$remote_home" ]; then
+        remote_dir="$remote_home/mojo-httpx-fleet"
+        # macOS tar writes xattr headers that GNU tar does not know, and it
+        # warns once per file about them. The data is fine, so tell the far end
+        # to be quiet about it.
+        if echo "rm -rf $remote_dir; mkdir -p $remote_dir" | ssh "$name" "$remote_sh" \
+          && COPYFILE_DISABLE=1 tar -C "$ROOT" \
+            --exclude .git --exclude .pixi --exclude build -czf - . \
+            | ssh "$name" "wsl -- tar -C $remote_dir --warning=no-unknown-keyword -xzf -"; then
+          copied=1
+          break
+        fi
+      fi
+      echo "    copy attempt $attempt failed, waiting for the guest"
+      sleep 30
+      attempt=$((attempt + 1))
+    done
   else
     remote_dir="\$HOME/.cache/mojo-httpx-fleet"
     remote_sh="bash -l -s"
-    echo "mkdir -p ~/.cache/mojo-httpx-fleet" | ssh "$name" "$remote_sh"
-    rsync -az --delete \
-      --exclude '.git/' --exclude '.pixi/' --exclude 'build/' \
-      "$ROOT/" "$name:.cache/mojo-httpx-fleet/"
+    if echo "mkdir -p ~/.cache/mojo-httpx-fleet" | ssh "$name" "$remote_sh" \
+      && rsync -az --delete \
+        --exclude '.git/' --exclude '.pixi/' --exclude 'build/' \
+        "$ROOT/" "$name:.cache/mojo-httpx-fleet/"; then
+      copied=1
+    fi
+  fi
+
+  # Checked rather than left to `set -e`, which would take the whole run down
+  # here without printing anything at all. Three gamingpc runs were lost to that
+  # before anyone noticed the script was exiting rather than the tests failing.
+  if [ "$copied" -ne 1 ]; then
+    echo "    could not copy the tree to $name, skipping"
+    status=1
+    continue
   fi
 
   remote_script="set -e
