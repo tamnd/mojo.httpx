@@ -147,17 +147,23 @@ Redirects are resolved before the auth scheme is consulted, which is the order t
 
 The alternative, making everything async and running the sync client as `_run` over it, was rejected on two counts: it puts a private stdlib entry point on the hot path of the sync client, and it makes every synchronous request pay a scheduler round trip for I/O that never suspends.
 
+## Async streaming, and where the suspended coroutine went
+
+A streamed response is handed back as soon as the head is in, holds a connection out of the pool while the caller reads the body a chunk at a time, and gives the connection back when the body ends or is closed. On the synchronous path the reading is a blocking read on a socket the response owns, and the obvious async version is a coroutine the response owns and the caller resumes. That version cannot be written. A `Coroutine` is a linear type: it cannot be stored in a field, put in a list or returned. There is nowhere to park one between two chunks.
+
+What breaks the deadlock is noticing that nothing actually has to be parked. The state a body in progress consists of is the HTTP/1.1 machine, the read buffer and the socket, and all three of those live on the connection, which is an ordinary value. None of them was ever in a coroutine's frame, because the frame rules above meant they could not be. So `AsyncPooledSource` holds the connection and the exchange, and every call to `read_chunk` starts a fresh coroutine over them and runs it to the end with `_run`. The coroutine is created and consumed inside one function call and never has to survive one.
+
+That puts the suspension inside a chunk rather than between two of them, which is the half that matters. A chunk that has not arrived gives the worker back and waits for the socket, so a caller sitting on a half read body is holding a connection and no worker at all. What it does not buy is reading several bodies at once: each `read_chunk` blocks the thread that called it, the same way `handle_request` does, and there is no `gather` for streams. Doing that would mean driving several sources under one task group, which means the pieces they are reading into have to be caller owned memory again, and it is a design rather than a missing argument.
+
+The four iterators are `aiter_bytes`, `aiter_text`, `aiter_lines` and `aiter_raw`, and each one is the same call as the name without the `a`. That is the honest answer rather than a shortcut. What differs between a synchronous stream and an async one is the source underneath, and neither the response nor the iterator can tell which it has, because both are written against `ByteStream` and nothing else. The names exist so that code ported from httpx keeps its shape. `aread` and `aclose` are there for the same reason.
+
+Reading the head and reading the body are the same coroutine with an integer changed. `pooled_exchange` takes a mode, `HEAD_ONLY` stops the moment the status line and headers are in and settles nothing, and `ONE_PIECE` hands back the first piece of body it gets. A copy of that function with the mode wired in would be a copy that had to be kept in step with the original by hand, and the connect and the write in it are the same connect and the same write.
+
 ## What the async client cannot do yet
 
-Two things, and both of them raise with a message saying which one it is rather than doing something almost right.
+An `https://` URL is refused, and it raises with a message saying so rather than doing something almost right. There is no async TLS handshake, because OpenSSL's socket BIO does its own blocking reads and writes on the descriptor, which is exactly what the async path exists to avoid. Doing it properly means memory BIOs, where OpenSSL never touches the socket and the library does all the reading and writing under its own rules. That is wanted anyway, since it would also let the SIGPIPE workaround in `docs/tls.md` go away. Until then the answer is a refusal, because sending in the clear because the secure path is unfinished is not a thing this library will do.
 
-An `https://` URL is refused. There is no async TLS handshake, because OpenSSL's socket BIO does its own blocking reads and writes on the descriptor, which is exactly what the async path exists to avoid. Doing it properly means memory BIOs, where OpenSSL never touches the socket and the library does all the reading and writing under its own rules. That is wanted anyway, since it would also let the SIGPIPE workaround in `docs/tls.md` go away. Until then the answer is a refusal, because sending in the clear because the secure path is unfinished is not a thing this library will do.
-
-`stream` is refused on a real connection. A streamed response holds a connection out of the pool while the caller reads the body a chunk at a time, and on the synchronous path the reading is a blocking read on a socket the response owns. Here it would have to be a coroutine the response owns and the caller resumes, and a `Coroutine` cannot be stored in a field. So the response cannot hold the thing that would do the reading. That is the async iterators' problem to solve and it is the next piece of this milestone.
-
-The refusal is the transport's rather than the client's, which matters more than it sounds. An async client over a mock transport streams normally, so the streaming tests a user writes against a double work today and only a real connection is missing.
-
-Streaming request bodies and `Expect: 100-continue` are refused in the same way, one layer down, by the async driver.
+Streaming request bodies and `Expect: 100-continue` are refused the same way, one layer down, by the async driver. Both need a second source driven between writes, which is another suspending loop.
 
 ## What we are taking on knowingly
 

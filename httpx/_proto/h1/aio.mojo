@@ -89,6 +89,18 @@ struct Exchange(Movable):
     """
 
     var head: Optional[ResponseHead]
+
+    var got_head: Bool
+    """Whether the head has been parsed, which is not the same as still holding
+    it.
+
+    A streaming caller takes the head out as soon as it arrives, because it
+    turns it into a `Response` and hands that to the user while the body is
+    still coming. What is left behind has to go on saying that the head is
+    over, or the next read would start looking for a status line in the middle
+    of the body.
+    """
+
     var content: List[UInt8]
     var trailers: Headers
     var peer: String
@@ -96,6 +108,7 @@ struct Exchange(Movable):
 
     def __init__(out self):
         self.head = None
+        self.got_head = False
         self.content = List[UInt8]()
         self.trailers = Headers()
         self.peer = String()
@@ -131,12 +144,45 @@ struct Exchange(Movable):
 
     def took_head(mut self, var head: ResponseHead):
         self.head = Optional[ResponseHead](head^)
+        self.got_head = True
 
     def took_bytes(mut self, var piece: List[UInt8]):
         self.content.extend(Span(piece))
 
     def took_trailers(mut self, var trailers: Headers):
         self.trailers = trailers^
+
+    def take_head(mut self) raises -> ResponseHead:
+        """The head, or the failure that stopped it from arriving.
+
+        What a streaming caller wants, since for one of those the head is the
+        whole of the answer so far and the body is still on the wire.
+        """
+        if self.problem:
+            raise self.problem.take()
+        if not self.head:
+            raise remote_error("the exchange finished without a response")
+        return self.head.take()
+
+    def take_content(mut self) -> List[UInt8]:
+        """The body bytes collected so far, leaving the exchange empty.
+
+        For a streaming caller, which runs the exchange one piece at a time and
+        takes each piece before asking for the next. A buffered caller never
+        needs this, because `response` hands over the whole thing at once.
+        """
+        var out = List[UInt8]()
+        swap(out, self.content)
+        return out^
+
+    def take_trailers(mut self) -> Headers:
+        var out = Headers()
+        swap(out, self.trailers)
+        return out^
+
+    def take_problem(mut self) -> Error:
+        """The recorded failure. Only call this having asked `failed` first."""
+        return self.problem.take()
 
     def response(mut self) raises -> Response:
         """The response, or the failure that stopped it from being one.
@@ -312,6 +358,27 @@ comptime _FAILED = 3
 """Something went wrong and the reason is already on the exchange."""
 
 
+comptime WHOLE_BODY = 0
+"""Read until the body ends. What a buffered request wants."""
+
+comptime HEAD_ONLY = 1
+"""Stop the moment the head is complete, leaving the body on the wire.
+
+The first half of a streaming request. The connection is deliberately left
+open and unsettled, because the caller is about to take it away and read the
+body from it at its own pace.
+"""
+
+comptime ONE_PIECE = 2
+"""Stop after a single piece of body, or at the end of it.
+
+The second half of a streaming request, and the reason the reading can be
+driven a chunk at a time: each call is its own coroutine, started and run to
+completion by the source, so nothing about a body in progress ever has to be
+stored in a coroutine's frame between chunks.
+"""
+
+
 async def exchange[
     c: MutOrigin, q: MutOrigin, x: MutOrigin
 ](
@@ -360,11 +427,38 @@ async def exchange[
         return
 
     rounds = 0
-    while _read_step(conn, result, read_at, rounds) == _WAIT:
+    while _read_step(conn, result, read_at, rounds, WHOLE_BODY) == _WAIT:
         rounds += 1
         await yield_now()
 
-    _settle(conn, result)
+    _settle(conn, result, WHOLE_BODY)
+
+
+async def next_piece[
+    c: MutOrigin, x: MutOrigin
+](
+    conn: Pointer[AsyncH1Connection, c],
+    result: Pointer[Exchange, x],
+    read_at: Deadline,
+):
+    """Read one more piece of a body that is already in progress.
+
+    The whole of async streaming, and it is small because of where it sits. A
+    streaming source cannot hold a coroutine, since a `Coroutine` cannot be
+    stored in a field, so it holds the connection instead and starts one of
+    these for every chunk the caller asks for. The state that has to survive
+    between chunks is on the connection and on the exchange, both of which the
+    source owns, and this frame is an `Int` and a `Deadline` the same as every
+    other coroutine here.
+
+    Nothing is settled at the end. The connection belongs to the source until
+    the body runs out, and what happens to it then is the pool's decision rather
+    than this one's.
+    """
+    var rounds = 0
+    while _read_step(conn, result, read_at, rounds, ONE_PIECE) == _WAIT:
+        rounds += 1
+        await yield_now()
 
 
 def _prepare[
@@ -472,15 +566,22 @@ def _read_step[
     result: Pointer[Exchange, x],
     deadline: Deadline,
     rounds: Int,
+    mode: Int,
 ) -> Int:
     """Take the response as far as the socket allows without waiting.
 
     The same shape as `_write_step`, and the same reason for the inner loop: a
     response that arrives in four packets should cost four waits, not four waits
     and four parses interleaved with pointless trips through the scheduler.
+
+    `mode` is how far this is meant to get: the whole body, the head alone, or
+    one piece of body. It is an argument rather than three functions because
+    what changes between them is a single decision inside `_advance` and
+    everything around it, the deadline, the poll, the end of stream handling, is
+    the same work three times over.
     """
     while True:
-        var step = _advance(conn, result)
+        var step = _advance(conn, result, mode)
         if step == _MOVED:
             continue
         if step != _NEED_BYTES:
@@ -511,21 +612,33 @@ def _read_step[
 
 def _advance[
     c: MutOrigin, x: MutOrigin
-](conn: Pointer[AsyncH1Connection, c], result: Pointer[Exchange, x]) -> Int:
+](
+    conn: Pointer[AsyncH1Connection, c],
+    result: Pointer[Exchange, x],
+    mode: Int,
+) -> Int:
     """Move the response along as far as the bytes already in hand allow.
 
     Answers with one of the codes rather than raising, because the only thing
     above it that can act on a failure is a coroutine, and a coroutine can
     neither raise nor catch.
+
+    `mode` decides where "as far as" stops. A head only pass is finished the
+    moment the head is parsed and does not look at the body at all, and a one
+    piece pass hands back the first piece it gets rather than going round for
+    the next. A body that has already ended is the end in every mode, because
+    there is no bytes left to be partway through.
     """
     try:
-        if not result[].head:
+        if not result[].got_head:
             var found = conn[].machine.poll_head()
             if not found:
                 return _NEED_BYTES
             conn[].machine.head_received(found.value())
             result[].took_head(found.take())
-            return _MOVED
+            return _DONE if mode == HEAD_ONLY else _MOVED
+        if mode == HEAD_ONLY:
+            return _DONE
         if not conn[].machine.reading_body():
             # The body ended on an earlier call, which takes the reader away.
             # Asking for another chunk here is what aborts rather than raises.
@@ -538,7 +651,7 @@ def _advance[
             result[].took_trailers(conn[].machine.take_trailers())
             return _DONE
         result[].took_bytes(piece^)
-        return _MOVED
+        return _DONE if mode == ONE_PIECE else _MOVED
     except e:
         result[].fail(e^)
         return _FAILED
@@ -554,7 +667,7 @@ def _settle_at_eof[
     complete is never an ending.
     """
     try:
-        if not result[].head:
+        if not result[].got_head:
             result[].fail(
                 remote_error(
                     "the server closed before sending a complete response"
@@ -578,12 +691,22 @@ def _abandon[c: MutOrigin](conn: Pointer[AsyncH1Connection, c]):
 
 def _settle[
     c: MutOrigin, x: MutOrigin
-](conn: Pointer[AsyncH1Connection, c], result: Pointer[Exchange, x]):
+](
+    conn: Pointer[AsyncH1Connection, c],
+    result: Pointer[Exchange, x],
+    mode: Int,
+):
     """Close the connection, unless the exchange ended in a state that leaves it
-    fit to carry another one."""
+    fit to carry another one.
+
+    A head only pass that went well settles nothing, because it has not ended:
+    the body is still on the wire and the connection is about to be handed to a
+    streaming source that reads it. A head only pass that failed is settled the
+    same as any other, since there is nothing to hand anybody.
+    """
     if result[].failed():
         conn[].give_up()
-    else:
+    elif mode != HEAD_ONLY:
         conn[].finish()
 
 

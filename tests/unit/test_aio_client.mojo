@@ -379,27 +379,23 @@ def test_aio_client_refuses_https_rather_than_sending_in_the_clear() raises:
     client.close()
 
 
-def test_aio_client_refuses_to_stream_over_a_real_connection() raises:
-    """Until the async iterators land there is nothing to drive the reading."""
+def test_aio_client_streams_over_a_real_connection() raises:
+    """The end to end shape of it. `tests/unit/test_aio_stream.mojo` has the
+    rest, including what happens to the connection afterwards."""
     var server = TestServer()
     var client = AsyncClient()
-    var raised = False
-    try:
-        _ = _stream(client, server, "/get")
-    except e:
-        raised = True
-        assert_true(is_invalid_argument(e))
-        assert_true("streaming" in String(e))
-    assert_true(raised)
+    var response = _stream(client, server, "/chunked")
+
+    assert_equal(response.status_code, 200)
+    assert_false(response.is_closed)
+    response.read()
+    assert_equal(response.text(), "chunk one chunk two chunk three")
     client.close()
 
 
 def test_aio_client_can_stream_from_a_mock() raises:
-    """The refusal is the transport's, not the client's.
-
-    Which matters, because it means the streaming tests a user writes against a
-    mock work on the async client today. Only a real connection is missing.
-    """
+    """A mock streams the same way a connection does, which is what lets the
+    streaming tests a user writes work against either."""
     var router = MockRouter()
     router.add(Route.get("/big").respond_text(200, "stream me"))
     var client = AsyncClient(erase_async_transport(router^))

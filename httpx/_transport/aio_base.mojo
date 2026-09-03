@@ -61,12 +61,10 @@ trait AsyncTransport(Movable):
     ) raises -> Response:
         """The same, but return as soon as the head has been read.
 
-        Here so that an async client can be handed a mock and stream from it,
-        which is most of what the streaming tests do. The real async transport
-        cannot do it yet and says so: a streamed response holds a connection
-        out of the pool while the caller reads the body, and reading it is a
-        coroutine the caller drives, so the shape of that is a design question
-        rather than a missing method. It arrives with the async iterators.
+        The response that comes back holds a connection out of the pool until
+        the body has been read or the response is closed, and the reading is
+        driven by the caller a chunk at a time. `httpx._pool.aio_pool` explains
+        how that is done without anywhere to keep a suspended coroutine.
         """
         ...
 

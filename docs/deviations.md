@@ -13,6 +13,7 @@ Two kinds of difference show up. The first kind is forced by the language: Mojo 
 | duck typed transports | a generic transport plus an erased vtable | Mojo has no trait objects |
 | `async with AsyncClient()` | `with AsyncClient() as client` | Mojo has no async context managers, and nothing about closing a client suspends, so the ordinary one does the job. `aclose()` exists as a second name for `close()` |
 | `for chunk in r.iter_bytes()` | `while chunks.has_next(): chunks.next()` | Mojo has no generators, and a `for` loop swallows an error raised out of `__next__` |
+| `async for chunk in r.aiter_bytes()` | `r.aiter_bytes()`, the same call as `iter_bytes` | the asynchrony is in the source underneath, which neither the response nor the iterator can see. The `a` names exist so ported code keeps its shape |
 | `content=` takes bytes or an iterable | `content=` for bytes, `content_stream=` for a source | Mojo cannot tell the two apart at runtime, so they are two arguments |
 | `**kwargs` config | typed builders | Mojo has no keyword argument packing |
 | `timedelta` | `Duration` | no stdlib equivalent |
