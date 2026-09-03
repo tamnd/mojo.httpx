@@ -255,6 +255,27 @@ def main() raises:
         print(r.status_code)
 ```
 
+Sending several at once is `gather`, which is the point of any of it.
+
+```mojo
+import httpx
+from httpx import AsyncClient, URL
+
+def main() raises:
+    with AsyncClient(base_url=URL("http://api.example.com")) as client:
+        var pending = List[httpx.Request]()
+        pending.append(client.build_request("GET", "/users/1"))
+        pending.append(client.build_request("GET", "/users/2"))
+
+        var answers = httpx.gather(client, pending^)
+        for i in range(len(answers)):
+            print(answers[i].status_code)
+```
+
+The answers come back in the order the requests went out. Everything the client does for one request it does for each of these: the hooks run per send, the cookie jar is read and written, redirects are followed for anyone who asked, and an auth scheme gets its retry. The first failure is raised and the rest are dropped, which is what `asyncio.gather` does unless told otherwise.
+
+It takes a list rather than being something you assemble yourself, because Mojo 1.0.0 will not let a coroutine be stored in a variable or handed around, so there is no way to give you a request in progress. [async](docs/async.md) has the whole of that argument.
+
 Two things it will not do yet, and it says so rather than doing something almost right: `https://`, because there is no async TLS handshake, and streaming over a real connection, because a response cannot yet hold the thing that would read the body. Both are the next pieces of the async work. `close()` and `aclose()` are the same call, since nothing about closing a client suspends. See [async](docs/async.md) for the whole picture, including what Mojo 1.0.0 does and does not allow a coroutine to do.
 
 ## What it will look like

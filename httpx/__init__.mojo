@@ -15,7 +15,7 @@ The library is pre-alpha. Nothing here is stable and most of it does not exist
 yet. See docs/roadmap.md for what lands when.
 """
 
-from httpx._aio_client import AsyncClient
+from httpx._aio_client import AsyncClient, gather
 from httpx._api import (
     delete,
     get,
