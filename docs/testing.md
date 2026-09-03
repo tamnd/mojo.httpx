@@ -7,7 +7,22 @@ pixi run test
 pixi run format-check
 ```
 
-Mojo 1.0 has no `mojo test` subcommand, only the assertions in `std.testing`, so the project owns its runner. Right now that is `tests/run.mojo` calling each test directly. M0 replaces the hand written list with discovery. When Mojo ships a native runner we delete ours and the test functions stay exactly as they are, because they are plain `def test_*` functions using `std.testing` and nothing else.
+Mojo 1.0 has no `mojo test` subcommand, only the assertions in `std.testing`, so the project owns its runner. `tools/mojotest/run.py` finds every top level `def test_*` under `tests/`, writes a Mojo main that calls each one, builds it and runs it. When Mojo ships a native runner we delete ours and the test functions stay exactly as they are, because they are plain `def test_*` functions using `std.testing` and nothing else.
+
+The suite is built as several binaries rather than one, a few test modules to each. That is not a preference, it is the shape of the compiler: the time a Mojo build takes grows well above linearly in how much is in it, so doubling the modules in one binary costs a good deal more than double. The measurements the split was chosen from are at the top of `tools/mojotest/run.py`, and the short version is that the whole suite in one binary was around eleven minutes here and in thirteen shards it is around four.
+
+Useful flags:
+
+```bash
+pixi run test --filter cookie      # only tests whose name or module matches
+pixi run test --fail-fast          # stop at the first failing shard
+pixi run test --repeat 20          # for shaking out flakes
+pixi run test --shards 1           # one binary, the way it used to be
+pixi run test --jobs 4             # build and run four shards at once
+pixi run test --keep               # leave the generated mains to read
+```
+
+`--jobs` is one by default and worth leaving there most of the time. Plenty of tests here stand up sockets or fill every runtime worker on purpose, and they measure how long things took, so several shards sharing a machine make those measurements worse rather than the suite faster. `--shards 1` is the one to reach for when a failure looks like it might depend on what else was compiled alongside it.
 
 ## CI
 
