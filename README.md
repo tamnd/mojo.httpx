@@ -276,7 +276,22 @@ The answers come back in the order the requests went out. Everything the client 
 
 It takes a list rather than being something you assemble yourself, because Mojo 1.0.0 will not let a coroutine be stored in a variable or handed around, so there is no way to give you a request in progress. [async](docs/async.md) has the whole of that argument.
 
-Two things it will not do yet, and it says so rather than doing something almost right: `https://`, because there is no async TLS handshake, and streaming over a real connection, because a response cannot yet hold the thing that would read the body. Both are the next pieces of the async work. `close()` and `aclose()` are the same call, since nothing about closing a client suspends. See [async](docs/async.md) for the whole picture, including what Mojo 1.0.0 does and does not allow a coroutine to do.
+Streaming works the same way it does on the synchronous client, and the body comes out through `aiter_bytes`, `aiter_text`, `aiter_lines` and `aiter_raw`.
+
+```mojo
+from httpx import AsyncClient
+
+def main() raises:
+    with AsyncClient() as client:
+        with client.stream("GET", "http://example.com/big.log") as r:
+            var lines = r.aiter_lines()
+            while lines.has_next():
+                print(lines.next())
+```
+
+Each of those is the same call as the name without the `a`, because what differs between a synchronous stream and an async one is the source underneath and the iterator cannot tell which it has. The names exist so that code ported from httpx keeps its shape, and so do `aread` and `aclose` on a response.
+
+One thing it will not do yet, and it says so rather than doing something almost right: `https://`, because there is no async TLS handshake. `close()` and `aclose()` are the same call, since nothing about closing a client suspends. See [async](docs/async.md) for the whole picture, including what Mojo 1.0.0 does and does not allow a coroutine to do.
 
 ## What it will look like
 

@@ -607,6 +607,42 @@ struct Response(Movable, Writable):
         var stream = self._take_stream()
         return LineChunks(stream^, id)
 
+    def aiter_raw(mut self, chunk_size: Int = 0) raises -> ByteChunks:
+        """`iter_raw`, under the name httpx gives it on an async response.
+
+        The same call, and that is the honest answer rather than a shortcut.
+        What differs between a synchronous stream and an async one is the source
+        underneath: one blocks its thread in a read, and the other gives its
+        worker back and waits for the socket. Neither the response nor the
+        iterator can tell which it has, because both are written against
+        `ByteStream` and nothing else, so there is nothing here for a second
+        implementation to do differently.
+
+        It exists so that code ported from httpx keeps its shape. See
+        `docs/async.md` for what async streaming does and does not buy.
+        """
+        return self.iter_raw(chunk_size)
+
+    def aiter_bytes(mut self, chunk_size: Int = 0) raises -> ByteChunks:
+        """`iter_bytes`, under the name httpx gives it on an async response."""
+        return self.iter_bytes(chunk_size)
+
+    def aiter_text(mut self, chunk_size: Int = 0) raises -> TextChunks:
+        """`iter_text`, under the name httpx gives it on an async response."""
+        return self.iter_text(chunk_size)
+
+    def aiter_lines(mut self) raises -> LineChunks:
+        """`iter_lines`, under the name httpx gives it on an async response."""
+        return self.iter_lines()
+
+    def aread(mut self) raises:
+        """`read`, under the name httpx gives it on an async response."""
+        self.read()
+
+    def aclose(mut self):
+        """`close`, under the name httpx gives it on an async response."""
+        self.close()
+
     def _take_stream(mut self) raises -> ByteStream:
         """Hand the live stream over, with the same guards `iter_raw` applies.
 

@@ -75,8 +75,10 @@ from httpx._io.aio import yield_now
 from httpx._io.aio_connect import RACING, Race, _race_step, start_race
 from httpx._io.deadline import NANOS_PER_SECOND, Deadline, Deadlines, now_ns
 from httpx._io.dns import Resolver
+from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.response import Response
+from httpx._models.stream import ByteSource, erase_source
 from httpx._pool.limits import Limits
 from httpx._pool.origin import Origin, origin_for
 from httpx._proto.h1.aio import (
@@ -84,12 +86,16 @@ from httpx._proto.h1.aio import (
     _WAIT,
     AsyncH1Connection,
     Exchange,
+    HEAD_ONLY,
+    WHOLE_BODY,
     _prepare,
     _read_step,
     _settle,
     _start_reading,
     _write_step,
+    next_piece,
 )
+from httpx._proto.h1.head import ResponseHead
 from httpx._proto.h1.writer import TargetForm
 
 
@@ -175,6 +181,19 @@ struct PoolCall(Movable):
         swap(taken, self.conn)
         return taken^
 
+    def take_result(mut self) -> Exchange:
+        """Hand the exchange over, leaving an empty one behind.
+
+        For a streaming request, which gives both the connection and the
+        exchange to the source that is going to read the body. The exchange goes
+        along because it is already holding the name of the peer, and a source
+        that failed halfway through a body should word its complaint the same
+        way the head would have.
+        """
+        var taken = Exchange()
+        swap(taken, self.result)
+        return taken^
+
 
 async def pooled_exchange[
     r: MutOrigin, c: MutOrigin, q: MutOrigin, x: MutOrigin
@@ -188,8 +207,9 @@ async def pooled_exchange[
     write_at: Deadline,
     read_at: Deadline,
     form: TargetForm = TargetForm.ORIGIN,
+    mode: Int = WHOLE_BODY,
 ):
-    """Connect if needed, send `request`, and read the whole response.
+    """Connect if needed, send `request`, and read the response.
 
     Two loops, each of them a wait written out inline rather than a call to
     something that waits. That is forced: a coroutine that suspends inside a
@@ -227,6 +247,14 @@ async def pooled_exchange[
     redirect needs the request back to build the next one, and taking it out of
     a call afterwards would need a placeholder request, which needs a URL, which
     is more machinery than a pointer.
+
+    `mode` is `WHOLE_BODY` for an ordinary request and `HEAD_ONLY` for a
+    streaming one, which stops as soon as the status line and headers are in and
+    leaves the body where it is. It is a parameter rather than a second
+    coroutine because the difference is entirely inside the synchronous steps:
+    the connect is the same connect, the write is the same write, and a copy of
+    this function with one integer changed is a copy that would have to be kept
+    in step with this one by hand.
     """
     if connecting == 1:
         while _race_step(race, connect_at) == RACING:
@@ -236,11 +264,13 @@ async def pooled_exchange[
     _load_request(conn, request, result, form)
 
     var rounds = 0
-    while _exchange_step(conn, result, write_at, read_at, rounds) == _WAIT:
+    while (
+        _exchange_step(conn, result, write_at, read_at, rounds, mode) == _WAIT
+    ):
         rounds += 1
         await yield_now()
 
-    _settle(conn, result)
+    _settle(conn, result, mode)
 
 
 def _adopt_winner[
@@ -290,6 +320,7 @@ def _exchange_step[
     write_at: Deadline,
     read_at: Deadline,
     rounds: Int,
+    mode: Int,
 ) -> Int:
     """One pass of the whole exchange, sending or receiving as appropriate.
 
@@ -324,7 +355,7 @@ def _exchange_step[
         if not _start_reading(conn, result):
             return _DONE
 
-    return _read_step(conn, result, read_at, rounds)
+    return _read_step(conn, result, read_at, rounds, mode)
 
 
 struct Batch(Movable):
@@ -766,8 +797,216 @@ comptime SharedAsyncPool = ArcPointer[AsyncConnectionPool]
 """An async pool that more than one thing can hold.
 
 Here for the same reason `SharedPool` is: a streaming response outlives the call
-that produced it and has to give its connection back when the body ends. The
-async streaming source is not written yet, so nothing uses this today, and it is
-declared here so that the transport above can be written against the handle
-rather than against the pool and not have to change when it arrives.
+that produced it and has to give its connection back when the body ends, so the
+source carries a handle rather than a reference and the pool stays alive as long
+as anything is still reading from one of its connections.
 """
+
+
+struct AsyncPooledSource(ByteSource, Movable):
+    """A response body still on an async connection, with the connection to give
+    back.
+
+    The async twin of `httpx._pool.pool.PooledSource`, and it makes the same two
+    promises: the connection goes back to the pool if the body ended the way it
+    said it would and is closed if anything else happened, and either way the
+    lease is given back so that a caller who walks away from a response halfway
+    through does not leave the pool believing it is fuller than it is.
+
+    ## Why this can exist when a stored coroutine cannot
+
+    A streamed body is read at the caller's pace, which sounds like it needs a
+    coroutine parked between chunks, and Mojo 1.0.0 has nowhere to park one: a
+    `Coroutine` is linear and cannot be a field. What is stored here instead is
+    the connection and the exchange, both ordinary values, and every call to
+    `read_chunk` starts a fresh coroutine over them and runs it to the end. The
+    machine that knows where the body has got to is `H1Machine` on the
+    connection, which was never in a coroutine's frame in the first place.
+
+    So the suspension happens inside one chunk rather than between two. A chunk
+    that is not there yet gives the worker back and waits for the socket, and a
+    caller sitting on a half read body holds a connection and no worker at all.
+    What is not bought is reading several bodies at once: each `read_chunk`
+    blocks the thread that called it, the same way `handle_request` does, and
+    there is no `gather` for streams. `docs/async.md` says so.
+    """
+
+    var _pool: SharedAsyncPool
+    var _origin: Origin
+    var _conn: AsyncH1Connection
+    var _live: Bool
+    """Whether the connection is still here.
+
+    A flag beside a detached connection rather than an `Optional` around a real
+    one, for the reason `PoolCall` gives: `AsyncH1Connection.detached` is the
+    shape this codebase uses for a slot that may or may not have a socket in it,
+    and it keeps `Pointer(to=self._conn)` an ordinary address to hand a
+    coroutine.
+    """
+
+    var _result: Exchange
+    """Where each chunk lands, and where a failure is recorded.
+
+    Carried over from the exchange that read the head, so the peer name is
+    already in it.
+    """
+
+    var _deadline: Deadline
+    """The read deadline, applied to each chunk rather than to the whole body,
+    which is what lets a download that keeps making progress run as long as it
+    likes while a server that goes quiet mid body still fails."""
+
+    var _trailers: Headers
+
+    def __init__(
+        out self,
+        var pool: SharedAsyncPool,
+        origin: Origin,
+        var conn: AsyncH1Connection,
+        var result: Exchange,
+        deadline: Deadline,
+    ):
+        self._pool = pool^
+        self._origin = origin
+        self._conn = conn^
+        self._live = True
+        self._result = result^
+        self._deadline = deadline
+        self._trailers = Headers()
+
+    def read_chunk(mut self) raises -> List[UInt8]:
+        if not self._live:
+            return List[UInt8]()
+        # Both fields belong to this source and nothing else can reach them.
+        # `_run` does not return until the coroutine holding these addresses has
+        # finished, so neither pointer outlives the call that made it, and no
+        # second coroutine is ever looking at the same connection.
+        _run(
+            next_piece(
+                Pointer(to=self._conn),
+                Pointer(to=self._result),
+                self._deadline,
+            )
+        )
+        if self._result.failed():
+            # The reason was recorded rather than raised, because a coroutine
+            # cannot raise. Here is where it becomes an exception again, and the
+            # connection goes rather than back to the pool, since a body that
+            # stopped partway leaves the wire in an unknown place.
+            self._drop()
+            raise self._result.take_problem()
+        var piece = self._result.take_content()
+        if len(piece) == 0:
+            self._give_back()
+        return piece^
+
+    def close(mut self):
+        """Give up whatever is left of the body and release the connection.
+
+        Always a close rather than a return to the pool, for the reason
+        `PooledSource.close` gives: whatever is left of the body is still on the
+        wire, and a connection whose next byte is the middle of somebody else's
+        response is not one to hand to the next request.
+        """
+        self._drop()
+
+    def trailers(self) -> Headers:
+        return self._trailers.copy()
+
+    def __deinit__(deinit self):
+        """A response dropped without being read still gives its lease back."""
+        if self._live:
+            self._conn.close()
+            self._pool[]._leased -= 1
+
+    def _give_back(mut self):
+        """The body ended where it said it would, so the connection may go back.
+        """
+        self._live = False
+        self._trailers = self._result.take_trailers()
+        var conn = self._take()
+        # The close the buffered path does in `_settle`, which a streaming
+        # exchange could not do at the time because the body had not been read
+        # yet. A connection the server said it was going to close goes now, and
+        # `_release` asks the machine whether what is left is fit to reuse.
+        conn.finish()
+        self._pool[]._leased -= 1
+        self._pool[]._release(self._origin, conn^)
+
+    def _drop(mut self):
+        if not self._live:
+            return
+        self._live = False
+        var conn = self._take()
+        conn.close()
+        self._pool[]._leased -= 1
+
+    def _take(mut self) -> AsyncH1Connection:
+        """The same swap `PoolCall.take_connection` does, and for the same
+        reason."""
+        var taken = AsyncH1Connection.detached()
+        swap(taken, self._conn)
+        return taken^
+
+
+def stream_request(
+    var pool: SharedAsyncPool,
+    var request: Request,
+    deadlines: Deadlines,
+    form: TargetForm = TargetForm.ORIGIN,
+) raises -> Response:
+    """Send `request` and return as soon as the head has been read.
+
+    The async twin of `httpx._pool.pool.stream_request`, and the same promise:
+    the body stays on the connection and comes out through the response's
+    iterators, and the connection goes back to the pool when the body ends or is
+    closed when the response is closed or dropped, without the caller doing
+    anything for either.
+
+    Blocks this thread until the head is in, for the reason `handle_request`
+    does. The connect still races addresses without holding a worker and the
+    wait for the head still gives the worker back.
+    """
+    var call = pool[].open(request, deadlines, form)
+    _run(
+        pooled_exchange(
+            Pointer(to=call.race),
+            Pointer(to=call.conn),
+            Pointer(to=request),
+            Pointer(to=call.result),
+            call.connecting,
+            deadlines.connect,
+            deadlines.write,
+            deadlines.read,
+            call.form,
+            HEAD_ONLY,
+        )
+    )
+
+    var conn = call.take_connection()
+    var result = call.take_result()
+    var head: ResponseHead
+    try:
+        head = result.take_head()
+    except e:
+        # The lease is given back here and not by `finish`, which is never
+        # called for a streaming request: from the moment the head is in, the
+        # lease belongs to the source and is given back when the body ends.
+        conn.close()
+        pool[]._leased -= 1
+        if is_connect_error(e):
+            pool[].resolver.forget(call.origin.host, call.origin.port)
+        raise e
+
+    var source = AsyncPooledSource(
+        pool^, call.origin, conn^, result^, deadlines.read
+    )
+    var response = Response.streaming(
+        head.status_code,
+        erase_source(source^),
+        head.reason_phrase.copy(),
+        head.http_version.copy(),
+        head.take_headers(),
+    )
+    response.set_request(request^)
+    return response^

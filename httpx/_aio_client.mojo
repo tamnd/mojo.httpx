@@ -28,14 +28,14 @@ covers what `gather` is nearly always used for. It is a free function rather
 than a method because that is what it is in httpx, and because it belongs to
 the async client alone while every method on `BaseClient` belongs to both.
 
-Two things the async client cannot do yet, and both say so rather than doing
-something else. `stream` raises, because a streamed response has to hold a
-connection while the caller reads it a chunk at a time and there is nothing yet
-that can drive that reading; the async iterators are where it lands. And an
-`https://` URL raises, because there is no async TLS handshake, and sending in
-the clear because the secure path is unfinished is not a thing this library will
-do. A client given a mock transport streams normally, which is what most of the
-streaming tests need.
+`stream` works, and the body comes out through `aiter_bytes`, `aiter_text`,
+`aiter_lines` and `aiter_raw`, which are the same calls as the ones without the
+`a`. `httpx._models.response` says why that is the honest answer rather than a
+shortcut.
+
+The one thing the async client will not do is an `https://` URL, which raises,
+because there is no async TLS handshake and sending in the clear because the
+secure path is unfinished is not a thing this library will do.
 """
 
 from httpx._auth import AnyAuth
