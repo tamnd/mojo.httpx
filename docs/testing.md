@@ -147,6 +147,12 @@ Mojo has no native Windows build. The conda package only publishes osx-arm64, li
 
 That is the honest support statement for Windows: it works under WSL2, it is tested under WSL2 on real hardware before every release, and native Windows is blocked on Modular rather than on us.
 
+Two things about that guest cost an afternoon each, so they are written down here.
+
+The first is that `/tmp` inside the guest is a tmpfs, and WSL stops the distro once the last process in it exits. Each remote command is its own SSH session, so a tree copied in by one session can be gone before the next session runs anything, and the failure looks like the tests dying with no output at all. The script stages under the guest's home directory, which is on the guest's own disk, for that reason.
+
+The second is that the localhost relay between Windows and the guest answers on `127.0.0.1` for a port that was recently bound, so the usual way of getting an address that refuses a connection, bind a port and close it, hands back an address that connects instead. The relay only stands in the way of `127.0.0.1`, so `dead_address` in `tests/support/loopback.mojo` checks the address it is about to return and falls back to `127.0.0.2` with the same port number. Its docstring has the detail.
+
 ### Why not self-hosted runners
 
 Registering these machines as GitHub self-hosted runners was the first thing considered and rejected. A self-hosted runner on a public repository will execute code from any pull request, which means handing an arbitrary contributor a shell on a machine on a home network. The isolation needed to make that safe is more work than the problem is worth here. Running the same suites locally from a script gets the same coverage with none of that exposure.

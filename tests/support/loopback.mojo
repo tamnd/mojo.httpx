@@ -30,6 +30,7 @@ from httpx._ffi.socket import (
     AF_INET,
     AF_INET6,
     POLLIN,
+    POLLOUT,
     SOCK_STREAM,
     SOL_SOCKET,
     SO_REUSEADDR,
@@ -45,9 +46,32 @@ from httpx._ffi.socket import (
     socket,
     suppress_sigpipe,
 )
+from httpx._io.socket import start_connect
 
 comptime LOOPBACK_V4 = "127.0.0.1"
 comptime LOOPBACK_V6 = "::1"
+
+comptime SPARE_LOOPBACK_V4 = "127.0.0.2"
+"""A second loopback address, for the one case where the first one lies.
+
+Every address in 127.0.0.0/8 is loopback and Linux configures the whole range,
+so this is a real address there and under WSL2. macOS configures only
+127.0.0.1, so it is not one there, which is why nothing uses this without
+checking first. See `dead_address`.
+"""
+
+comptime REFUSAL_PROBE_MS = 250
+"""How long a probe waits before deciding an address is not refusing.
+
+Generous, because the answer only has to arrive faster than a person notices
+and being wrong about it makes nine tests pass for the wrong reason. A refusal
+on loopback arrives in microseconds, so the budget is only ever spent on an
+address that is hanging, which is the case this exists to detect.
+"""
+
+comptime PROBE_SLICE_MS = 10
+"""How long one poll inside a probe may block for. Small enough that the common
+answer costs one slice and not the whole budget."""
 
 
 struct Loopback(Movable):
@@ -297,26 +321,113 @@ struct Peer(Movable):
             self._fd = c_int(-1)
 
 
-def dead_port(host: StringSpan = LOOPBACK_V4) raises -> UInt16:
-    """A loopback port with nothing listening on it.
-
-    Bound, read back and released, so the number was real a moment ago and is
-    almost certainly still free. Connecting to it is refused immediately, which
-    is what a test needs when the thing under test is the failure path rather
-    than a timeout.
-    """
-    var listener = Loopback(host)
-    var port = listener.port
-    listener.close()
-    return port
-
-
 def dead_address(host: StringSpan = LOOPBACK_V4) raises -> SockAddr:
-    """The same idea as `dead_port`, as an address ready to connect to."""
-    var listener = Loopback(host)
-    var addr = listener.addr
-    listener.close()
-    return addr
+    """An address that refuses a connection, checked rather than assumed.
+
+    Nine tests need a connect to fail promptly rather than time out, because a
+    refusal and a timeout are different errors with different names and the
+    assertions exist so that a broken deadline path cannot pass by looking like
+    a refusal. What makes that hard is that there is no portable way to name an
+    address which is guaranteed to refuse.
+
+    The usual technique is the first half of this: bind a loopback listener,
+    keep the port the kernel handed out, and close it. The number was real a
+    moment ago so it is almost certainly still free, and on Linux and macOS
+    connecting to it is refused at once.
+
+    Under WSL2 it is not. A localhost relay sits between the guest and the
+    Windows side, and it answers on 127.0.0.1 for a port that was recently
+    bound, so the connect succeeds and the test fails for a reason that has
+    nothing to do with the library. Issue 43 has the measurements.
+
+    So the result is checked and there is a second technique behind it. The
+    relay only stands in the way of 127.0.0.1: on any other loopback address a
+    connect to a port that was never bound is refused properly, with
+    ECONNREFUSED, the same as everywhere else. Reserving the number on
+    127.0.0.1 and then offering it on 127.0.0.2 gets both halves, since the
+    number is known to be free and was never bound on the address being handed
+    out.
+
+    That second address does not exist on macOS, where only 127.0.0.1 is
+    configured on lo0 and a connect to 127.0.0.2 hangs rather than being
+    refused, which is exactly why the fallback is second and is itself checked
+    before being returned. Every host in the fleet gets the first technique
+    except the one that cannot use it.
+
+    A failure to find either raises with the reason, rather than handing back an
+    address that answers. A test asserting on a refusal is worth nothing if the
+    address it was given is alive, and a helper that quietly returns one turns
+    nine real checks into nine that pass by accident.
+    """
+    var reserved = Loopback(host)
+    var addr = reserved.addr
+    var port = reserved.port
+    reserved.close()
+    if _refuses(addr):
+        return addr
+
+    if String(host) != LOOPBACK_V4:
+        raise new_error(
+            ErrorKind.NETWORK_ERROR,
+            String(
+                "a connect to ",
+                host,
+                ":",
+                port,
+                (
+                    " was neither refused nor left pending, and there is no"
+                    " second loopback address to fall back to for this family"
+                ),
+            ),
+        )
+
+    var spare = resolve(SPARE_LOOPBACK_V4, port, AF_UNSPEC)
+    if len(spare) > 0 and _refuses(spare[0]):
+        return spare[0]
+    raise new_error(
+        ErrorKind.NETWORK_ERROR,
+        String(
+            "no address on this machine refuses a connection: neither ",
+            LOOPBACK_V4,
+            ":",
+            port,
+            " nor ",
+            SPARE_LOOPBACK_V4,
+            ":",
+            port,
+            (
+                " came back refused, so the tests that need a failing connect"
+                " cannot be given one"
+            ),
+        ),
+    )
+
+
+def _refuses(addr: SockAddr) raises -> Bool:
+    """Whether a connect to `addr` comes back refused within the probe budget.
+
+    False both for an address that connected and for one still pending when the
+    budget ran out. The two are different problems and neither is what a caller
+    asked for, so neither is worth telling apart here.
+
+    Costs a socket and up to a quarter of a second, which is why `dead_address`
+    tries the address most likely to work first. On every host but one the
+    answer arrives on the first poll.
+    """
+    var attempt = start_connect(addr, String("probe for a dead address"))
+    var waited = 0
+    while waited < REFUSAL_PROBE_MS:
+        var fds = PollFd(attempt.fd(), POLLOUT, Int16(0))
+        _ = poll(Pointer(to=fds), c_uint(1), c_int(PROBE_SLICE_MS))
+        try:
+            if attempt.finished():
+                return False
+        except:
+            # The only way `finished` raises is a connect that failed, which is
+            # the answer this is looking for.
+            return True
+        waited += PROBE_SLICE_MS
+    return False
 
 
 def has_ipv6_loopback() -> Bool:
