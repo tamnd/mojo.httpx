@@ -123,7 +123,19 @@ The staggered connect went the same way and is the clearest case, because there 
 
 The connection pool is the third case and the one where the split is cleanest, because none of what a pool decides is a wait. Reuse by origin, expiry by age, liveness before handing a connection out, eviction under the total limit and whether a finished connection is fit to go back are all in `httpx/_pool/aio_pool.mojo` word for word as `httpx/_pool/pool.mojo` has them, and they are the same rules because they were copied deliberately rather than rewritten. What is different is the middle: `pooled_exchange` runs a connect and an exchange in one coroutine, because an awaited coroutine may suspend once and not in a loop, so a connect that loops and an exchange that loops cannot be two coroutines with one on top. Everything the pool does around that coroutine is ordinary synchronous code, which is why `open` and `finish` raise like the sync pool does and only the part in between reports failure as a value.
 
+The transport is the fourth case, and it is the one where almost nothing is written twice. `httpx/_transport/aio_http.mojo` is a pool handle and three one line methods, the same as `httpx/_transport/http.mojo`, because everything hard is below it. What is genuinely different is the trait it satisfies. `AsyncTransport` is a second trait rather than a method added to the first, and the two do not have the same methods: the sync one has `handle_stream` and the async one does not have it yet, and the async one has `handle_many` which the sync one will never have.
+
 So both drivers are written by hand, they share the machine, and what keeps them honest is that they are tested against the same behaviour rather than diffed against each other. `AsyncClient` will follow the same split when it lands: pooling, redirects, auth and cookies are decisions rather than waits, and they belong on the sans-io side of the line.
+
+## Why concurrency is a method on the transport
+
+`gather` in httpx is something the caller does. You write the coroutines, hand them to `asyncio.gather`, and the client knows nothing about it. Here it cannot work that way, and the reason is the second compiler limit rather than a design preference.
+
+One request is driven by a coroutine that suspends inside a loop, and such a coroutine can only be handed to `_run` or to `TaskGroup.create_task`. It cannot be awaited by another coroutine. So the group and the tasks have to be in the same function as the thing that knows how to run one request, and that function is inside the library. There is no way to hand a user a request in progress and let them combine it with someone else's, because a `Coroutine` is a linear type: it cannot be stored in a field, put in a list, or returned through a function pointer.
+
+What that leaves is a batch. `AsyncTransport.handle_many` takes a list of requests, starts one task each under one group, and hands back the responses in the order the requests went in. Concurrency crosses the erasure boundary as a call taking a list, because it cannot cross it as a coroutine. It is a narrower thing than `gather` and it covers what `gather` is nearly always used for, which is sending several requests and waiting for all of them.
+
+A batch fails the way `asyncio.gather` fails by default: the first failure is raised and the other responses are dropped. Every request still runs to the end first, so no connection is left leased, and a variant that hands back failures alongside successes is worth having and is not written yet.
 
 The alternative, making everything async and running the sync client as `_run` over it, was rejected on two counts: it puts a private stdlib entry point on the hot path of the sync client, and it makes every synchronous request pay a scheduler round trip for I/O that never suspends.
 

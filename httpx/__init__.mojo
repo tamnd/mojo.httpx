@@ -62,6 +62,12 @@ from httpx._models.stream import ByteSource, ByteStream, erase_source
 from httpx._models.url import URL, QueryParams
 from httpx._pool.limits import Limits
 from httpx._stream.config import ClientCert, SSLVerify
+from httpx._transport.aio_base import (
+    AnyAsyncTransport,
+    AsyncTransport,
+    erase_async_transport,
+)
+from httpx._transport.aio_http import AsyncHTTPTransport
 from httpx._transport.base import AnyTransport, Transport, erase_transport
 from httpx._transport.http import HTTPTransport
 from httpx._transport.mock import MockRouter, MockTransport, Route

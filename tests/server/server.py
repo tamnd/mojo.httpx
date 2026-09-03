@@ -535,6 +535,15 @@ class Server(ThreadingHTTPServer):
     # by design.
     daemon_threads = True
     allow_reuse_address = True
+
+    # socketserver listens with a backlog of five. The async tests open every
+    # connection in a batch before any of them is answered, so a batch bigger
+    # than five overflows the accept queue, and an overflowed queue on Linux
+    # drops the SYN rather than refusing it. The client then waits a full TCP
+    # retransmit, about a second, and a test measuring whether requests overlap
+    # measures the kernel's retry timer instead. Nothing about the library.
+    request_queue_size = 256
+
     verbose = False
 
     def __init__(self, *args, **kwargs):

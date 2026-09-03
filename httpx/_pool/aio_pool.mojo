@@ -67,7 +67,7 @@ returning WANT_READ rather than by waiting, and it is the next piece.
 """
 
 from std.memory import ArcPointer
-from std.runtime.asyncrt import _run
+from std.runtime.asyncrt import TaskGroup, _run
 
 from httpx._exceptions import ErrorKind, is_connect_error, new_error
 from httpx._ffi.netdb import SockAddr
@@ -327,6 +327,65 @@ def _exchange_step[
     return _read_step(conn, result, read_at, rounds)
 
 
+struct Batch(Movable):
+    """Several requests that are going to run at the same time.
+
+    Two lists rather than a list of pairs, because `PoolCall` is what the pool
+    hands back and `Request` is what the caller brought, and gluing them into a
+    third type would mean taking them apart again at every use.
+
+    Both lists are filled before any task starts and neither is resized while
+    tasks are running, so a task holding an element by index is not racing a
+    reallocation. Each task touches one index and no other, which is what makes
+    handing out pointers into a list sound here.
+    """
+
+    var calls: List[PoolCall]
+    var requests: List[Request]
+
+    def __init__(out self):
+        self.calls = List[PoolCall]()
+        self.requests = List[Request]()
+
+
+async def pooled_batch[
+    b: MutOrigin
+](batch: Pointer[Batch, b], deadlines: Deadlines):
+    """Run every request in `batch`, all of them outstanding together.
+
+    This is the whole of the concurrency. One task per request, one group, and
+    the group is what waits. The requests interleave because each of them gives
+    its worker back at every point it would otherwise block, so the number of
+    requests in flight is not bounded by the number of workers.
+
+    The deadlines arrive as an argument rather than being read off anything,
+    because a coroutine that makes a `TaskGroup` may not have an `Optional`
+    anywhere in its own frame, and building a `Deadlines` is one of the many
+    ordinary operations that puts one there. Built by the caller, in synchronous
+    code, and handed in.
+
+    Nothing here can fail. Each task records its own outcome on its own
+    `Exchange`, and `AsyncConnectionPool.finish` turns those back into responses
+    or exceptions afterwards.
+    """
+    var group = TaskGroup()
+    for i in range(batch[].calls.__len__()):
+        group.create_task(
+            pooled_exchange(
+                Pointer(to=batch[].calls[i].race),
+                Pointer(to=batch[].calls[i].conn),
+                Pointer(to=batch[].requests[i]),
+                Pointer(to=batch[].calls[i].result),
+                batch[].calls[i].connecting,
+                deadlines.connect,
+                deadlines.write,
+                deadlines.read,
+                batch[].calls[i].form,
+            )
+        )
+    await group
+
+
 struct AsyncPooledConnection(Movable):
     """One idle async connection, with what the pool needs to judge it by."""
 
@@ -465,6 +524,66 @@ struct AsyncConnectionPool(Movable):
         response.set_request(request^)
         return response^
 
+    def handle_many(
+        mut self,
+        var requests: List[Request],
+        deadlines: Deadlines,
+        form: TargetForm = TargetForm.ORIGIN,
+    ) raises -> List[Response]:
+        """Send all of `requests` at once and read all of the answers.
+
+        The point of the async pool. Every request is opened first, then all of
+        them run under one task group, then all of them are finished, so a batch
+        of ten requests to ten origins costs about what the slowest one costs
+        rather than the sum.
+
+        Blocks this thread until the last of them is done, for the reason
+        `handle_request` does. A caller that already has coroutines of its own
+        wants `open`, `pooled_exchange` and `finish` directly.
+
+        The first failure is raised and the rest of the responses are dropped,
+        which is what `asyncio.gather` does by default and what a caller sending
+        a batch it needs all of nearly always wants. Every request is still run
+        to the end and every connection still put back or closed before the
+        raise, because leaking a lease is worse than losing a response. A
+        variant that hands back failures alongside successes is worth having and
+        is not here yet.
+
+        Responses come back in the order the requests went in, which is not the
+        order they finished in. Anything else would make the caller match them up
+        by hand.
+        """
+        var batch = Batch()
+        try:
+            for i in range(len(requests)):
+                batch.calls.append(self.open(requests[i], deadlines, form))
+        except e:
+            # Some of them were opened and are holding leases that nothing is
+            # ever going to finish. Give those back before leaving, or the pool
+            # spends the rest of the program believing it is fuller than it is.
+            while len(batch.calls) > 0:
+                var abandoned = batch.calls.pop()
+                self._abandon(abandoned)
+            raise e
+
+        batch.requests = requests^
+        _run(pooled_batch(Pointer(to=batch), deadlines))
+
+        var responses = List[Response]()
+        var reasons = List[Error]()
+        for i in range(len(batch.calls)):
+            try:
+                responses.append(self.finish(batch.calls[i]))
+            except e:
+                if len(reasons) == 0:
+                    reasons.append(e^)
+        if len(reasons) > 0:
+            raise reasons.pop()
+
+        for i in range(len(responses)):
+            responses[i].set_request(batch.requests.pop(0))
+        return responses^
+
     def open(
         mut self,
         request: Request,
@@ -540,6 +659,18 @@ struct AsyncConnectionPool(Movable):
 
         self._release(call.origin, conn^)
         return response^
+
+    def _abandon(mut self, mut call: PoolCall):
+        """Give back the lease of a request that is never going to run.
+
+        Not `finish`, because there is nothing to finish. The exchange never
+        started, so there is no response to build and no state machine to ask
+        whether the connection is fit to reuse. The connection, if the race had
+        already produced one, is closed rather than pooled for the same reason.
+        """
+        self._leased -= 1
+        var conn = call.take_connection()
+        conn.close()
 
     def _take_idle(mut self, origin: Origin) -> Optional[AsyncH1Connection]:
         """The oldest sound idle connection to `origin`, closing any that are
