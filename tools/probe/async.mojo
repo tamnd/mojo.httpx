@@ -237,6 +237,111 @@ async def both_at_once[
     await group
 
 
+async def quiet():
+    """A coroutine that returns nothing, so awaiting it leaves nothing behind."""
+    pass
+
+
+async def give_way():
+    """Hand the worker back without landing a task handle in the caller's frame.
+
+    Not interchangeable with `_ = await create_task(nothing())`, which is what
+    every probe above uses. The discard looks like it throws the handle away and
+    it does, but the handle is still a value in the awaiting coroutine's frame,
+    and the frame has to stay flat. In the simple shapes above that costs
+    nothing. In `three_guarded_stages` below, swapping this for the discard form
+    is the difference between a probe that prints its answer and one that fails
+    to lower with `Instruction does not dominate all uses`.
+
+    This is `httpx._io.aio.yield_now`, copied rather than imported so that the
+    probe still builds against a toolchain the library does not.
+    """
+    await create_task(quiet())
+
+
+struct Stages(Movable):
+    """A sink whose progress can be asked about without touching its memory.
+
+    `stage` counts the passes of the loop running now and `abandoned` is the
+    only thing the guards between loops look at. Both are scalars sitting beside
+    the list rather than being derived from it, and that is the whole
+    workaround: a guard that reads `len(self.bytes)` instead does not lower.
+    """
+
+    var bytes: List[UInt8]
+    var stage: Int
+    var abandoned: Int
+
+    def __init__(out self):
+        self.bytes = List[UInt8]()
+        self.stage = 0
+        self.abandoned = 0
+
+    def took(mut self, value: UInt8):
+        self.bytes.append(value)
+
+
+def stage_step[
+    o: MutOrigin
+](work: Pointer[Stages, o], value: UInt8, times: Int) -> Int:
+    """One pass of a stage. Zero while there is more to do, one at the end."""
+    if work[].stage >= times:
+        work[].stage = 0
+        return 1
+    work[].took(value)
+    work[].stage += 1
+    return 0
+
+
+def under_budget[o: MutOrigin](work: Pointer[Stages, o]) -> Bool:
+    """A guard reading a scalar field, which is the form that survives.
+
+    Written as `len(work[].bytes) < 100` it fails to lower instead, and moved
+    inline into the coroutine it crashes the compiler outright with no message.
+    Case seven at the bottom has both.
+    """
+    return work[].abandoned == 0
+
+
+async def three_guarded_stages[
+    o: MutOrigin
+](work: Pointer[Stages, o], times: Int):
+    """Three suspending loops with a guarded return before each.
+
+    The exact shape the connection pool needs, which is why it is a probe rather
+    than something taken on faith: a connect that may not be necessary, then a
+    write, then a read, with a chance to give up between each pair.
+    """
+    if not under_budget(work):
+        return
+    while stage_step(work, UInt8(1), times) == 0:
+        await give_way()
+    if not under_budget(work):
+        return
+    while stage_step(work, UInt8(2), times) == 0:
+        await give_way()
+    if not under_budget(work):
+        return
+    while stage_step(work, UInt8(3), times) == 0:
+        await give_way()
+
+
+async def skips_the_first_loop[
+    o: MutOrigin
+](work: Pointer[Stages, o], times: Int, connect: Bool):
+    """A suspending loop that an `if` may skip, followed by another.
+
+    Also what the pool needs, because a request served from an idle connection
+    does no connecting at all and must not pay a scheduler round trip to find
+    that out.
+    """
+    if connect:
+        while stage_step(work, UInt8(1), times) == 0:
+            await give_way()
+    while stage_step(work, UInt8(2), times) == 0:
+        await give_way()
+
+
 async def spin(times: Int) -> Int:
     """Round trips through the scheduler and nothing else.
 
@@ -341,6 +446,22 @@ def main() raises:
         if len(sinks[i].bytes) != 4:
             wrong += 1
     print("    six of them on", parallelism_level(), "workers,", wrong, "came up short")
+    print()
+
+    print("=== three suspending loops with a guarded return before each")
+    var staged = Stages()
+    _run(three_guarded_stages(Pointer(to=staged), 4))
+    print("    bytes:", len(staged.bytes), "and it has to be 12")
+    print("    the same guard reading len() instead of a counter does not lower")
+    print()
+
+    print("=== a suspending loop an `if` may skip, followed by another")
+    var skipped = Stages()
+    _run(skips_the_first_loop(Pointer(to=skipped), 4, False))
+    print("    skipping the first gave", len(skipped.bytes), "and it has to be 4")
+    var both = Stages()
+    _run(skips_the_first_loop(Pointer(to=both), 4, True))
+    print("    taking it gave", len(both.bytes), "and it has to be 8")
     print()
 
     print("=== what a scheduler round trip costs")
@@ -485,7 +606,7 @@ def main() raises:
 #         while done < times:
 #             bytes.append(UInt8(done))
 #             done += 1
-#             _ = await create_task(nothing())
+#             await give_way()
 #         result[] = len(bytes)
 #
 # Sometimes this fails to lower with "'pop.store' op failed to verify that
@@ -525,3 +646,42 @@ def main() raises:
 # crashes, and building the deadline in synchronous code and passing it in as an
 # argument does not. Every test that drives more than one exchange takes its
 # deadlines as arguments for this reason and no other.
+
+# Case seven. A guard between two suspending loops may only read a scalar.
+# `three_guarded_stages` above is the shape that works. These two are what it
+# was reduced from, and both of them start out looking like a compiler that has
+# stopped liking `if`.
+#
+# Reading the length of a list the coroutine does not even own is enough:
+#
+#     def under_budget[o: MutOrigin](work: Pointer[Stages, o]) -> Bool:
+#         return len(work[].bytes) < 100
+#
+#     std/collections/list.mojo:767:20: error: operand #0 does not dominate
+#     this use
+#     note: called from  len(work[].bytes) < 100
+#
+# and moving the same test inline into the coroutine, which reads like the
+# obvious simplification, takes the compiler down with a stack dump and nothing
+# else:
+#
+#     async def staged[o: MutOrigin](work: Pointer[Stages, o], times: Int):
+#         while stage_step(work, UInt8(1), times) == 0:
+#             await give_way()
+#         if work[].abandoned != 0:      # crashes, even though the field is a scalar
+#             return
+#         while stage_step(work, UInt8(2), times) == 0:
+#             await give_way()
+#
+# So the rule has two halves. The dereference belongs in a synchronous helper
+# the coroutine calls, never in the coroutine itself, and what the helper reads
+# has to be a scalar field rather than anything derived from owned memory. A
+# count kept beside a list satisfies both, which is why `Stages` has one and why
+# the pool keeps its own counters rather than asking its lists how long they are.
+#
+# The suspension form matters here too. Every probe above gives way with
+# `_ = await create_task(nothing())` and it makes no difference to them, but in
+# this shape the discarded task handle is one more value in the frame and it
+# fails to lower with `Instruction does not dominate all uses`. `give_way` keeps
+# the handle in its own frame instead. That is why `httpx._io.aio.yield_now`
+# exists as a function rather than as a line repeated at each call site.
