@@ -148,7 +148,10 @@ def test_aio_transport_a_batch_overlaps_rather_than_taking_turns() raises:
     until an earlier one finished, and taking turns is exactly what that would
     look like.
     """
-    var count = parallelism_level() * 2
+    # At least eight even on a machine with two workers, so that the gap
+    # between overlapping and taking turns stays several seconds wide and the
+    # bound below is not being asked to resolve a difference of milliseconds.
+    var count = max(8, parallelism_level() * 2)
     assert_true(count > parallelism_level())
 
     var server = TestServer()
@@ -165,7 +168,21 @@ def test_aio_transport_a_batch_overlaps_rather_than_taking_turns() raises:
     assert_equal(len(responses), count)
     for i in range(count):
         assert_equal(responses[i].status_code, 200)
-    assert_true(elapsed < Float64(count) * DELAY_SECONDS / 2.0)
+
+    var taking_turns = Float64(count) * DELAY_SECONDS
+    assert_true(
+        elapsed < taking_turns / 2.0,
+        String(
+            count,
+            " requests of ",
+            DELAY_SECONDS,
+            " seconds each took ",
+            elapsed,
+            " seconds, which is not far enough under the ",
+            taking_turns,
+            " they would take one at a time",
+        ),
+    )
 
 
 def test_aio_transport_a_batch_leaves_the_accounting_straight() raises:
