@@ -763,3 +763,21 @@ def main() raises:
 # server that answers it. The test in the same file that starts a request per
 # worker writes real loops and never hit this, which is what pointed at the loop
 # rather than at anything in the arguments.
+
+# Not a case, because it is a runtime that does not offer something rather than
+# a compiler that refuses something it should accept. A `TaskGroup` cannot be
+# cancelled:
+#
+#     var group = TaskGroup()
+#     group.create_task(_nothing())
+#     group.cancel()
+#
+#     error: 'TaskGroup' value has no attribute 'cancel'
+#
+# Nor `shutdown`, `stop`, `abort`, `join` or `is_cancelled`, all tried the same
+# way. The stdlib ships compiled, so there is no source to read and the only way
+# to ask what a type has is to name a method and see what the compiler says.
+# Together with a `Task` not being `Movable` and a `Coroutine` being linear,
+# that is why the library has no cancel: nothing that stands for a request in
+# flight can be handed out, and a group that has started cannot be told to stop.
+# `docs/async.md` writes down what stops a request instead.

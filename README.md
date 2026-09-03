@@ -291,6 +291,8 @@ def main() raises:
 
 Each of those is the same call as the name without the `a`, because what differs between a synchronous stream and an async one is the source underneath and the iterator cannot tell which it has. The names exist so that code ported from httpx keeps its shape, and so do `aread` and `aclose` on a response.
 
+There is no `task.cancel()`, for the same reason there is no request in progress to hand you. What stops a request instead is its timeout, which is checked several times a second rather than at the end of whatever the server is doing, and closing the response, which stops a body partway and hands the connection back. Whatever stops a request, the connection it was using is closed rather than pooled and the pool slot comes back. [async](docs/async.md) has the rest of it.
+
 One thing it will not do yet, and it says so rather than doing something almost right: `https://`, because there is no async TLS handshake. `close()` and `aclose()` are the same call, since nothing about closing a client suspends. See [async](docs/async.md) for the whole picture, including what Mojo 1.0.0 does and does not allow a coroutine to do.
 
 ## What it will look like

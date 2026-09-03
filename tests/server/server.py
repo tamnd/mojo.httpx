@@ -57,6 +57,19 @@ class Handler(BaseHTTPRequestHandler):
         BaseHTTPRequestHandler.setup(self)
         self.conn_id = self.server.next_conn_id()
 
+    def handle(self):
+        # A client that closes with bytes we already sent still sitting unread
+        # makes the kernel answer with a reset, and the reset lands wherever we
+        # happen to be: on the write inside the route, or on the read of the
+        # next request line, which is outside _dispatch and so past the catch
+        # there. Either way it is a peer that left rather than anything wrong
+        # here, and letting it through prints a traceback into the middle of a
+        # passing test run. The cancellation tests leave that way on purpose.
+        try:
+            BaseHTTPRequestHandler.handle(self)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
     def send_response(self, code, message=None):
         # Overridden so the connection id goes out on every response rather than
         # only on the ones built by _send. Several routes write their headers by
