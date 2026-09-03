@@ -11,7 +11,7 @@ build/
 # generated
 docs/api/
 docs/api.json
-tests/**/_generated_main.mojo
+tests/**/_generated_main_*.mojo
 
 # fuzzing
 fuzz/corpus/

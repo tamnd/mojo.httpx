@@ -58,13 +58,13 @@ jobs:
   test:
     name: test ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
-    # Almost all of this is one compile. The runner generates a single main that
-    # calls every test and builds it in one go, so the time grows with the size
-    # of the library rather than with the number of tests, and the macos runner
-    # went past thirty minutes on the change that added the HTTP/2 driver. Worth
-    # watching: this is a cap being raised rather than a build getting faster,
-    # and the answer at some point is to stop building the suite as one binary.
-    timeout-minutes: 45
+    # Almost all of this is compiling. The runner splits the suite into shards
+    # of a few test modules each and builds one binary per shard, because the
+    # cost of a Mojo build grows well above linearly in how much is in it. One
+    # binary over the whole suite was thirty six minutes here against a forty
+    # five minute cap; the same tests in thirteen shards are around twelve.
+    # tools/mojotest/run.py has the measurements the split was chosen from.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
