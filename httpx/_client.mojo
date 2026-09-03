@@ -18,6 +18,27 @@ URL, query parameters and cookies honoured, either read whole or streamed a
 chunk at a time, a redirect chain followed for anyone who asked for that, an
 auth scheme answering a challenge around the outside of it, and event hooks
 watching every send.
+
+## Why there is one client and two names for it
+
+`Client` and `AsyncClient` are the same struct with a different transport in
+it. Nothing a client does depends on which one it got: merging headers,
+resolving a relative URL against the base, writing the `Cookie` header, running
+the hooks, following a redirect chain, answering an auth challenge and reading
+the jar back out are all the same work either way, because all of them happen
+either side of the transport call rather than inside it.
+
+So `BaseClient` takes the transport handle as a compile time parameter and the
+two public names are aliases for it. The alternative was this file copied into
+`_aio_client.mojo` with `AnyTransport` changed to `AnyAsyncTransport`, and two
+copies of a redirect loop is two redirect loops to fix when one of them is
+wrong. `httpx._transport.handle` has the three calls the parameter has to
+supply.
+
+The second parameter is the function that builds a transport for a caller who
+named none. It is a parameter rather than something the trait provides because
+the choice of default belongs to the client: it is the client that was handed
+`verify=`, `limits=` and `http2=` and has to turn them into something.
 """
 
 from httpx._auth import AnyAuth
@@ -40,6 +61,7 @@ from httpx._pool.limits import Limits
 from httpx._redirects import DEFAULT_MAX_REDIRECTS, build_redirect_request
 from httpx._stream.config import ClientCert, SSLVerify, TlsConfig
 from httpx._transport.base import AnyTransport, erase_transport
+from httpx._transport.handle import TransportHandle
 from httpx._transport.http import HTTPTransport
 from httpx._util.charset import DefaultEncoding
 
@@ -52,8 +74,16 @@ release checklist checks the two agree.
 """
 
 
-struct Client(Movable):
-    """A configured HTTP client with a connection pool behind it."""
+struct BaseClient[
+    H: TransportHandle,
+    make_default: def(var Limits, var TlsConfig) raises thin -> H,
+](Movable):
+    """A configured HTTP client with a transport behind it.
+
+    Held by users as `Client` or as `AsyncClient`, which are the two aliases at
+    the bottom of this file and in `httpx._aio_client`. Nothing below refers to
+    which one it is.
+    """
 
     var headers: Headers
     """Sent on every request, unless the request overrides the same field."""
@@ -113,7 +143,7 @@ struct Client(Movable):
     call would be noise.
     """
 
-    var _transport: AnyTransport
+    var _transport: Self.H
     var _closed: Bool
 
     def __init__(out self) raises:
@@ -143,7 +173,7 @@ struct Client(Movable):
         var auth: Optional[AnyAuth] = None,
         var event_hooks: EventHooks = EventHooks(),
         var default_encoding: DefaultEncoding = DefaultEncoding(),
-        var transport: Optional[AnyTransport] = None,
+        var transport: Optional[Self.H] = None,
     ) raises:
         """Every option, all of them keyword only.
 
@@ -181,20 +211,19 @@ struct Client(Movable):
             tls.cert = cert.copy()
             tls.trust_env = trust_env
             tls.http2 = http2
-            var built = HTTPTransport(
+            self._transport = Self.make_default(
                 limits.value() if limits else Limits(), tls^
             )
-            self._transport = erase_transport(built^)
         self._closed = False
 
-    def __init__(out self, var transport: AnyTransport) raises:
+    def __init__(out self, var transport: Self.H) raises:
         """A client over a transport the caller built, and nothing else set.
 
         A shorthand for the keyword form, since a test that swaps the transport
         and configures nothing else is the common case. Anything more than that
         wants `Client(transport=..., base_url=...)`.
         """
-        self = Self(transport=Optional[AnyTransport](transport^))
+        self = Self(transport=Optional[Self.H](transport^))
 
     def __enter__(var self) -> Self:
         """Hand the client to the `with` block, which then owns it.
@@ -219,6 +248,19 @@ struct Client(Movable):
             return
         self._closed = True
         self._transport.close()
+
+    def aclose(mut self):
+        """The same as `close`, spelled the way httpx spells it.
+
+        httpx has both because closing a pool of sockets there means awaiting
+        the shutdown of each connection. Here it does not: nothing about
+        letting go of a file descriptor suspends, so there is one
+        implementation and this is a second name for it. It exists so that code
+        moved over from httpx keeps reading the way it did, and so that a
+        reader looking for `aclose` on the async client finds it rather than
+        concluding it was forgotten.
+        """
+        self.close()
 
     def is_closed(self) -> Bool:
         return self._closed
@@ -840,3 +882,14 @@ struct Client(Movable):
         out.setdefault("Connection", "keep-alive")
         out.setdefault("User-Agent", USER_AGENT)
         return out^
+
+
+def _default_transport(
+    var limits: Limits, var tls: TlsConfig
+) raises -> AnyTransport:
+    """The pool a synchronous client gets when the caller named no transport."""
+    return erase_transport(HTTPTransport(limits^, tls^))
+
+
+comptime Client = BaseClient[AnyTransport, _default_transport]
+"""The synchronous client. See `BaseClient` for everything it can do."""
