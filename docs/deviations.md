@@ -74,13 +74,21 @@ That costs one connection on a call that was already the slow path, since a one 
 
 ## Judgement calls
 
-### `Accept-Encoding` asks for `identity`
+### `Accept-Encoding` asks for less, and is decided at run time
 
-httpx2 sends `Accept-Encoding: gzip, deflate, zstd`. This client sends `identity`, because it has no decoders yet.
+httpx2 sends `Accept-Encoding: gzip, deflate, zstd`. This client sends `gzip, deflate`, because those are the two it can undo today. brotli and zstd are still to come.
 
-Asking for a coding you cannot undo is worse than not asking. The server compresses, the client cannot decompress, and `response.text()` hands back a string built out of the compressed bytes and calls it the body. Advertising only what the client can actually do means a body that arrives is a body that can be read. When the decoders land the header becomes the list of what is compiled in, and this entry goes away.
+The list is built from what actually loaded rather than from what was compiled in. zlib is opened by name when the first response needs it, so a machine without one sends `identity` and gets plain bodies instead of failing on every compressed response. Asking for a coding you cannot undo is worse than not asking: the server compresses, the client cannot decompress, and `response.text()` hands back a string built out of the compressed bytes and calls it the body.
 
 This is one of the two differences the parity suite is allowed to see. See [testing](testing.md).
+
+### A decoded body has a size limit and httpx2's does not
+
+A compressed body is one where the sender chooses how much memory the receiver spends. Deflate reaches 1032 to 1, so forty kilobytes on the wire can become forty megabytes in memory, and a few megabytes can become several gigabytes. httpx2 has no bound on this at all: the body is trusted about its own size, and the failure mode is the process rather than an exception.
+
+Here every decoder is built with a `DecodeLimits`, which stops a body at 256 MiB of output and at 1032 times its compressed size, measured once 64 KiB has arrived. The ratio bound cannot fire on gzip or deflate data that a real encoder produced, because 1032 is deflate's own ceiling; it is there for brotli and zstd, which have no such ceiling.
+
+A caller who really is downloading something larger has `iter_raw`, which hands over the compressed bytes untouched and lets them decide what to do with them.
 
 ### Headers go out in a different order
 

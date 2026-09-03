@@ -152,6 +152,76 @@ def accept_encoding() -> String:
     return String("identity")
 
 
+def _trimmed(piece: StringSpan) raises -> String:
+    """One header token with the optional whitespace around it removed.
+
+    Only space and tab, because those are the two the grammar allows between a
+    comma and the next token. A newline cannot be here: the header was already
+    unfolded by the parser.
+    """
+    var bytes = piece.as_bytes()
+    var start = 0
+    var end = len(bytes)
+    while start < end and (bytes[start] == 0x20 or bytes[start] == 0x09):
+        start += 1
+    while end > start and (bytes[end - 1] == 0x20 or bytes[end - 1] == 0x09):
+        end -= 1
+    return String(StringSpan(from_utf8=bytes[start:end]))
+
+
+def codings_for(value: StringSpan) raises -> List[Coding]:
+    """Read a whole `Content-Encoding` header, in the order the server applied.
+
+    Identity tokens are dropped rather than kept, because they say that nothing
+    was done and a decoder for nothing is a decoder that only costs a copy. An
+    empty header produces an empty list, which is the ordinary case and is why
+    `Headers.get` returning `""` for an absent header is enough here.
+
+    A coding we cannot undo raises. Handing the body over still compressed would
+    be worse: the caller asked for content and would get bytes that are not it,
+    with `text` and `json` both quietly wrong. We only ever ask for what we can
+    decode, so a server sending something else has ignored `Accept-Encoding`,
+    and that is worth saying out loud.
+    """
+    var out = List[Coding]()
+    for piece in value.split(","):
+        var name = _trimmed(piece)
+        var coding = coding_for(name)
+        if coding == Coding.IDENTITY:
+            continue
+        if coding == Coding.UNKNOWN:
+            raise new_error(
+                ErrorKind.PROTOCOL_ERROR,
+                String(
+                    "the server answered with Content-Encoding: ",
+                    name,
+                    ", which this client cannot decode and did not ask for",
+                ),
+            )
+        out.append(coding)
+    return out^
+
+
+def decoders_for(
+    value: StringSpan, limits: DecodeLimits = DecodeLimits()
+) raises -> List[Decoder]:
+    """One decoder per coding in a `Content-Encoding` header, ready to run.
+
+    Reversed, because the header lists the codings in the order they were
+    applied and undoing them means starting with the last one. A body sent as
+    `Content-Encoding: gzip, gzip` was gzipped and then gzipped again, so the
+    bytes on the wire are the outer gzip and that is what comes off first.
+
+    Stacked codings are rare enough that refusing them would be tempting, but
+    httpx2 handles them and they are legal, so they work here too.
+    """
+    var codings = codings_for(value)
+    var out = List[Decoder]()
+    for i in range(len(codings) - 1, -1, -1):
+        out.append(Decoder(codings[i], limits))
+    return out^
+
+
 struct DecodeLimits(ImplicitlyCopyable, Movable):
     """What a decoded body is allowed to grow to.
 

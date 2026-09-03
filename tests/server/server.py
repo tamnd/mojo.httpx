@@ -164,9 +164,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/cookies/set-raw":
             return self._set_cookie_raw(query)
         if path == "/gzip":
-            return self._compressed("gzip")
+            return self._compressed("gzip", query)
         if path == "/deflate":
-            return self._compressed("deflate")
+            return self._compressed("deflate", query)
+        if path == "/unknown-encoding":
+            return self._unknown_encoding()
         if path == "/chunked":
             return self._chunked()
         if path == "/trailers":
@@ -468,19 +470,48 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _compressed(self, encoding):
+    def _compressed(self, encoding, query=None):
         self._read_body()
-        raw = json.dumps({"compressed": True, "encoding": encoding}).encode()
+        size = int((query or {}).get("size", ["0"])[0])
+        if size > 0:
+            # Large enough that the body arrives in several reads, so the
+            # decoder is exercised across chunk boundaries instead of being
+            # handed the whole thing in one pass.
+            unit = b"the quick brown fox jumps. "
+            raw = (unit * (size // len(unit) + 1))[:size]
+            content_type = "text/plain"
+        else:
+            raw = json.dumps(
+                {"compressed": True, "encoding": encoding}
+            ).encode()
+            content_type = "application/json"
         if encoding == "gzip":
             payload = gzip.compress(raw)
         else:
             payload = zlib.compress(raw)
         self.send_response(200)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Encoding", encoding)
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        if self.command != "HEAD":
+            self.wfile.write(payload)
+
+    def _unknown_encoding(self):
+        """A coding no client asked for, which every client should refuse.
+
+        The bytes are not brotli, and that is the point: a client that reads
+        the header will never get as far as looking at them.
+        """
+        self._read_body()
+        payload = b"this was never brotli"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Encoding", "br")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(payload)
 
     def _chunked(self):
         self._read_body()

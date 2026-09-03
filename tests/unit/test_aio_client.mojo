@@ -27,6 +27,7 @@ from std.testing import assert_equal, assert_false, assert_true
 from httpx._aio_client import AsyncClient
 from httpx._auth import basic_auth
 from httpx._client import USER_AGENT
+from httpx._codec.decode import accept_encoding
 from httpx._config import Timeout
 from httpx._exceptions import ErrorKind, is_invalid_argument, kind_of
 from httpx._hooks import (
@@ -183,7 +184,7 @@ def test_aio_client_sends_the_default_headers() raises:
     var response = _get(client, server, "/headers")
     assert_equal(_sent_header(response, "user-agent"), USER_AGENT)
     assert_equal(_sent_header(response, "accept"), "*/*")
-    assert_equal(_sent_header(response, "accept-encoding"), "identity")
+    assert_equal(_sent_header(response, "accept-encoding"), accept_encoding())
     client.close()
 
 

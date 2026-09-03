@@ -112,6 +112,16 @@ An empty chunk always means the end and never means "nothing yet". A source with
 
 The three iterators stack. `LineChunks` pulls from `TextChunks` pulls from `ByteChunks` pulls from the stream, so the buffering that makes each step safe is written once. Each step has one thing it holds back. `ByteChunks` holds bytes until it has a full chunk of the size that was asked for. `TextChunks` holds the tail of a character whose remaining bytes have not arrived, which is the whole reason it is not `decode(chunk)` in a loop: without it every multibyte character that straddled a network boundary would come out as replacement characters, and which ones broke would depend on how the server sized its writes. `LineChunks` holds a trailing carriage return, because its newline may be the first byte of the next read.
 
+## Content codings are undone inside the byte iterator
+
+`Content-Encoding` is the only difference between `iter_raw` and `iter_bytes`. The decoders sit inside `ByteChunks`, which is where the raw bytes already pass through, rather than in a source wrapped around the stream. Both would decode; the reason for the one we have is `num_bytes_downloaded`. That number is what a progress bar is drawn against, and the length a server announced is the compressed one, so a bar drawn against the decoded count would run past its own end. Decoding inside the iterator keeps the counter on the bytes that arrived and hands the caller the ones that came out.
+
+The buffered path is the same decoders run over a body that is already in hand, in the `Response` constructor, so a response the transport read to the end and a response streamed off the socket mean the same thing by `Content-Encoding`. That is also why building a `Response` can raise: a body that is not the format its own header claimed has no content to hand over, and the alternative is a response quietly holding compressed bytes and calling them text.
+
+A header naming a coding we cannot undo is refused rather than passed through, because `Accept-Encoding` only ever names what the process can actually decode, so a server sending something else has ignored it. What we can decode is decided at run time by whether zlib loaded, not at build time, which is why a machine without it degrades to plain bodies instead of failing on every response.
+
+Every decoder carries a `DecodeLimits`. A compressed body is one where the sender chooses how much memory the receiver spends, so the bound is checked as the body grows rather than once it is in hand, which is the only check worth having.
+
 ## The exchange is timed by the client and stopped by the response
 
 There are two clocks. The wall clock decides whether a cookie has expired, because expiry is stated in Unix seconds by a server on the other side of the world and only the system clock is on that scale. The monotonic counter measures how long something took, because the wall clock can step backwards when it is corrected and an interval taken across a correction is a wrong answer that looks like a real one.
