@@ -50,9 +50,9 @@ Exit: `AsyncClient` passes the same test suite as `Client`, or the fallback ship
 
 ## M7 Proxies and codecs
 
-HTTP proxies, CONNECT tunnelling, SOCKS5, per pattern mounts, and the brotli and zstd codecs loaded at runtime so a missing library degrades instead of failing.
+HTTP proxies, CONNECT tunnelling, SOCKS5, per pattern mounts, and the content codecs. gzip and deflate first, through the zlib every platform already has, then brotli and zstd loaded at runtime so a missing library degrades instead of failing. Every codec is bounded on output size and on compression ratio, because a compressed body is one where the sender chooses how much memory the receiver spends.
 
-Exit: the proxy interop tests pass against Squid, tinyproxy and Dante.
+Exit: the proxy interop tests pass against Squid, tinyproxy and Dante, and every decompression bomb case is rejected rather than absorbed.
 
 ## M8 CLI and docs
 
