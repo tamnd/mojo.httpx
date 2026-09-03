@@ -60,6 +60,20 @@ comptime MSG_NOSIGNAL = c_int(0) if _MACOS else c_int(0x4000)
 and uses the `SO_NOSIGPIPE` socket option instead, so on Darwin this is zero
 and passing it is a no op. Use `suppress_sigpipe` and you get the right one."""
 
+comptime SIGPIPE = c_int(13)
+"""Thirteen on both platforms. See `ignore_sigpipe_for_the_process`."""
+
+comptime SIG_DFL = 0
+comptime SIG_IGN = 1
+comptime SIG_ERR = -1
+"""The three dispositions `signal` deals in, as the integers they are.
+
+A disposition is a function pointer, and zero and one are not addresses but
+sentinels that mean terminate and discard. Held as `Int` here rather than as a
+pointer type because the only things this file does with one are pass these two
+constants in and hand back whatever came out.
+"""
+
 comptime SHUT_RD = c_int(0)
 comptime SHUT_WR = c_int(1)
 comptime SHUT_RDWR = c_int(2)
@@ -300,6 +314,49 @@ def suppress_sigpipe(fd: c_int) -> c_int:
     comptime if _MACOS:
         return setsockopt_int(fd, SOL_SOCKET, SO_NOSIGPIPE, c_int(1))
     return 0
+
+
+def ignore_sigpipe_for_the_process() -> Bool:
+    """Stop a write this library did not make from killing the process.
+
+    Everything above writes with `send` and `MSG_NOSIGNAL`, so nothing this
+    library does can raise SIGPIPE. OpenSSL is the exception. Its socket BIO
+    writes with plain `write`, there is no option to make it do otherwise, and
+    on Linux there is no per socket way to suppress the signal either, so a
+    handshake against a peer that has already gone away kills the program with
+    no message at all. That is not theoretical: it is a server closing the
+    connection between the TCP accept and the ClientHello, which happens to
+    real clients against real load balancers, and it was found here by a test
+    doing exactly that on a Linux host.
+
+    Darwin is covered already and is left alone. `SO_NOSIGPIPE` is set on every
+    socket this library connects, and it holds for OpenSSL's writes too because
+    it is a property of the socket rather than of the call.
+
+    An existing handler is put back. Turning SIGPIPE off is process wide state,
+    which a library has no business taking from a program that has already said
+    what it wants, so what this does is fill in a disposition nobody had set. A
+    program that wants the signal for itself keeps it, and pays for that by
+    having to survive OpenSSL raising one.
+
+    Returns whether SIGPIPE is now ignored, for a caller that wants to say so.
+    """
+
+    comptime if _MACOS:
+        return True
+
+    # `signal` takes and returns a function pointer, and the two values that
+    # matter are sentinels rather than addresses. Sound as `Int` because it is
+    # pointer sized on both platforms and neither value is ever called.
+    var previous = external_call["signal", Int, c_int, Int](SIGPIPE, SIG_IGN)
+    if previous == SIG_ERR:
+        return False
+    if previous != SIG_DFL and previous != SIG_IGN:
+        # Somebody was already listening. Put their handler back and leave the
+        # signal alone. Same call, same argument kinds, same reasoning.
+        _ = external_call["signal", Int, c_int, Int](SIGPIPE, previous)
+        return False
+    return True
 
 
 def set_tcp_nodelay(fd: c_int) -> c_int:
