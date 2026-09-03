@@ -206,6 +206,17 @@ struct Peer(Movable):
     def fd(self) -> c_int:
         return self._fd
 
+    def ready(self, ms: Int = 0) -> Bool:
+        """Whether a read would return something right now.
+
+        For a test server that has to answer without blocking. Every other read
+        here blocks, which is fine when the server side is the only thing on its
+        worker, and not fine when a test runs more server tasks than the machine
+        has workers: the client that still has to write would never get one.
+        """
+        var fds = PollFd(self._fd, POLLIN, Int16(0))
+        return poll(Pointer(to=fds), c_uint(1), c_int(ms)) > 0
+
     def send_text(mut self, text: StringSpan) raises:
         """Write all of `text`, looping over short writes."""
         self.send_bytes(text.as_bytes())

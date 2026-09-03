@@ -71,7 +71,7 @@ LAYERS: dict[str, int] = {
 # Only these layers may hold a raw pointer or call into C.
 UNSAFE_LAYERS = {1, 2}
 
-# And these two modules, neither of which is I/O at all.
+# And these three modules, none of which is I/O at all.
 #
 # _util/erase.mojo: storing a user's transport in a client means holding a value
 # whose type has been forgotten, Mojo 1.0 has no trait objects, and the only way
@@ -84,9 +84,18 @@ UNSAFE_LAYERS = {1, 2}
 # with an origin rather than raw addresses, so the compiler still checks the
 # lifetimes; what the rule is really catching is that the file exists at all.
 #
+# _pool/aio_pool.mojo: the same reason as the driver, one level up. A pooled
+# request has to run a connect and an exchange in one coroutine, because an
+# awaited coroutine may not suspend in a loop, so the pool ends up holding the
+# same shape the driver does and reporting through the same kind of pointer.
+#
 # Named file by file rather than opening up the whole layer, and every site in
-# both still has to carry its invariant like any other unsafe code.
-UNSAFE_MODULES = {"_util/erase.mojo", "_proto/h1/aio.mojo"}
+# all three still has to carry its invariant like any other unsafe code.
+UNSAFE_MODULES = {
+    "_util/erase.mojo",
+    "_proto/h1/aio.mojo",
+    "_pool/aio_pool.mojo",
+}
 
 IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+(httpx[\w.]*)", re.MULTILINE)
 
