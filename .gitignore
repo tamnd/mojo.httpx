@@ -20,6 +20,9 @@ fuzz/crashes/
 # the CA and leaf the h2 interop suite makes for its own loopback servers
 tools/interop/.h2certs/
 
+# the same for the proxy suite, plus the CA mitmproxy makes for itself
+tools/interop/.proxycerts/
+
 # local
 .DS_Store
 *.log

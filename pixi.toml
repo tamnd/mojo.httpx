@@ -107,6 +107,12 @@ badssl = "mojo run -I . tools/interop/badssl.mojo"
 # See docs/testing.md.
 interop-h2 = "bash tools/interop/h2_run.sh"
 
+# Proxying against Squid, tinyproxy, mitmproxy and Dante, in Docker on the
+# loopback address, forwarding and tunnelling and SOCKS5 and two kinds of proxy
+# credentials. Not part of `check` and not in CI, for the same reasons as the
+# suite above. It runs on the fleet. See docs/testing.md.
+interop-proxy = "bash tools/interop/proxy_run.sh"
+
 # What Mojo's async actually does on the toolchain we pin, measured rather than
 # assumed. The evidence behind the M6 decision, kept runnable so that a
 # toolchain which changes one of the answers shows up here. See docs/async.md.
