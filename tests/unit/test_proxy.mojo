@@ -21,8 +21,11 @@ from std.testing import assert_equal, assert_raises, assert_true
 from httpx._aio_client import AsyncClient
 from httpx._client import Client
 from httpx._models.headers import Headers
+from httpx._models.request import Request
 from httpx._models.response import Response
-from httpx._pool.proxy import Proxy, proxy_basic_auth
+from httpx._models.url import URL
+from httpx._pool.proxy import Proxy, proxy_basic_auth, route_through
+from httpx._proto.h1.writer import TargetForm
 
 from tests.support.testproxy import TestProxy
 from tests.support.testserver import TestServer
@@ -60,6 +63,20 @@ def _aget(
     path: StringSpan,
 ) raises -> Response:
     return client.get(server.url(path))
+
+
+def _tunnel_client(proxy: TestProxy) raises -> Client:
+    """A client that reaches the https test server through `proxy`.
+
+    `verify` names the test certificate rather than turning verification off.
+    A tunnelled handshake that is not checked would look the same whether it
+    reached the server or stopped at the proxy, which is the one thing these
+    tests are for.
+    """
+    return Client(
+        proxy=Optional[Proxy](Proxy(proxy.url())),
+        verify=TestServer.tls_verify(),
+    )
 
 
 def test_a_proxy_url_keeps_no_credentials() raises:
@@ -243,12 +260,142 @@ def test_the_async_client_sends_the_proxy_credential() raises:
     client.close()
 
 
-def test_an_https_target_through_a_proxy_says_what_is_missing() raises:
-    """CONNECT tunnelling is the next piece of this milestone. Until it lands the
-    honest answer is a message naming it, rather than a connect to the proxy that
-    would put the request on the wire in the clear."""
+def test_an_https_target_asks_for_a_tunnel_and_keeps_its_own_origin() raises:
+    """The routing decision on its own, with no sockets in it.
+
+    Two things at once, and both matter. The hop says to connect through the
+    proxy, and the origin it is keyed under is still the server, because a
+    tunnel reaches one host and handing it to a request for another would send
+    that request somewhere it never asked to go.
+    """
+    var proxy = Proxy("http://proxy.example:3128")
+    var request = Request("GET", URL("https://example.com/thing"))
+    var hop = route_through(Optional[Proxy](proxy^), request, TargetForm.ORIGIN)
+    assert_equal(String(hop.origin), "https://example.com:443")
+    assert_true(hop.connect_via)
+    assert_equal(String(hop.connect_via.value()), "http://proxy.example:3128")
+    assert_true(hop.form == TargetForm.ORIGIN)
+
+
+def test_a_tunnelled_request_does_not_carry_the_proxy_credential() raises:
+    """The counterpart of the forwarding case, and the reason `route_through`
+    does not call `apply` here. The credential goes on the CONNECT, which the
+    pool sends, and a copy of it inside the tunnel would travel end to end to a
+    server that has no business seeing the proxy's password."""
+    var proxy = Proxy("http://tam:hunter2@proxy.example:3128")
+    var request = Request("GET", URL("https://example.com/thing"))
+    _ = route_through(Optional[Proxy](proxy^), request, TargetForm.ORIGIN)
+    assert_true("Proxy-Authorization" not in request.headers)
+
+
+def test_an_https_target_goes_through_a_tunnel() raises:
+    """End to end, against a real https server behind a real proxy.
+
+    `X-Proxy-Target` is absent on purpose. The proxy adds it to everything it
+    forwards and to nothing it tunnels, because once the 200 has gone out it is
+    copying bytes it cannot read, so its absence here is the proof that this
+    request was tunnelled rather than forwarded.
+    """
+    var server = TestServer(tls=True)
     var proxy = TestProxy()
-    var client = _client(proxy)
-    with assert_raises(contains="CONNECT tunnel"):
+    var client = _tunnel_client(proxy)
+    var response = _get(client, proxy, server, "/get")
+    assert_equal(response.status_code, 200)
+    assert_equal(response.json()["method"].as_string(), "GET")
+    assert_true("x-proxy-target" not in response.headers)
+    client.close()
+
+
+def test_the_tunnelled_certificate_is_the_servers() raises:
+    """A client that does not trust the test certificate cannot get through.
+
+    Which is what says the TLS is end to end. If the proxy were terminating the
+    handshake this would fail against the proxy's certificate instead of against
+    the server's, and if nothing were being checked it would not fail at all.
+    """
+    var server = TestServer(tls=True)
+    var proxy = TestProxy()
+    var client = Client(proxy=Optional[Proxy](Proxy(proxy.url())))
+    with assert_raises():
+        _ = _get(client, proxy, server, "/get")
+    client.close()
+
+
+def test_a_tunnelled_request_reaches_the_server_without_the_credential() raises:
+    """The credential authenticates the CONNECT and stops there.
+
+    The proxy consumes it, and the server on the far end of the tunnel sees a
+    request with neither `Proxy-Authorization` nor `Authorization` on it.
+    """
+    var server = TestServer(tls=True)
+    var proxy = TestProxy("tam:hunter2")
+    var client = Client(
+        proxy=Optional[Proxy](Proxy(proxy.url_with("tam", "hunter2"))),
+        verify=TestServer.tls_verify(),
+    )
+    var response = _get(client, proxy, server, "/headers")
+    var seen = response.json()["headers"]
+    assert_true("Proxy-Authorization" not in seen)
+    assert_true("Authorization" not in seen)
+    client.close()
+
+
+def test_two_tunnelled_requests_share_one_tunnel() raises:
+    """A tunnel is a pooled connection like any other.
+
+    Reopening one per request would cost a CONNECT round trip and a full TLS
+    handshake every time, which is most of what a connection pool exists to
+    avoid. The server's connection id is the only place this is visible, because
+    the proxy cannot see inside.
+    """
+    var server = TestServer(tls=True)
+    var proxy = TestProxy()
+    var client = _tunnel_client(proxy)
+    var first = _get(client, proxy, server, "/headers")
+    var second = _get(client, proxy, server, "/get")
+    assert_equal(first.status_code, 200)
+    assert_equal(second.status_code, 200)
+    assert_equal(first.headers["x-conn-id"], second.headers["x-conn-id"])
+    client.close()
+
+
+def test_a_proxy_that_refuses_the_tunnel_names_the_status() raises:
+    """A 403 to a CONNECT is a proxy saying it will not reach that destination.
+
+    Worth its own message, because the alternative is a TLS handshake against
+    the proxy's plain text error page, which fails somewhere deep in OpenSSL
+    with nothing in it about a proxy.
+    """
+    var server = TestServer(tls=True)
+    var proxy = TestProxy(forbid=server.authority())
+    var client = _tunnel_client(proxy)
+    with assert_raises(contains="403"):
+        _ = _get(client, proxy, server, "/get")
+    client.close()
+
+
+def test_a_proxy_that_wants_credentials_refuses_the_tunnel() raises:
+    """A 407 to a CONNECT cannot come back as a response the way it can for a
+    forwarded request, because there is no tunnel to send a response through.
+    So it is an error, and the message says what to do about it."""
+    var server = TestServer(tls=True)
+    var proxy = TestProxy("tam:hunter2")
+    var client = _tunnel_client(proxy)
+    with assert_raises(contains="wants credentials"):
+        _ = _get(client, proxy, server, "/get")
+    client.close()
+
+
+def test_an_https_proxy_for_an_https_target_says_what_is_missing() raises:
+    """TLS inside TLS is the one shape still missing, and it needs a stream that
+    can wrap another stream rather than a socket. Said plainly rather than
+    attempted, because attempting it would send a CONNECT in the clear to a port
+    expecting a handshake."""
+    var proxy = TestProxy()
+    var client = Client(
+        proxy=Optional[Proxy](Proxy(String("https://127.0.0.1:", proxy.port))),
+        verify=TestServer.tls_verify(),
+    )
+    with assert_raises(contains="TLS inside TLS"):
         _ = client.get("https://example.invalid/")
     client.close()

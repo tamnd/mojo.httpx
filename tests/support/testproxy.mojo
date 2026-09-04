@@ -33,9 +33,17 @@ struct TestProxy(Movable):
     var _running: Bool
 
     def __init__(
-        out self, auth: StringSpan = "", host: StringSpan = "127.0.0.1"
+        out self,
+        auth: StringSpan = "",
+        forbid: StringSpan = "",
+        host: StringSpan = "127.0.0.1",
     ) raises:
-        """A proxy, demanding `auth` as `user:pass` if it is not empty."""
+        """A proxy, demanding `auth` as `user:pass` if it is not empty.
+
+        `forbid` is a `host:port` this proxy answers a CONNECT to with a 403,
+        which is how a proxy that will not reach a destination says so and is
+        the only interesting failure a tunnel has that forwarding does not.
+        """
         var sub = Python.import_module("subprocess")
         var sys = Python.import_module("sys")
 
@@ -49,6 +57,9 @@ struct TestProxy(Movable):
         if len(auth.as_bytes()) > 0:
             argv.append("--auth")
             argv.append(String(auth))
+        if len(forbid.as_bytes()) > 0:
+            argv.append("--forbid")
+            argv.append(String(forbid))
 
         self.host = String(host)
         self._proc = sub.Popen(argv, stdout=sub.PIPE)

@@ -1,15 +1,16 @@
-"""TLS configuration, and the parts of the handshake that need no server.
+"""TLS configuration, and handshakes against the local test server.
 
-Everything here runs offline. What is missing is the interesting half, which is
-a real handshake against a real certificate, and that lives in
-`tools/interop/badssl.mojo` because it needs the network and because a test
-that fails when the wifi drops is a test people learn to ignore.
-
-The offline half is still worth having. It covers the ALPN encoding, which is a
+Most of this runs with no server at all. It covers the ALPN encoding, which is a
 wire format with an easy off by one in it, the trust store search order, which
 decides what a client trusts and therefore has to be spelled out rather than
 observed, and the failure messages, which are the whole reason this layer got
 written the way it did.
+
+The last few tests do a real handshake, against `tests/server/server.py --tls`
+and the self signed certificate in `tests/fixtures/tls`. That is a loopback server,
+so it is still offline: nothing here fails when the wifi drops. What it cannot
+cover is the public trust store and the shapes a real certificate authority
+produces, and that is what `tools/interop/badssl.mojo` is for.
 """
 
 from std.testing import assert_equal, assert_false, assert_true
@@ -21,13 +22,16 @@ from httpx._ffi.openssl import (
     library_path,
     version_text,
 )
+from httpx._client import Client
 from httpx._io.deadline import Deadline
+from httpx._models.response import Response
 from httpx._io.socket import TcpStream, open_stream
 from httpx._stream.config import ClientCert, SSLVerify, TlsConfig, alpn_wire
 from httpx._stream.stream import Stream
 from httpx._stream.tls import TlsStream
 
 from tests.support.loopback import Loopback
+from tests.support.testserver import TestServer
 
 
 def test_openssl_is_available_and_recent() raises:
@@ -306,3 +310,50 @@ def test_a_named_ca_bundle_loads() raises:
     var config = TlsConfig()
     config.verify = SSLVerify.from_file(String(FIXTURES, "ca.pem"))
     _ = config.build()
+
+
+def test_a_handshake_against_the_local_server_works() raises:
+    """The first end of the offline TLS story: a real handshake, a real
+    certificate check, and a real response.
+
+    Everything above this line is configuration that has never met a server, and
+    a client can get all of it right and still fail to talk to anybody.
+    """
+    var server = TestServer(tls=True)
+    var client = Client(verify=TestServer.tls_verify())
+    var response = _get(client, server, "/get")
+    assert_equal(response.status_code, 200)
+    assert_equal(response.json()["method"].as_string(), "GET")
+    client.close()
+
+
+def test_a_certificate_nobody_trusts_is_refused() raises:
+    """The other end of it, and the more important one.
+
+    A client that accepted this would pass every test in this file and be
+    useless, because the whole value of the certificate check is that it says no
+    to a name it has not been given.
+    """
+    var server = TestServer(tls=True)
+    var client = Client()
+    var raised = False
+    try:
+        _ = _get(client, server, "/get")
+    except e:
+        raised = True
+        assert_true("verify" in String(e) or "certificate" in String(e))
+    assert_true(raised)
+    client.close()
+
+
+def _get(
+    mut client: Client, server: TestServer, path: StringSpan
+) raises -> Response:
+    """One request to `server`.
+
+    `server` is borrowed and unused, which is the point: it keeps the process
+    alive for the length of the call. Mojo ends a value's life at its last use,
+    so building the URL inline would shut the server down before the request
+    went out.
+    """
+    return client.get(server.url(path))

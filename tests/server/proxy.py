@@ -7,6 +7,13 @@ is deliberately strict about the part that matters, which is the request line. A
 request that arrives in origin form is refused with a 400 rather than guessed at,
 because a proxy that guesses is a proxy that would pass a broken client.
 
+`CONNECT` is handled too, and it is a different job from the rest. There is no
+relaying and no parsing: the proxy opens a TCP connection to the named host and
+port, answers `200`, and from then on copies bytes in both directions until one
+side stops. That is what makes an https request through a proxy possible, and it
+is deliberately blind, so what a test can check about the tunnel is what came out
+of the far end rather than anything this saw.
+
 It relays rather than answers. Whatever comes back from the origin goes back to
 the client with the status, the headers and the body unchanged, so a test can
 check that a compressed body or a set cookie survives the extra hop.
@@ -31,6 +38,8 @@ import argparse
 import base64
 import http.client
 import itertools
+import select
+import socket
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -52,6 +61,51 @@ HOP_BY_HOP = frozenset(
         "upgrade",
     ]
 )
+
+
+def _split_authority(target):
+    """`host:port` into the pair `socket.create_connection` wants, or None.
+
+    An IPv6 address arrives in brackets, so the split is from the right and the
+    brackets come off afterwards. Splitting from the left would cut an address
+    in half at its first colon.
+    """
+    if ":" not in target:
+        return None
+    host, _, port = target.rpartition(":")
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    if not host or not port.isdigit():
+        return None
+    return (host, int(port))
+
+
+def _splice(left, right):
+    """Copy bytes each way until one side stops, then stop.
+
+    A select loop rather than two threads. Two threads would need a way to tell
+    the other one to stop, and getting that wrong leaves a thread per tunnel
+    alive for the length of the test run.
+    """
+    both = [left, right]
+    while both:
+        ready, _, bad = select.select(both, [], both, 10)
+        if bad:
+            return
+        if not ready:
+            return
+        for sock in ready:
+            other = right if sock is left else left
+            try:
+                chunk = sock.recv(65536)
+            except OSError:
+                return
+            if not chunk:
+                return
+            try:
+                other.sendall(chunk)
+            except OSError:
+                return
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -95,6 +149,66 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self._proxy()
+
+    def do_CONNECT(self):
+        """Open a pipe to the named host and port and stop reading it.
+
+        The target arrives as `host:port` rather than as a URL, which is the
+        only form CONNECT takes, and an origin form target is refused here for
+        the same reason it is refused for a forwarded request: guessing is how a
+        broken client gets through.
+
+        None of the observability headers the forwarding path adds go on this
+        reply. A tunnel has no headers of its own once it is open, and a test
+        that wants to know the tunnel was used asks the server on the far end,
+        which is the only party that can answer honestly.
+        """
+        offered = self.headers.get("Proxy-Authorization", "-")
+        if self.server.credential is not None:
+            if offered != self.server.credential:
+                self._fail(
+                    407,
+                    "this proxy wants credentials",
+                    offered,
+                    extra=[("Proxy-Authenticate", 'Basic realm="testproxy"')],
+                )
+                self.close_connection = True
+                return
+
+        target = _split_authority(self.path)
+        if target is None:
+            self._fail(
+                400,
+                "a CONNECT target is host:port, got %r" % self.path,
+                offered,
+            )
+            self.close_connection = True
+            return
+
+        if self.server.forbidden is not None:
+            if self.path == self.server.forbidden:
+                self._fail(403, "this proxy will not reach %s" % self.path, offered)
+                self.close_connection = True
+                return
+
+        try:
+            upstream = socket.create_connection(target, timeout=10)
+        except OSError as reason:
+            self._fail(502, "cannot reach %s: %s" % (self.path, reason), offered)
+            self.close_connection = True
+            return
+
+        # Written by hand rather than through `send_response`, which would add a
+        # `Server` and a `Date` and then a body framing header. Everything after
+        # the blank line here is the tunnel, so a header we did not mean to send
+        # is a byte the client's TLS handshake would choke on.
+        self.wfile.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+        self.wfile.flush()
+        self.close_connection = True
+        try:
+            _splice(self.connection, upstream)
+        finally:
+            upstream.close()
 
     def _proxy(self):
         target = self.path
@@ -202,6 +316,13 @@ class Proxy(ThreadingHTTPServer):
     credential = None
     """The exact `Proxy-Authorization` value to demand, or None to demand none."""
 
+    forbidden = None
+    """A `host:port` to refuse a CONNECT to with a 403, or None to refuse none.
+
+    For the test that a proxy saying no produces an error naming the status, and
+    not a hang or a TLS handshake against nothing.
+    """
+
     def __init__(self, *args, **kwargs):
         ThreadingHTTPServer.__init__(self, *args, **kwargs)
         self._conn_counter = itertools.count(1)
@@ -217,6 +338,9 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--auth", default=None, help="user:pass to demand")
+    parser.add_argument(
+        "--forbid", default=None, help="host:port to refuse a CONNECT to"
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -225,6 +349,7 @@ def main():
     if args.auth is not None:
         encoded = base64.b64encode(args.auth.encode("utf-8")).decode("ascii")
         proxy.credential = "Basic " + encoded
+    proxy.forbidden = args.forbid
     print("PORT %d" % proxy.server_address[1], flush=True)
     try:
         proxy.serve_forever()
