@@ -8,6 +8,220 @@ This page is about behaving differently while doing the same job. Things that ar
 
 Two kinds of difference show up. The first kind is forced by the language: Mojo has no dynamic `Any`, no exception subclassing, no generators and no keyword argument packing, so anything built on those has to be spelled differently. The second kind is a judgement call, where copying httpx2 exactly was possible and we chose not to. The second kind is much shorter and each entry says what the alternative was.
 
+The migration table below is the quick reference, every httpx2 name beside its Mojo form. The two sections after it are the reasons behind the rows that changed.
+
+## The migration table
+
+Every httpx2 API beside the Mojo form of it. Where a row is identical in both, it is here anyway, because knowing a thing did not change is worth as much as knowing it did.
+
+Two conventions run through the whole table and are not repeated on every row. An attribute in httpx2 that can fail or has to compute something is a method here, so `r.text` is `r.text()`, and one that is a plain stored field stays a field, so `r.status_code` is `r.status_code`. And a value handed to a constructor is handed over rather than lent, so an argument built beforehand goes in with `^`, as in `headers=headers^`. [Mojo notes](mojo.md) explains both.
+
+### Top level
+
+| httpx2 | mojo.httpx |
+| --- | --- |
+| `httpx.get(url)` | `httpx.get(url)` |
+| `httpx.post`, `put`, `patch`, `delete`, `head`, `options` | the same six |
+| `httpx.request("REPORT", url)` | `httpx.request("REPORT", url)` |
+| `with httpx.stream("GET", url) as r` | `var r = httpx.stream("GET", url)` |
+| `httpx.__version__` | `httpx.__version__` |
+
+The one shot `stream` is an ordinary function rather than a context manager, and the connection is not reused afterwards. That is the one row above with a behaviour difference behind it, and it has a section of its own further down.
+
+### Client
+
+| httpx2 | mojo.httpx |
+| --- | --- |
+| `httpx.Client()` | `httpx.Client()` |
+| `httpx.AsyncClient()` | `httpx.AsyncClient()` |
+| `with httpx.Client() as client` | `with httpx.Client() as client` |
+| `async with httpx.AsyncClient() as client` | `with httpx.AsyncClient() as client` |
+| `client.close()`, `await client.aclose()` | `client.close()`, `client.aclose()`, the same call |
+| `base_url="https://api.example.com"` | `base_url=URL("https://api.example.com")` |
+| `headers={"Accept": "application/json"}` | a `Headers` built up, passed as `headers=headers^` |
+| `params={"q": "mojo"}` | `params=QueryParams().add("q", "mojo")^` |
+| `cookies={"session": "abc"}` | a `Cookies` built up, passed as `cookies=cookies^` |
+| `auth=("user", "pass")` | `auth=basic_auth("user", "pass")` |
+| `timeout=5.0` | `timeout=Timeout.uniform(5.0)` |
+| `limits=httpx.Limits(...)` | `limits=Limits(...)` |
+| `proxy="http://localhost:3128"` | `proxy=Proxy("http://localhost:3128")` |
+| `mounts={"all://x": t, "all://y": None}` | a `Mounts` with `mount` and `bypass` on it |
+| `verify=True` | the default |
+| `verify="/path/ca.pem"` | `verify=SSLVerify.from_file("/path/ca.pem")` |
+| `verify=False` | `verify=SSLVerify.off()` |
+| `cert=("client.pem", "client.key")` | `cert=ClientCert("client.pem", "client.key")` |
+| `follow_redirects=True` | `follow_redirects=True` |
+| `max_redirects=20` | `max_redirects=20` |
+| `http2=True` | `http2=True` |
+| `trust_env=False` | `trust_env=False` |
+| `default_encoding="iso-8859-1"` | `default_encoding=DefaultEncoding("iso-8859-1")` |
+| `event_hooks={"request": [...]}` | an `EventHooks` with `on_request` and `on_response` |
+| `transport=t` | `transport=erase_transport(t^)`, or the positional shorthand `Client(erase_transport(t^))` |
+| `client.headers`, `client.cookies`, `client.params` | the same three, mutable |
+| `client.build_request(...)` | `client.build_request(...)` |
+| `client.send(request)` | `client.send(request^)` |
+| `client.get("/items")` and the six others | the same seven |
+| `client.stream("GET", url)` | `client.stream("GET", url)` |
+| `httpx.gather` does not exist, you use `asyncio.gather` | `httpx.gather(client, requests^)` |
+
+### Request bodies
+
+| httpx2 | mojo.httpx |
+| --- | --- |
+| `content=b"..."` | `content=` for bytes, `text=` for a string |
+| `content=<an iterable>` | `content_stream=erase_source(source^)` |
+| `data={"a": "b"}` | `data=QueryParams().add("a", "b")^` |
+| `files={"f": ("name.jpg", data)}` | a `MultipartData` with `add_file(FileUpload(...))` |
+| `json={"a": 1}` | a `Json.object()` with `set` on it, passed as `json=doc^` |
+
+### Response
+
+| httpx2 | mojo.httpx |
+| --- | --- |
+| `r.status_code` | `r.status_code` |
+| `r.reason_phrase` | `r.reason_phrase` |
+| `r.http_version` | `r.http_version` |
+| `r.headers` | `r.headers` |
+| `r.url` | `r.url()` |
+| `r.request` | `r.request()` |
+| `r.content` | `r.content()`, a `Span[UInt8]` |
+| `r.text` | `r.text()` |
+| `r.json()` | `r.json()`, a typed `Json` |
+| `r.encoding` | `r.encoding()` |
+| `r.charset_encoding` | `r.charset_encoding()` |
+| `r.cookies` | `r.cookies()` |
+| `r.links` | `r.links()`, a list, plus `r.link_url("next")` |
+| `r.history` | `r.history()` |
+| `r.next_request` | `r.next_request()` |
+| `r.elapsed` | `r.elapsed()`, a `Duration` |
+| `r.num_bytes_downloaded` | `r.num_bytes_downloaded()`, and on the iterator too |
+| `r.is_closed`, `r.is_stream_consumed` | the same two, as fields |
+| `r.is_success`, `r.is_error` and the rest | the same, as methods |
+| `r.raise_for_status()` returning the response | `r.raise_for_status()` returning nothing |
+| `r.read()`, `await r.aread()` | `r.read()`, `r.aread()` |
+| `r.close()`, `await r.aclose()` | `r.close()`, `r.aclose()` |
+
+### Reading a body as it arrives
+
+| httpx2 | mojo.httpx |
+| --- | --- |
+| `for b in r.iter_bytes()` | `var c = r.iter_bytes()` then `while c.has_next(): c.next()` |
+| `iter_text`, `iter_lines`, `iter_raw` | the same three, same shape |
+| `async for b in r.aiter_bytes()` | `r.aiter_bytes()`, the same call as `iter_bytes` |
+
+### URL
+
+| httpx2 | mojo.httpx |
+| --- | --- |
+| `httpx.URL("https://example.com")` | `URL("https://example.com")` |
+| `url.scheme`, `url.host`, `url.port` | `url.scheme()`, `url.host()`, `url.port()` |
+| `url.path`, `url.query`, `url.fragment` | `url.path()`, `url.raw_query()`, `url.fragment()` |
+| `url.params` | `url.params()`, a `QueryParams` |
+| `url.username`, `url.password`, `url.userinfo` | the same three, as methods |
+| `url.netloc`, `url.raw_path` | `url.netloc()`, `url.raw_path()` |
+| `url.is_absolute_url`, `url.is_relative_url` | the same two, as methods |
+| `url.copy_with(...)` | `url.copy_with(...)` |
+| `url.copy_set_param`, `copy_add_param`, `copy_remove_param`, `copy_merge_params` | the same four |
+| `url.join("../x")` | `url.join("../x")` |
+
+### Headers, params and cookies
+
+| httpx2 | mojo.httpx |
+| --- | --- |
+| `httpx.Headers({"A": "b"})` | `Headers()` then `headers["A"] = "b"` |
+| `headers["a"]`, `headers.get("a", "d")` | the same two |
+| `headers.get_list("set-cookie")` | `headers.get_list("set-cookie")` |
+| `headers.keys()`, `values()`, `items()`, `multi_items()` | the same four |
+| `headers.update(other)`, `setdefault` | the same two |
+| `del headers["a"]` | `headers.discard("a")` |
+| `httpx.QueryParams("a=1&b=2")` | `QueryParams("a=1&b=2")` |
+| `params.set`, `add`, `remove`, `merge` | the same four, each returning a new value |
+| `params.get`, `get_list`, `keys`, `values`, `items`, `multi_items` | the same six |
+| `httpx.Cookies()` | `Cookies()` |
+| `cookies["session"]`, `cookies.set(...)`, `cookies.delete(...)`, `cookies.clear(...)` | the same |
+| `cookies.keys()`, `values()`, `items()` | the same three |
+
+### Configuration types
+
+| httpx2 | mojo.httpx |
+| --- | --- |
+| `httpx.Timeout(5.0)` | `Timeout.uniform(5.0)` |
+| `httpx.Timeout(connect=3.0, read=30.0, write=10.0, pool=5.0)` | `Timeout(connect_seconds=3.0, read_seconds=30.0, write_seconds=10.0, pool_seconds=5.0)` |
+| `httpx.Timeout(None)` | `Timeout.disabled()` |
+| `timeout.connect` and the other three | the same four, as fields |
+| `httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=5.0)` | the same three arguments |
+| `httpx.Proxy(url, auth=("u", "p"))` | `Proxy("http://u:p@host:port")`, or a header built by `proxy_basic_auth` |
+| `datetime.timedelta` from `r.elapsed` | `Duration`, with `seconds()`, `milliseconds()`, `microseconds()` |
+
+The `Timeout` phase arguments are named for their unit because `read` and `write` are already spoken for as argument conventions in Mojo. The fields keep the httpx2 names.
+
+### Authentication
+
+| httpx2 | mojo.httpx |
+| --- | --- |
+| `auth=("user", "pass")` | `auth=basic_auth("user", "pass")` |
+| `httpx.BasicAuth("user", "pass")` | `basic_auth("user", "pass")` |
+| `httpx.DigestAuth("user", "pass")` | `digest_auth("user", "pass")` |
+| `httpx.NetRCAuth()` | `netrc_auth()` |
+| `auth=None` on a call, to send it unauthenticated | `auth=no_auth()` |
+| subclassing `httpx.Auth` | a struct implementing `Auth`, wrapped with `erase_auth` |
+
+### Transports and testing
+
+| httpx2 | mojo.httpx |
+| --- | --- |
+| `httpx.HTTPTransport()` | `HTTPTransport()` |
+| `httpx.AsyncHTTPTransport()` | `AsyncHTTPTransport()` |
+| `httpx.MockTransport(handler)` | `MockTransport(handler)` |
+| `respx` or a hand rolled router | `MockRouter` and `Route`, in the library |
+| any object with `handle_request` | a struct implementing `Transport`, wrapped with `erase_transport` |
+| `{"http://": None}` in `mounts` | `mounts.bypass("http://")` |
+| nothing, there is no spelling for it | `blocked("reason")`, a transport that refuses and says why |
+
+### Errors
+
+httpx2 catches types. Here you ask questions, because Mojo has one error type. Each predicate is true exactly where the corresponding `except` clause would catch.
+
+| httpx2 | mojo.httpx |
+| --- | --- |
+| `except httpx.HTTPError` | `if httpx.is_http_error(e)` |
+| `except httpx.RequestError` | `is_request_error(e)` |
+| `except httpx.TransportError` | `is_transport_error(e)` |
+| `except httpx.TimeoutException` | `is_timeout(e)` |
+| `except httpx.ConnectTimeout` | `is_connect_timeout(e)` |
+| `except httpx.ReadTimeout` | `is_read_timeout(e)` |
+| `except httpx.WriteTimeout` | `is_write_timeout(e)` |
+| `except httpx.PoolTimeout` | `is_pool_timeout(e)` |
+| `except httpx.NetworkError` | `is_network_error(e)` |
+| `except httpx.ConnectError` | `is_connect_error(e)` |
+| `except httpx.ProtocolError` | `is_protocol_error(e)` |
+| `except httpx.LocalProtocolError` | `is_local_protocol_error(e)` |
+| `except httpx.RemoteProtocolError` | `is_remote_protocol_error(e)` |
+| `except httpx.ProxyError` | `is_proxy_error(e)` |
+| `except httpx.UnsupportedProtocol` | `is_unsupported_protocol(e)` |
+| `except httpx.DecodingError` | `is_decoding_error(e)` |
+| `except httpx.TooManyRedirects` | `is_too_many_redirects(e)` |
+| `except httpx.HTTPStatusError` | `is_status_error(e)` |
+| `except httpx.InvalidURL` | `is_invalid_url(e)` |
+| `except httpx.StreamError` | `is_stream_error(e)` |
+| `except httpx.CookieConflict` | `is_cookie_conflict(e)` |
+| `type(e).__name__` for a log line | `httpx.kind_of(e).name()`, the same string |
+| `str(e)` | `httpx.message_of(e)`, without the kind on the front |
+| `raise httpx.ConnectError("...")` in your own transport | `raise httpx.new_error(ErrorKind.CONNECT_ERROR, "...")` |
+
+The predicates nest the way the classes do, so ask the specific one first. `is_timeout` is true for all four timeouts, `is_transport_error` for every network layer failure, and `is_http_error` for anything raised for a request.
+
+### Async
+
+| httpx2 | mojo.httpx |
+| --- | --- |
+| `async def main()` | `def main() raises`, there is no async entry point |
+| `await client.get(url)` | `client.get(url)` |
+| `async with AsyncClient() as c` | `with AsyncClient() as c` |
+| `await asyncio.gather(*coros)` | `httpx.gather(client, requests^)` |
+| `task.cancel()` | close the response, or give the request a timeout |
+| `async for chunk in r.aiter_bytes()` | `r.aiter_bytes()` with `has_next` and `next` |
+
 ## Forced by the language
 
 | httpx2 | mojo.httpx | Reason |

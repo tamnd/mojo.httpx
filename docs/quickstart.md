@@ -48,7 +48,7 @@ def main() raises:
     print(len(r.content()))
 ```
 
-`r.text()` decodes the body using the charset the response named. When it named none, or named one nothing here can decode, `default_encoding` decides, and that is UTF-8 unless you changed it. `r.content()` is the raw bytes, as a `List[UInt8]`.
+`r.text()` decodes the body using the charset the response named. When it named none, or named one nothing here can decode, `default_encoding` decides, and that is UTF-8 unless you changed it. `r.content()` is the raw bytes, as a `Span[UInt8]` borrowed from the response rather than a copy of them.
 
 `r.text()` never raises on the bytes themselves. An undecodable sequence becomes U+FFFD, one per maximal subpart, which is what Python's `errors="replace"` produces and therefore what httpx2 hands back for the same body.
 
