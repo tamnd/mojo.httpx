@@ -83,6 +83,16 @@ struct DefaultEncoding(Copyable, Movable):
     Either a fixed name or a detector, matching the two things httpx2 accepts for
     `default_encoding`. Mojo has no union type, so this is a struct with one of
     the two set, and the constructors are what keep a caller from setting both.
+
+    ```mojo
+    from httpx import Client, DefaultEncoding
+
+
+    def main() raises:
+        with Client(default_encoding=DefaultEncoding("iso-8859-1")) as client:
+            var r = client.get("https://example.com/legacy")
+            print(r.encoding(), r.text())
+    ```
     """
 
     var name: String

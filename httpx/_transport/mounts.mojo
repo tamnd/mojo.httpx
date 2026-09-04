@@ -79,6 +79,16 @@ struct URLPattern(ImplicitlyCopyable, Movable, Writable):
     pattern host can be `*.example.com`, which no URL parser should accept, and
     running one through IDNA and percent decoding on the way in would either
     reject it or quietly turn it into something else.
+
+    ```mojo
+    from httpx import URL, URLPattern
+
+
+    def main() raises:
+        var pattern = URLPattern("all://*.example.com")
+        print(pattern.matches(URL("https://api.example.com/users")))
+        print(pattern.matches(URL("https://example.org/users")))
+    ```
     """
 
     var pattern: String
@@ -440,6 +450,19 @@ struct Mounts[H: TransportHandle](Movable, Sized):
 
     Sorted on insert rather than at the end, so there is no step a caller can
     forget and no window where the table is built but not yet usable.
+
+    ```mojo
+    from httpx import AnyTransport, Client, HTTPTransport, MountTable
+    from httpx import blocked, erase_transport
+
+
+    def main() raises:
+        var routes = MountTable[AnyTransport]()
+        routes.mount("all://internal.example.com", erase_transport(HTTPTransport()))
+        routes.mount("http://", blocked("plaintext is not allowed here"))
+        with Client(mounts=routes^) as client:
+            print(client.get("https://internal.example.com/").status_code)
+    ```
     """
 
     var entries: List[Mount[Self.H]]

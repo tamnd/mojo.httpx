@@ -58,7 +58,18 @@ def now_ns() -> UInt64:
 
 
 struct Deadline(ImplicitlyCopyable, Movable, Writable):
-    """A point in time to stop waiting at, and what to raise when it arrives."""
+    """A point in time to stop waiting at, and what to raise when it arrives.
+
+    ```mojo
+    from httpx import Deadline
+
+
+    def main() raises:
+        var read_by = Deadline.after(5.0)
+        print(read_by.expired(), read_by.remaining_ms())
+        read_by.check("reading the response")
+    ```
+    """
 
     var at_ns: UInt64
     """Ignored when `limited` is False."""
@@ -289,6 +300,16 @@ struct Deadlines(ImplicitlyCopyable, Movable):
 
     Layered here rather than with the rest of the configuration because the pool
     and the transport need it and neither can see the configuration layer.
+
+    ```mojo
+    from httpx import Deadlines
+
+
+    def main() raises:
+        var budget = Deadlines.after(5.0, 30.0, 5.0, 5.0)
+        print(budget.connect.remaining_ms(), budget.read.remaining_ms())
+        print(Deadlines.never().read.expired())
+    ```
     """
 
     var connect: Deadline

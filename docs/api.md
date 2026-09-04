@@ -14,23 +14,23 @@ A name that is not on this page is not public, whatever it is spelled like. The 
 
 [Requests and responses](#requests-and-responses): [`Request`](#request-1), [`Response`](#response), [`Headers`](#headers), [`ByteChunks`](#bytechunks), [`LineChunks`](#linechunks), [`TextChunks`](#textchunks)
 
-[Request bodies](#request-bodies): [`ByteSource`](#bytesource), [`ByteStream`](#bytestream), [`erase_source`](#erase_source), [`FileUpload`](#fileupload), [`MultipartData`](#multipartdata)
+[Request bodies](#request-bodies): [`ByteSource`](#bytesource), [`ByteStream`](), [`erase_source`](), [`FileUpload`](), [`MultipartData`]()
 
-[JSON](#json): [`Json`](#json-1), [`JsonValue`](#jsonvalue-1), [`parse_json`](#parse_json)
+[JSON](): [`Json`](), [`JsonValue`](), [`parse_json`]()
 
-[Cookies](#cookies): [`Cookies`](#cookies-1), [`Cookie`](#cookie), [`CookieJar`](#cookiejar), [`SameSite`](#samesite)
+[Cookies](): [`Cookies`](), [`Cookie`](), [`CookieJar`](), [`SameSite`]()
 
-[Authentication](#authentication): [`Auth`](#auth), [`AnyAuth`](#anyauth), [`erase_auth`](#erase_auth), [`BasicAuth`](#basicauth), [`basic_auth`](#basic_auth), [`DigestAuth`](#digestauth), [`digest_auth`](#digest_auth), [`NetRCAuth`](#netrcauth), [`netrc_auth`](#netrc_auth), [`NoAuth`](#noauth), [`no_auth`](#no_auth)
+[Authentication](): [`Auth`](), [`AnyAuth`](), [`erase_auth`](), [`BasicAuth`](), [`basic_auth`](), [`DigestAuth`](), [`digest_auth`](), [`NetRCAuth`](), [`netrc_auth`](), [`NoAuth`](), [`no_auth`]()
 
-[Configuration](#configuration): [`Timeout`](#timeout), [`Deadline`](#deadline), [`Deadlines`](#deadlines), [`Duration`](#duration), [`Limits`](#limits), [`SSLVerify`](#sslverify), [`ClientCert`](#clientcert), [`Proxy`](#proxy), [`proxy_basic_auth`](#proxy_basic_auth), [`DefaultEncoding`](#defaultencoding)
+[Configuration](): [`Timeout`](), [`Deadline`](), [`Deadlines`](), [`Duration`](), [`Limits`](), [`SSLVerify`](), [`ClientCert`](), [`Proxy`](), [`proxy_basic_auth`](), [`DefaultEncoding`]()
 
-[Transports](#transports): [`Transport`](#transport), [`AnyTransport`](#anytransport), [`erase_transport`](#erase_transport), [`HTTPTransport`](#httptransport), [`AsyncTransport`](#asynctransport), [`AnyAsyncTransport`](#anyasynctransport), [`erase_async_transport`](#erase_async_transport), [`AsyncHTTPTransport`](#asynchttptransport), [`MockTransport`](#mocktransport), [`MockRouter`](#mockrouter), [`Route`](#route), [`BlockedTransport`](#blockedtransport), [`blocked`](#blocked), [`async_blocked`](#async_blocked), [`MountTable`](#mounttable), [`Mounts`](#mounts), [`AsyncMounts`](#asyncmounts), [`URLPattern`](#urlpattern)
+[Transports](): [`Transport`](), [`AnyTransport`](), [`erase_transport`](), [`HTTPTransport`](), [`AsyncTransport`](), [`AnyAsyncTransport`](), [`erase_async_transport`](), [`AsyncHTTPTransport`](), [`MockTransport`](), [`MockRouter`](), [`Route`](), [`BlockedTransport`](), [`blocked`](), [`async_blocked`](), [`MountTable`](), [`Mounts`](), [`AsyncMounts`](), [`URLPattern`]()
 
-[Event hooks](#event-hooks): [`EventHooks`](#eventhooks), [`RequestHook`](#requesthook), [`ResponseHook`](#responsehook), [`AnyRequestHook`](#anyrequesthook), [`AnyResponseHook`](#anyresponsehook), [`erase_request_hook`](#erase_request_hook), [`erase_response_hook`](#erase_response_hook)
+[Event hooks](): [`EventHooks`](), [`RequestHook`](), [`ResponseHook`](), [`AnyRequestHook`](), [`AnyResponseHook`](), [`erase_request_hook`](), [`erase_response_hook`]()
 
-[Errors](#errors): [`kind_of`](#kind_of), [`message_of`](#message_of), [`ErrorKind`](#errorkind), [`is_http_error`](#is_http_error), [`is_request_error`](#is_request_error), [`is_transport_error`](#is_transport_error), [`is_timeout`](#is_timeout), [`is_connect_timeout`](#is_connect_timeout), [`is_read_timeout`](#is_read_timeout), [`is_write_timeout`](#is_write_timeout), [`is_pool_timeout`](#is_pool_timeout), [`is_network_error`](#is_network_error), [`is_connect_error`](#is_connect_error), [`is_protocol_error`](#is_protocol_error), [`is_local_protocol_error`](#is_local_protocol_error), [`is_remote_protocol_error`](#is_remote_protocol_error), [`is_proxy_error`](#is_proxy_error), [`is_unsupported_protocol`](#is_unsupported_protocol), [`is_decoding_error`](#is_decoding_error), [`is_too_many_redirects`](#is_too_many_redirects), [`is_invalid_url`](#is_invalid_url), [`is_status_error`](#is_status_error), [`is_stream_error`](#is_stream_error), [`is_invalid_header`](#is_invalid_header), [`is_invalid_argument`](#is_invalid_argument), [`is_cookie_conflict`](#is_cookie_conflict), [`new_error`](#new_error)
+[Errors](): [`kind_of`](), [`message_of`](), [`ErrorKind`](), [`is_http_error`](), [`is_request_error`](), [`is_transport_error`](), [`is_timeout`](), [`is_connect_timeout`](), [`is_read_timeout`](), [`is_write_timeout`](), [`is_pool_timeout`](), [`is_network_error`](), [`is_connect_error`](), [`is_protocol_error`](), [`is_local_protocol_error`](), [`is_remote_protocol_error`](), [`is_proxy_error`](), [`is_unsupported_protocol`](), [`is_decoding_error`](), [`is_too_many_redirects`](), [`is_invalid_url`](), [`is_status_error`](), [`is_stream_error`](), [`is_invalid_header`](), [`is_invalid_argument`](), [`is_cookie_conflict`](), [`new_error`]()
 
-[Utilities](#utilities): [`Link`](#link), [`parse_links`](#parse_links), [`__version__`](#__version__), [`MOJO_MIN_VERSION`](#mojo_min_version)
+[Utilities](): [`Link`](), [`parse_links`](), [`__version__`](), [`MOJO_MIN_VERSION`]()
 
 ## Sending a request
 
@@ -283,6 +283,15 @@ comptime Client = BaseClient[AnyTransport, _default_transport]
 ```
 
 The synchronous client. See `BaseClient` for everything it can do.
+
+```mojo
+from httpx import Client, URL
+
+def main() raises:
+    with Client(base_url=URL("https://api.example.com")) as client:
+        var r = client.get("/users/1")
+        print(r.status_code, r.text())
+```
 
 The members below are `BaseClient`'s. It is bound at compile time and cannot be named on its own, so they are listed here.
 
@@ -701,6 +710,15 @@ comptime AsyncClient = BaseClient[AnyAsyncTransport, _default_async_transport]
 
 The async client. See `BaseClient` for everything it can do.
 
+```mojo
+from httpx import AsyncClient
+
+def main() raises:
+    with AsyncClient() as client:
+        var r = client.get("https://example.com/")
+        print(r.status_code, r.text())
+```
+
 The same as `Client` above, with an async transport behind it. Its members are listed there.
 
 ### `gather`
@@ -771,6 +789,16 @@ The backing store is `Bytes` rather than `String` because that is what the
 accessors that matter hand out. Returning a view of a `String` would mean
 reconstructing one from bytes at the boundary, and the only way to do that
 without a UTF-8 check is an unsafe call, which does not belong in this layer.
+
+```mojo
+from httpx import URL
+
+def main() raises:
+    var url = URL("https://user@example.com:8443/a/b?page=1#top")
+    print(url.scheme(), url.host(), url.port().value(), url.path())
+    print(url.join("../c"))
+    print(url.copy_set_param("page", "2"))
+```
 
 #### `URL.__init__`
 
@@ -1039,6 +1067,18 @@ Keys and values are held decoded. Encoding happens on the way out, once, with
 the strict form set, so a value containing `&` cannot introduce a parameter
 that was not there.
 
+```mojo
+from httpx import Client, QueryParams
+
+def main() raises:
+    var params = QueryParams("page=1&tag=new")
+    params = params.add("tag", "featured")
+    print(params.get_list("tag")[1], params.encode())
+    with Client() as client:
+        var r = client.get("https://example.com/items", params=params^)
+        print(r.status_code)
+```
+
 #### `QueryParams.__init__`
 
 ```mojo
@@ -1213,6 +1253,17 @@ struct Request
 
 One request, ready to be handed to a transport.
 
+```mojo
+from httpx import Client, Headers, Request, URL
+
+def main() raises:
+    var headers = Headers()
+    headers["Accept"] = "application/json"
+    var request = Request("GET", URL("https://example.com/users"), headers^)
+    with Client() as client:
+        print(client.send(request^).status_code)
+```
+
 | Field | Type | What |
 | --- | --- | --- |
 | `method` | `String` |  |
@@ -1311,6 +1362,16 @@ struct Response
 ```
 
 One parsed response.
+
+```mojo
+from httpx import Client
+
+def main() raises:
+    with Client() as client:
+        var r = client.get("https://example.com/")
+        r.raise_for_status()
+        print(r.status_code, r.headers.get("content-type"), r.text())
+```
 
 | Field | Type | What |
 | --- | --- | --- |
@@ -1922,6 +1983,18 @@ Writing one out redacts `Authorization`, `Proxy-Authorization`, `Cookie` and
 `Set-Cookie`, so a debug print cannot put a credential in a log. Asking for
 the value by name still gives the value.
 
+```mojo
+from httpx import Client, Headers
+
+def main() raises:
+    var headers = Headers()
+    headers["User-Agent"] = "my-app/1.0"
+    headers.append("Accept", "application/json")
+    with Client(headers=headers^) as client:
+        var r = client.get("https://example.com/")
+        print(r.headers.get("content-type"))
+```
+
 #### `Headers.__init__`
 
 ```mojo
@@ -2225,6 +2298,19 @@ struct ByteChunks
 
 Raw or decoded bytes, re-chunked to a size the caller asked for.
 
+```mojo
+from httpx import Client
+
+def main() raises:
+    with Client() as client:
+        with client.stream("GET", "https://example.com/big.bin") as r:
+            var chunks = r.iter_bytes(65536)
+            var total = 0
+            while chunks.has_next():
+                total += len(chunks.next())
+            print(total)
+```
+
 #### `ByteChunks.__init__`
 
 ```mojo
@@ -2279,6 +2365,17 @@ struct LineChunks
 
 The body decoded to text and split into lines, without the terminators.
 
+```mojo
+from httpx import Client
+
+def main() raises:
+    with Client() as client:
+        with client.stream("GET", "https://example.com/events") as r:
+            var lines = r.iter_lines()
+            while lines.has_next():
+                print(lines.next())
+```
+
 #### `LineChunks.__init__`
 
 ```mojo
@@ -2323,6 +2420,17 @@ struct TextChunks
 ```
 
 The body decoded to text, in chunks of a given number of characters.
+
+```mojo
+from httpx import Client
+
+def main() raises:
+    with Client() as client:
+        with client.stream("GET", "https://example.com/big.txt") as r:
+            var chunks = r.iter_text(65536)
+            while chunks.has_next():
+                print(chunks.next())
+```
 
 #### `TextChunks.__init__`
 
@@ -2378,6 +2486,36 @@ trait ByteSource
 
 Something that can be pulled from until it is empty.
 
+```mojo
+    from httpx import ByteSource, Client, Headers, Request, URL, erase_source
+
+    struct Repeat(ByteSource, Movable):
+        var _left: Int
+
+        def __init__(out self, times: Int):
+            self._left = times
+
+        def read_chunk(mut self) raises -> List[UInt8]:
+            if self._left == 0:
+                return List[UInt8]()
+            self._left -= 1
+            return List[UInt8](String("chunk
+").as_bytes())
+
+        def close(mut self):
+            self._left = 0
+
+        def trailers(self) -> Headers:
+            return Headers()
+
+    def main() raises:
+        var request = Request.streaming(
+            "POST", URL("https://example.com/upload"), erase_source(Repeat(3))
+        )
+        with Client() as client:
+            print(client.send(request^).status_code)
+    ```
+
 #### `ByteSource.read_chunk`
 
 ```mojo
@@ -2422,6 +2560,37 @@ struct ByteStream
 ```
 
 A source whose type has been forgotten, ready to be stored.
+
+```mojo
+from httpx import ByteSource, ByteStream, Headers, Request, URL
+from httpx import erase_source
+
+struct Hello(ByteSource, Movable):
+    var _sent: Bool
+
+    def __init__(out self):
+        self._sent = False
+
+    def read_chunk(mut self) raises -> List[UInt8]:
+        if self._sent:
+            return List[UInt8]()
+        self._sent = True
+        return List[UInt8](String("hello").as_bytes())
+
+    def close(mut self):
+        self._sent = True
+
+    def trailers(self) -> Headers:
+        return Headers()
+
+def main() raises:
+    var body: ByteStream = erase_source(Hello())
+    var request = Request.streaming(
+        "POST", URL("https://example.com/upload"), body^
+    )
+    var taken = request.take_stream()
+    print(len(taken.read_chunk()), request.body_was_taken())
+```
 
 #### `ByteStream.__init__`
 
@@ -2491,6 +2660,17 @@ One file in a multipart body.
 filename. The filename may be empty too, which produces a part with no
 `filename` parameter at all.
 
+```mojo
+from httpx import Client, FileUpload, MultipartData
+
+def main() raises:
+    var form = MultipartData()
+    form.add("caption", "the roof")
+    form.add_file(FileUpload("photo", "roof.png", "not really a png"))
+    with Client() as client:
+        print(client.post("https://example.com/upload", files=form^).status_code)
+```
+
 | Field | Type |
 | --- | --- |
 | `field` | `String` |
@@ -2546,6 +2726,18 @@ Both live in the same body. The fields are written first and then the files,
 each group in the order it was added, which is the order httpx2 writes them
 and matters because some server side parsers hand the application whichever
 part they saw last under a repeated name.
+
+```mojo
+from httpx import Client, FileUpload, MultipartData
+
+def main() raises:
+    var form = MultipartData()
+    form.add("name", "alice")
+    form.add_file(FileUpload("avatar", "me.png", "not really a png"))
+    with Client() as client:
+        var r = client.post("https://example.com/profile", files=form^)
+        print(r.status_code)
+```
 
 | Field | Type |
 | --- | --- |
@@ -2606,9 +2798,15 @@ A whole JSON document, owning its nodes and its text.
 Built by parsing, or assembled a field at a time for a request body:
 
 ```mojo
-var payload = Json.object()
-payload.set("name", Json("widget"))
-payload.set("count", Json(3))
+from httpx import Client, Json
+
+def main() raises:
+    var body = Json.object()
+    body.set("name", "alice")
+    body.set("admin", True)
+    with Client() as client:
+        var r = client.post("https://example.com/users", json=body^)
+        print(r.json().value()["id"].as_int())
 ```
 
 The root value is always node zero, so an empty `Json` does not exist. A
@@ -2848,6 +3046,16 @@ Two origins because it holds two spans into two different fields of the
 are always the same document. Nothing here allocates and nothing here can
 outlive the document, which the compiler enforces.
 
+```mojo
+from httpx import Json
+
+def main() raises:
+    var doc = Json.loads('{"users": [{"name": "alice"}]}')
+    var root = doc.value()
+    var first = root["users"][0]
+    print(first["name"].as_string(), first.is_object())
+```
+
 #### `JsonValue.__init__`
 
 ```mojo
@@ -3048,6 +3256,17 @@ the jar holds the same name for two domains or two paths, the lookup raises
 `CookieConflict` rather than choosing, since either choice would be wrong
 half the time and wrong silently.
 
+```mojo
+from httpx import Client, Cookies
+
+def main() raises:
+    var jar = Cookies()
+    jar.set("consent", "yes", domain="example.com")
+    with Client(cookies=jar^) as client:
+        var r = client.get("https://example.com/account")
+        print(r.status_code, client.cookies.get("session"))
+```
+
 | Field | Type |
 | --- | --- |
 | `jar` | `CookieJar` |
@@ -3219,6 +3438,15 @@ exactly the host that sent it, while one with `Domain=example.com` belongs
 to that host and every host under it. Both end up with `domain` set to
 something, so without a separate flag the narrow case silently widens.
 
+```mojo
+from httpx import Cookie
+
+def main() raises:
+    var c = Cookie("session", "abc123", domain="example.com", secure=True)
+    print(c.matches("example.com", "/", True))
+    print(c.is_expired(0))
+```
+
 | Field | Type |
 | --- | --- |
 | `name` | `String` |
@@ -3292,6 +3520,15 @@ because every read is a scan anyway: deciding whether a cookie applies to a
 request means running the domain and path rules against each one, and there
 is no key that could be looked up instead. Jars hold single digit numbers of
 cookies in practice.
+
+```mojo
+from httpx import CookieJar, Cookie, URL
+
+def main() raises:
+    var jar = CookieJar()
+    jar.store(Cookie("session", "abc123", domain="example.com"))
+    print(jar.header_for(URL("https://example.com/account"), 0))
+```
 
 #### `CookieJar.__init__`
 
@@ -3426,6 +3663,19 @@ attribute and a server that writes `SameSite=None` are saying different
 things, and collapsing them loses the only signal a caller has for which
 happened.
 
+```mojo
+from httpx import Cookie, SameSite
+
+def main() raises:
+    var c = Cookie(
+        "session",
+        "abc123",
+        domain="example.com",
+        same_site=SameSite.STRICT,
+    )
+    print(c.same_site.name())
+```
+
 | Constant | Value |
 | --- | --- |
 | `UNSET` | `SameSite(0)` |
@@ -3466,6 +3716,30 @@ A scheme that can put credentials on a request.
 Two methods because there are two moments: before anything has been sent,
 and after a response has come back. A scheme that only needs the first, like
 Basic, answers the second with nothing and costs one round trip.
+
+```mojo
+from httpx import Auth, Client, Request, Response, erase_auth
+
+struct ApiKeyAuth(Auth, Movable):
+    var _key: String
+
+    def __init__(out self, key: StringSpan):
+        self._key = String(key)
+
+    def sign(mut self, var request: Request) raises -> Request:
+        request.headers["X-Api-Key"] = self._key
+        return request^
+
+    def next_request(mut self, response: Response) raises -> Optional[Request]:
+        return None
+
+    def requires_response_body(self) -> Bool:
+        return False
+
+def main() raises:
+    with Client(auth=erase_auth(ApiKeyAuth("s3cret"))) as client:
+        print(client.get("https://api.example.com/private").status_code)
+```
 
 #### `Auth.sign`
 
@@ -3510,6 +3784,18 @@ An auth scheme whose type has been forgotten, ready to be stored.
 The same trick as `AnyTransport` and for the same reason: Mojo 1.0 has no
 trait objects, a field has one type, and a client has to be able to hold
 whichever scheme the caller picked.
+
+```mojo
+from httpx import AnyAuth, Client, basic_auth, no_auth
+
+def main() raises:
+    var anonymous = False
+    var scheme = basic_auth("alice", "s3cret")
+    if anonymous:
+        scheme = no_auth()
+    with Client(auth=scheme^) as client:
+        print(client.get("https://api.example.com/private").status_code)
+```
 
 #### `AnyAuth.__init__`
 
@@ -3573,6 +3859,14 @@ Base64 is not encryption and this is not a secure scheme over a plain
 connection. It is here because it is what a great many servers ask for, and
 because httpx has it.
 
+```mojo
+from httpx import BasicAuth, Client, erase_auth
+
+def main() raises:
+    with Client(auth=erase_auth(BasicAuth("alice", "s3cret"))) as client:
+        print(client.get("https://api.example.com/private").status_code)
+```
+
 #### `BasicAuth.__init__`
 
 ```mojo
@@ -3627,6 +3921,14 @@ every later request goes out authenticated straight away, which is what the
 nonce count field is for: it lets the server see that a captured header is
 being replayed.
 
+```mojo
+from httpx import Client, DigestAuth, erase_auth
+
+def main() raises:
+    with Client(auth=erase_auth(DigestAuth("alice", "s3cret"))) as client:
+        print(client.get("https://api.example.com/private").status_code)
+```
+
 #### `DigestAuth.__init__`
 
 ```mojo
@@ -3677,6 +3979,14 @@ The file is read once, when this is built, rather than per request. A file
 that changed under a running program would otherwise give two requests in
 the same session two different identities, and the failure would depend on
 timing.
+
+```mojo
+from httpx import Client, NetRCAuth, erase_auth
+
+def main() raises:
+    with Client(auth=erase_auth(NetRCAuth())) as client:
+        print(client.get("https://api.example.com/private").status_code)
+```
 
 #### `NetRCAuth.__init__`
 
@@ -3729,6 +4039,17 @@ For turning a client's scheme off on one call. httpx spells that
 `not passed`. Here `auth` is an `Optional` and empty already means take the
 client's, so saying nothing at all needs a value rather than an absence.
 
+```mojo
+from httpx import Client, NoAuth, basic_auth, erase_auth
+
+def main() raises:
+    with Client(auth=basic_auth("alice", "s3cret")) as client:
+        var open = client.get(
+            "https://api.example.com/open", auth=erase_auth(NoAuth())
+        )
+        print(open.status_code)
+```
+
 #### `NoAuth.__init__`
 
 ```mojo
@@ -3778,6 +4099,23 @@ different answers. A connect that times out means the host is unreachable
 and there is nothing to retry against; a read that times out means the
 server took the request and went quiet; a pool timeout means the wait was
 on this program rather than on the network. One number cannot say which.
+
+```mojo
+from httpx import Client, Timeout
+
+def main() raises:
+    with Client(timeout=Timeout.uniform(10.0)) as quick:
+        print(quick.get("https://example.com/").status_code)
+
+    var patient = Timeout(
+        connect_seconds=5.0,
+        read_seconds=60.0,
+        write_seconds=5.0,
+        pool_seconds=5.0,
+    )
+    with Client(timeout=patient) as slow:
+        print(slow.get("https://example.com/big").status_code)
+```
 
 | Field | Type |
 | --- | --- |
@@ -3854,6 +4192,15 @@ struct Deadline
 ```
 
 A point in time to stop waiting at, and what to raise when it arrives.
+
+```mojo
+from httpx import Deadline
+
+def main() raises:
+    var read_by = Deadline.after(5.0)
+    print(read_by.expired(), read_by.remaining_ms())
+    read_by.check("reading the response")
+```
 
 | Field | Type | What |
 | --- | --- | --- |
@@ -4033,6 +4380,15 @@ second in the pool would silently get a second longer to connect.
 Layered here rather than with the rest of the configuration because the pool
 and the transport need it and neither can see the configuration layer.
 
+```mojo
+from httpx import Deadlines
+
+def main() raises:
+    var budget = Deadlines.after(5.0, 30.0, 5.0, 5.0)
+    print(budget.connect.remaining_ms(), budget.read.remaining_ms())
+    print(Deadlines.never().read.expired())
+```
+
 | Field | Type |
 | --- | --- |
 | `connect` | `Deadline` |
@@ -4091,6 +4447,15 @@ struct Duration
 ```
 
 An elapsed time, held as nanoseconds.
+
+```mojo
+from httpx import Client
+
+def main() raises:
+    with Client() as client:
+        var r = client.get("https://example.com/")
+        print(r.elapsed().milliseconds(), r.elapsed().seconds())
+```
 
 | Field | Type |
 | --- | --- |
@@ -4190,6 +4555,19 @@ distinction matters: a `max_connections` of zero is a pool that can never
 connect, which is a mistake somebody would rather find at construction than
 at the first request, so it is rejected here.
 
+```mojo
+from httpx import Client, Limits
+
+def main() raises:
+    var limits = Limits(
+        max_connections=100,
+        max_keepalive_connections=20,
+        keepalive_expiry=5.0,
+    )
+    with Client(limits=limits) as client:
+        print(client.get("https://example.com/").status_code)
+```
+
 | Field | Type | What |
 | --- | --- | --- |
 | `max_connections` | `Optional[Int]` |  |
@@ -4253,6 +4631,14 @@ chain checking, because a hostname check against an unverified chain is
 theatre: an attacker who can present any certificate can present one with
 the right name on it. There is no configuration in which one is on and the
 other is off.
+
+```mojo
+from httpx import Client, SSLVerify
+
+def main() raises:
+    with Client(verify=SSLVerify.from_file("/etc/ssl/private-ca.pem")) as ca:
+        print(ca.get("https://internal.example.com/").status_code)
+```
 
 | Field | Type |
 | --- | --- |
@@ -4330,6 +4716,15 @@ the key, and a Mojo `String` is not page locked or wiped on free. A
 deployment that cares should use an unencrypted key with file permissions
 doing the work, which is what the password would be protecting anyway.
 
+```mojo
+from httpx import Client, ClientCert
+
+def main() raises:
+    var cert = ClientCert("/etc/ssl/client.pem", "/etc/ssl/client.key")
+    with Client(cert=cert) as client:
+        print(client.get("https://mtls.example.com/").status_code)
+```
+
 | Field | Type |
 | --- | --- |
 | `certfile` | `String` |
@@ -4357,6 +4752,15 @@ One proxy, and the headers that go to it rather than through it.
 
 Copied explicitly rather than implicitly, because `URL` is, and because a
 value holding a credential is one worth having to name a copy of.
+
+```mojo
+from httpx import Client, Proxy
+
+def main() raises:
+    var proxy = Proxy("http://proxy.internal:8080")
+    with Client(proxy=proxy^) as client:
+        print(client.get("https://example.com/").status_code)
+```
 
 | Field | Type | What |
 | --- | --- | --- |
@@ -4460,6 +4864,15 @@ Either a fixed name or a detector, matching the two things httpx2 accepts for
 `default_encoding`. Mojo has no union type, so this is a struct with one of
 the two set, and the constructors are what keep a caller from setting both.
 
+```mojo
+from httpx import Client, DefaultEncoding
+
+def main() raises:
+    with Client(default_encoding=DefaultEncoding("iso-8859-1")) as client:
+        var r = client.get("https://example.com/legacy")
+        print(r.encoding(), r.text())
+```
+
 | Field | Type |
 | --- | --- |
 | `name` | `String` |
@@ -4506,6 +4919,32 @@ the request, because a transport that cannot see the deadline cannot honour
 it, and the four way timeout is the promise this library is built around.
 httpx hides it in an untyped extensions map, which makes the one guarantee
 users care about depend on a string key being spelled right.
+
+```mojo
+from httpx import Client, Deadlines, Request, Response, Transport
+from httpx import erase_transport
+
+struct Canned(Movable, Transport):
+    def __init__(out self):
+        pass
+
+    def handle_request(
+        mut self, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        return Response(200, content=List[UInt8](String("ok").as_bytes()))
+
+    def handle_stream(
+        mut self, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        return self.handle_request(request^, deadlines)
+
+    def close(mut self):
+        pass
+
+def main() raises:
+    with Client(transport=erase_transport(Canned())) as client:
+        print(client.get("https://example.com/").text())
+```
 
 #### `Transport.handle_request`
 
@@ -4554,6 +4993,19 @@ struct AnyTransport
 ```
 
 A transport whose type has been forgotten, ready to be stored.
+
+```mojo
+from httpx import AnyTransport, Client, HTTPTransport, blocked
+from httpx import erase_transport
+
+def main() raises:
+    var offline = False
+    var transport = erase_transport(HTTPTransport())
+    if offline:
+        transport = blocked("no network in this run")
+    with Client(transport=transport^) as client:
+        print(client.get("https://example.com/").status_code)
+```
 
 #### `AnyTransport.__init__`
 
@@ -4644,6 +5096,15 @@ struct HTTPTransport
 
 The default transport. A connection pool and nothing else, yet.
 
+```mojo
+from httpx import Client, HTTPTransport, Limits, erase_transport
+
+def main() raises:
+    var transport = HTTPTransport(limits=Limits(max_connections=10))
+    with Client(transport=erase_transport(transport^)) as client:
+        print(client.get("https://example.com/").status_code)
+```
+
 | Field | Type |
 | --- | --- |
 | `pool` | `SharedPool` |
@@ -4713,6 +5174,40 @@ What an async transport has to be able to do.
 The deadlines are an argument for the reason they are one on `Transport`: a
 transport that cannot see the deadline cannot honour it.
 
+```mojo
+from httpx import AsyncClient, AsyncTransport, Deadlines, Request, Response
+from httpx import erase_async_transport
+
+struct Canned(AsyncTransport, Movable):
+    def __init__(out self):
+        pass
+
+    def handle_request(
+        mut self, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        return Response(200)
+
+    def handle_stream(
+        mut self, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        return Response(200)
+
+    def handle_many(
+        mut self, var requests: List[Request], deadlines: Deadlines
+    ) raises -> List[Response]:
+        var out = List[Response]()
+        for _ in range(len(requests)):
+            out.append(Response(200))
+        return out^
+
+    def close(mut self):
+        pass
+
+def main() raises:
+    with AsyncClient(transport=erase_async_transport(Canned())) as client:
+        print(client.get("https://example.com/").status_code)
+```
+
 #### `AsyncTransport.handle_request`
 
 ```mojo
@@ -4773,6 +5268,19 @@ struct AnyAsyncTransport
 ```
 
 An async transport whose type has been forgotten, ready to be stored.
+
+```mojo
+from httpx import AnyAsyncTransport, AsyncClient, AsyncHTTPTransport
+from httpx import async_blocked, erase_async_transport
+
+def main() raises:
+    var offline = False
+    var transport = erase_async_transport(AsyncHTTPTransport())
+    if offline:
+        transport = async_blocked("no network in this run")
+    with AsyncClient(transport=transport^) as client:
+        print(client.get("https://example.com/").status_code)
+```
 
 #### `AnyAsyncTransport.__init__`
 
@@ -4873,6 +5381,15 @@ http only for now. The pool refuses an https request with a message saying
 so rather than sending it in the clear, because there is no async TLS
 handshake yet. See `httpx._pool.aio_pool`.
 
+```mojo
+from httpx import AsyncClient, AsyncHTTPTransport, erase_async_transport
+
+def main() raises:
+    var transport = erase_async_transport(AsyncHTTPTransport())
+    with AsyncClient(transport=transport^) as client:
+        print(client.get("https://example.com/").status_code)
+```
+
 | Field | Type |
 | --- | --- |
 | `pool` | `SharedAsyncPool` |
@@ -4946,6 +5463,17 @@ struct MockTransport
 ```
 
 Answers every request by calling `handler`.
+
+```mojo
+from httpx import Client, MockTransport, Request, Response, erase_transport
+
+def answer(var request: Request) raises -> Response:
+    return Response(200, content=List[UInt8](String("ok").as_bytes()))
+
+def main() raises:
+    with Client(transport=erase_transport(MockTransport(answer))) as client:
+        print(client.get("https://example.com/").text())
+```
 
 | Field | Type | What |
 | --- | --- | --- |
@@ -5028,6 +5556,18 @@ First match wins, so the specific routes go first and `Route.any()` goes
 last. A request that matches nothing raises rather than answering, because a
 mock that quietly returned 404 for a URL the test never meant to hit would
 turn a typo into a plausible looking test failure somewhere else.
+
+```mojo
+from httpx import Client, MockRouter, Route, erase_transport
+
+def main() raises:
+    var router = MockRouter()
+    router.add(Route.get("https://example.com/users").respond_json(200, "[]"))
+    router.add(Route.post("https://example.com/users").respond(201))
+    with Client(transport=erase_transport(router^)) as client:
+        print(client.get("https://example.com/users").text())
+        print(client.post("https://example.com/users").status_code)
+```
 
 | Field | Type | What |
 | --- | --- | --- |
@@ -5144,6 +5684,17 @@ expression and the route is never half built.
 Anything left unset matches anything. A route made from a path matches that
 path on any host, which is what a test with one server wants, and a route
 made from an absolute URL pins the scheme, host and port as well.
+
+```mojo
+from httpx import Client, MockRouter, Route, erase_transport
+
+def main() raises:
+    var route = Route.get("https://example.com/users").respond_json(200, "[]")
+    var router = MockRouter()
+    router.add(route^)
+    with Client(transport=erase_transport(router^)) as client:
+        print(client.get("https://example.com/users").status_code)
+```
 
 | Field | Type | What |
 | --- | --- | --- |
@@ -5330,6 +5881,18 @@ One struct for both clients. The two transport traits differ only by
 `handle_many`, and a transport that never sends anything has the same
 nothing to do in either.
 
+```mojo
+from httpx import BlockedTransport, Client, erase_transport
+
+def main() raises:
+    var transport = erase_transport(BlockedTransport("no network in tests"))
+    with Client(transport=transport^) as client:
+        try:
+            print(client.get("https://example.com/").status_code)
+        except e:
+            print(e)
+```
+
 | Field | Type | What |
 | --- | --- | --- |
 | `reason` | `String` | What the error says after naming the URL, or empty for the default. |
@@ -5408,6 +5971,18 @@ A routing table, kept in the order it will be searched.
 
 Sorted on insert rather than at the end, so there is no step a caller can
 forget and no window where the table is built but not yet usable.
+
+```mojo
+from httpx import AnyTransport, Client, HTTPTransport, MountTable
+from httpx import blocked, erase_transport
+
+def main() raises:
+    var routes = MountTable[AnyTransport]()
+    routes.mount("all://internal.example.com", erase_transport(HTTPTransport()))
+    routes.mount("http://", blocked("plaintext is not allowed here"))
+    with Client(mounts=routes^) as client:
+        print(client.get("https://internal.example.com/").status_code)
+```
 
 | Field | Type |
 | --- | --- |
@@ -5493,9 +6068,16 @@ comptime Mounts = MountTable[AnyTransport]
 The routing table a `Client` takes, built up a mount at a time.
 
 ```mojo
-var routes = Mounts()
-routes.mount("all://internal.example.com", erase_transport(HTTPTransport()))
-routes.mount("http://", blocked())
+from httpx import Client, Mounts, HTTPTransport, blocked, erase_transport
+
+def main() raises:
+    var routes = Mounts()
+    routes.mount(
+        "all://internal.example.com", erase_transport(HTTPTransport())
+    )
+    routes.mount("http://", blocked())
+    with Client(mounts=routes^) as client:
+        print(client.get("https://example.com/").status_code)
 ```
 
 A named type rather than a dictionary literal because Mojo has no literal that
@@ -5511,6 +6093,16 @@ comptime AsyncMounts = MountTable[AnyAsyncTransport]
 
 The same for an `AsyncClient`, holding async transports.
 
+```mojo
+from httpx import AsyncClient, AsyncMounts, async_blocked
+
+def main() raises:
+    var routes = AsyncMounts()
+    routes.mount("http://", async_blocked("plaintext is not allowed here"))
+    with AsyncClient(mounts=routes^) as client:
+        print(client.get("https://example.com/").status_code)
+```
+
 ### `URLPattern`
 
 ```mojo
@@ -5523,6 +6115,15 @@ Parsed by hand rather than through `URL`, because these are not URLs. A
 pattern host can be `*.example.com`, which no URL parser should accept, and
 running one through IDNA and percent decoding on the way in would either
 reject it or quietly turn it into something else.
+
+```mojo
+from httpx import URL, URLPattern
+
+def main() raises:
+    var pattern = URLPattern("all://*.example.com")
+    print(pattern.matches(URL("https://api.example.com/users")))
+    print(pattern.matches(URL("https://example.org/users")))
+```
 
 | Field | Type | What |
 | --- | --- | --- |
@@ -5591,6 +6192,25 @@ once per call. That is httpx's behaviour and it is the useful one: a hook
 that only saw the last request of a chain would be a hook that missed the
 request that actually got redirected.
 
+```mojo
+from httpx import Client, EventHooks, Request, Response
+
+def stamp(var request: Request) raises -> Request:
+    request.headers["X-Trace-Id"] = "abc123"
+    return request^
+
+def note(var response: Response) raises -> Response:
+    print("saw", response.status_code)
+    return response^
+
+def main() raises:
+    var hooks = EventHooks()
+    hooks.on_request(stamp)
+    hooks.on_response(note)
+    with Client(event_hooks=hooks^) as client:
+        print(client.get("https://example.com/").status_code)
+```
+
 | Field | Type |
 | --- | --- |
 | `request` | `List[AnyRequestHook]` |
@@ -5644,6 +6264,27 @@ trait RequestHook
 
 Something that gets a look at every request before it is sent.
 
+```mojo
+from httpx import Client, EventHooks, Request, RequestHook
+from httpx import erase_request_hook
+
+struct Stamp(Movable, RequestHook):
+    var _value: String
+
+    def __init__(out self, value: StringSpan):
+        self._value = String(value)
+
+    def on_request(mut self, var request: Request) raises -> Request:
+        request.headers["X-Trace-Id"] = self._value
+        return request^
+
+def main() raises:
+    var hooks = EventHooks()
+    hooks.request.append(erase_request_hook(Stamp("abc123")))
+    with Client(event_hooks=hooks^) as client:
+        print(client.get("https://example.com/").status_code)
+```
+
 #### `RequestHook.on_request`
 
 ```mojo
@@ -5663,6 +6304,25 @@ trait ResponseHook
 ```
 
 Something that gets a look at every response as it arrives.
+
+```mojo
+from httpx import Client, EventHooks, Response, ResponseHook
+from httpx import erase_response_hook
+
+struct Log(Movable, ResponseHook):
+    def __init__(out self):
+        pass
+
+    def on_response(mut self, var response: Response) raises -> Response:
+        print(response.status_code)
+        return response^
+
+def main() raises:
+    var hooks = EventHooks()
+    hooks.response.append(erase_response_hook(Log()))
+    with Client(event_hooks=hooks^) as client:
+        print(client.get("https://example.com/").status_code)
+```
 
 #### `ResponseHook.on_response`
 
@@ -5684,6 +6344,21 @@ struct AnyRequestHook
 ```
 
 A request hook whose type has been forgotten, ready to be stored.
+
+```mojo
+from httpx import AnyRequestHook, EventHooks, Request, URL
+
+def stamp(var request: Request) raises -> Request:
+    request.headers["X-Trace-Id"] = "abc123"
+    return request^
+
+def main() raises:
+    var hooks = EventHooks()
+    hooks.on_request(stamp)
+    var boxed: AnyRequestHook = hooks.request[0].copy()
+    var stamped = boxed.call(Request("GET", URL("https://example.com/")))
+    print(stamped.headers["X-Trace-Id"])
+```
 
 #### `AnyRequestHook.__init__`
 
@@ -5732,6 +6407,20 @@ struct AnyResponseHook
 ```
 
 A response hook whose type has been forgotten, ready to be stored.
+
+```mojo
+from httpx import AnyResponseHook, EventHooks, Response
+
+def note(var response: Response) raises -> Response:
+    print("saw", response.status_code)
+    return response^
+
+def main() raises:
+    var hooks = EventHooks()
+    hooks.on_response(note)
+    var boxed: AnyResponseHook = hooks.response[0].copy()
+    print(boxed.call(Response(200)).status_code)
+```
 
 #### `AnyResponseHook.__init__`
 
@@ -5830,6 +6519,19 @@ masked compare.
 
 Nothing uses zero as a child index, which is what makes the prefix trick
 unambiguous.
+
+```mojo
+from httpx import Client, ErrorKind, kind_of
+
+def main() raises:
+    with Client() as client:
+        try:
+            var r = client.get("https://example.com/")
+            print(r.status_code)
+        except e:
+            var kind = kind_of(e)
+            print(kind.name(), kind.matches(ErrorKind.TRANSPORT_ERROR))
+```
 
 | Field | Type |
 | --- | --- |
@@ -6196,6 +6898,17 @@ One entry from a `Link` header.
 Parameter names are lowercased, because RFC 8288 makes them case
 insensitive. Values are left exactly as they arrived: a `title` is text
 meant for a person and a URL is case sensitive in its path.
+
+```mojo
+from httpx import Client
+
+def main() raises:
+    with Client() as client:
+        var r = client.get("https://api.example.com/items")
+        for link in r.links():
+            print(link.rel(), link.param("title").or_else(""))
+        print(r.link_url("next"))
+```
 
 | Field | Type | What |
 | --- | --- | --- |

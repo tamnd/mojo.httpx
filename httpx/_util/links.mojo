@@ -46,6 +46,18 @@ struct Link(Movable, Writable):
     Parameter names are lowercased, because RFC 8288 makes them case
     insensitive. Values are left exactly as they arrived: a `title` is text
     meant for a person and a URL is case sensitive in its path.
+
+    ```mojo
+    from httpx import Client
+
+
+    def main() raises:
+        with Client() as client:
+            var r = client.get("https://api.example.com/items")
+            for link in r.links():
+                print(link.rel(), link.param("title").or_else(""))
+            print(r.link_url("next"))
+    ```
     """
 
     var url: String

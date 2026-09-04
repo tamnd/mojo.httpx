@@ -133,7 +133,19 @@ def _decoded(headers: Headers, var content: List[UInt8]) raises -> List[UInt8]:
 
 
 struct Response(Movable, Writable):
-    """One parsed response."""
+    """One parsed response.
+
+    ```mojo
+    from httpx import Client
+
+
+    def main() raises:
+        with Client() as client:
+            var r = client.get("https://example.com/")
+            r.raise_for_status()
+            print(r.status_code, r.headers.get("content-type"), r.text())
+    ```
+    """
 
     var status_code: Int
     var reason_phrase: String

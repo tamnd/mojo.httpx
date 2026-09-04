@@ -51,7 +51,20 @@ def normalize_method(method: StringSpan) raises -> String:
 
 
 struct Request(Movable, Writable):
-    """One request, ready to be handed to a transport."""
+    """One request, ready to be handed to a transport.
+
+    ```mojo
+    from httpx import Client, Headers, Request, URL
+
+
+    def main() raises:
+        var headers = Headers()
+        headers["Accept"] = "application/json"
+        var request = Request("GET", URL("https://example.com/users"), headers^)
+        with Client() as client:
+            print(client.send(request^).status_code)
+    ```
+    """
 
     var method: String
     var url: URL

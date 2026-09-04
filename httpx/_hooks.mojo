@@ -26,7 +26,31 @@ from httpx._util.erase import ErasedBox
 
 
 trait RequestHook(Movable):
-    """Something that gets a look at every request before it is sent."""
+    """Something that gets a look at every request before it is sent.
+
+    ```mojo
+    from httpx import Client, EventHooks, Request, RequestHook
+    from httpx import erase_request_hook
+
+
+    struct Stamp(Movable, RequestHook):
+        var _value: String
+
+        def __init__(out self, value: StringSpan):
+            self._value = String(value)
+
+        def on_request(mut self, var request: Request) raises -> Request:
+            request.headers["X-Trace-Id"] = self._value
+            return request^
+
+
+    def main() raises:
+        var hooks = EventHooks()
+        hooks.request.append(erase_request_hook(Stamp("abc123")))
+        with Client(event_hooks=hooks^) as client:
+            print(client.get("https://example.com/").status_code)
+    ```
+    """
 
     def on_request(mut self, var request: Request) raises -> Request:
         """The request as it should go out.
@@ -39,7 +63,29 @@ trait RequestHook(Movable):
 
 
 trait ResponseHook(Movable):
-    """Something that gets a look at every response as it arrives."""
+    """Something that gets a look at every response as it arrives.
+
+    ```mojo
+    from httpx import Client, EventHooks, Response, ResponseHook
+    from httpx import erase_response_hook
+
+
+    struct Log(Movable, ResponseHook):
+        def __init__(out self):
+            pass
+
+        def on_response(mut self, var response: Response) raises -> Response:
+            print(response.status_code)
+            return response^
+
+
+    def main() raises:
+        var hooks = EventHooks()
+        hooks.response.append(erase_response_hook(Log()))
+        with Client(event_hooks=hooks^) as client:
+            print(client.get("https://example.com/").status_code)
+    ```
+    """
 
     def on_response(mut self, var response: Response) raises -> Response:
         """The response as the caller should see it.
@@ -53,7 +99,25 @@ trait ResponseHook(Movable):
 
 
 struct AnyRequestHook(Movable):
-    """A request hook whose type has been forgotten, ready to be stored."""
+    """A request hook whose type has been forgotten, ready to be stored.
+
+    ```mojo
+    from httpx import AnyRequestHook, EventHooks, Request, URL
+
+
+    def stamp(var request: Request) raises -> Request:
+        request.headers["X-Trace-Id"] = "abc123"
+        return request^
+
+
+    def main() raises:
+        var hooks = EventHooks()
+        hooks.on_request(stamp)
+        var boxed: AnyRequestHook = hooks.request[0].copy()
+        var stamped = boxed.call(Request("GET", URL("https://example.com/")))
+        print(stamped.headers["X-Trace-Id"])
+    ```
+    """
 
     var _state: ErasedBox
     var _call: def(ErasedBox, var Request) raises thin -> Request
@@ -89,7 +153,24 @@ struct AnyRequestHook(Movable):
 
 
 struct AnyResponseHook(Movable):
-    """A response hook whose type has been forgotten, ready to be stored."""
+    """A response hook whose type has been forgotten, ready to be stored.
+
+    ```mojo
+    from httpx import AnyResponseHook, EventHooks, Response
+
+
+    def note(var response: Response) raises -> Response:
+        print("saw", response.status_code)
+        return response^
+
+
+    def main() raises:
+        var hooks = EventHooks()
+        hooks.on_response(note)
+        var boxed: AnyResponseHook = hooks.response[0].copy()
+        print(boxed.call(Response(200)).status_code)
+    ```
+    """
 
     var _state: ErasedBox
     var _call: def(ErasedBox, var Response) raises thin -> Response
@@ -172,6 +253,28 @@ struct EventHooks(Movable, Sized):
     once per call. That is httpx's behaviour and it is the useful one: a hook
     that only saw the last request of a chain would be a hook that missed the
     request that actually got redirected.
+
+    ```mojo
+    from httpx import Client, EventHooks, Request, Response
+
+
+    def stamp(var request: Request) raises -> Request:
+        request.headers["X-Trace-Id"] = "abc123"
+        return request^
+
+
+    def note(var response: Response) raises -> Response:
+        print("saw", response.status_code)
+        return response^
+
+
+    def main() raises:
+        var hooks = EventHooks()
+        hooks.on_request(stamp)
+        hooks.on_response(note)
+        with Client(event_hooks=hooks^) as client:
+            print(client.get("https://example.com/").status_code)
+    ```
     """
 
     var request: List[AnyRequestHook]

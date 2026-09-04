@@ -38,6 +38,32 @@ trait Auth(Movable):
     Two methods because there are two moments: before anything has been sent,
     and after a response has come back. A scheme that only needs the first, like
     Basic, answers the second with nothing and costs one round trip.
+
+    ```mojo
+    from httpx import Auth, Client, Request, Response, erase_auth
+
+
+    struct ApiKeyAuth(Auth, Movable):
+        var _key: String
+
+        def __init__(out self, key: StringSpan):
+            self._key = String(key)
+
+        def sign(mut self, var request: Request) raises -> Request:
+            request.headers["X-Api-Key"] = self._key
+            return request^
+
+        def next_request(mut self, response: Response) raises -> Optional[Request]:
+            return None
+
+        def requires_response_body(self) -> Bool:
+            return False
+
+
+    def main() raises:
+        with Client(auth=erase_auth(ApiKeyAuth("s3cret"))) as client:
+            print(client.get("https://api.example.com/private").status_code)
+    ```
     """
 
     def sign(mut self, var request: Request) raises -> Request:
@@ -69,6 +95,19 @@ struct AnyAuth(Movable):
     The same trick as `AnyTransport` and for the same reason: Mojo 1.0 has no
     trait objects, a field has one type, and a client has to be able to hold
     whichever scheme the caller picked.
+
+    ```mojo
+    from httpx import AnyAuth, Client, basic_auth, no_auth
+
+
+    def main() raises:
+        var anonymous = False
+        var scheme = basic_auth("alice", "s3cret")
+        if anonymous:
+            scheme = no_auth()
+        with Client(auth=scheme^) as client:
+            print(client.get("https://api.example.com/private").status_code)
+    ```
     """
 
     var _state: ErasedBox
@@ -154,6 +193,15 @@ struct BasicAuth(Auth, Movable):
     Base64 is not encryption and this is not a secure scheme over a plain
     connection. It is here because it is what a great many servers ask for, and
     because httpx has it.
+
+    ```mojo
+    from httpx import BasicAuth, Client, erase_auth
+
+
+    def main() raises:
+        with Client(auth=erase_auth(BasicAuth("alice", "s3cret"))) as client:
+            print(client.get("https://api.example.com/private").status_code)
+    ```
     """
 
     var _header: String
@@ -334,6 +382,15 @@ struct NetRCAuth(Auth, Movable):
     that changed under a running program would otherwise give two requests in
     the same session two different identities, and the failure would depend on
     timing.
+
+    ```mojo
+    from httpx import Client, NetRCAuth, erase_auth
+
+
+    def main() raises:
+        with Client(auth=erase_auth(NetRCAuth())) as client:
+            print(client.get("https://api.example.com/private").status_code)
+    ```
     """
 
     var _entries: List[_NetrcEntry]
@@ -648,6 +705,15 @@ struct DigestAuth(Auth, Movable):
     every later request goes out authenticated straight away, which is what the
     nonce count field is for: it lets the server see that a captured header is
     being replayed.
+
+    ```mojo
+    from httpx import Client, DigestAuth, erase_auth
+
+
+    def main() raises:
+        with Client(auth=erase_auth(DigestAuth("alice", "s3cret"))) as client:
+            print(client.get("https://api.example.com/private").status_code)
+    ```
     """
 
     var _username: String
@@ -815,6 +881,18 @@ struct NoAuth(Auth, Movable):
     `auth=None`, which it can only do because it has a separate sentinel for
     `not passed`. Here `auth` is an `Optional` and empty already means take the
     client's, so saying nothing at all needs a value rather than an absence.
+
+    ```mojo
+    from httpx import Client, NoAuth, basic_auth, erase_auth
+
+
+    def main() raises:
+        with Client(auth=basic_auth("alice", "s3cret")) as client:
+            var open = client.get(
+                "https://api.example.com/open", auth=erase_auth(NoAuth())
+            )
+            print(open.status_code)
+    ```
     """
 
     def __init__(out self):

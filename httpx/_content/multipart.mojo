@@ -53,6 +53,18 @@ struct FileUpload(Movable):
     `content_type` may be left empty, in which case it is guessed from the
     filename. The filename may be empty too, which produces a part with no
     `filename` parameter at all.
+
+    ```mojo
+    from httpx import Client, FileUpload, MultipartData
+
+
+    def main() raises:
+        var form = MultipartData()
+        form.add("caption", "the roof")
+        form.add_file(FileUpload("photo", "roof.png", "not really a png"))
+        with Client() as client:
+            print(client.post("https://example.com/upload", files=form^).status_code)
+    ```
     """
 
     var field: String
@@ -103,6 +115,19 @@ struct MultipartData(Boolable, Movable, Sized):
     each group in the order it was added, which is the order httpx2 writes them
     and matters because some server side parsers hand the application whichever
     part they saw last under a repeated name.
+
+    ```mojo
+    from httpx import Client, FileUpload, MultipartData
+
+
+    def main() raises:
+        var form = MultipartData()
+        form.add("name", "alice")
+        form.add_file(FileUpload("avatar", "me.png", "not really a png"))
+        with Client() as client:
+            var r = client.post("https://example.com/profile", files=form^)
+            print(r.status_code)
+    ```
     """
 
     var names: List[String]

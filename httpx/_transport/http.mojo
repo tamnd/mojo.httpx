@@ -26,7 +26,18 @@ from httpx._transport.base import Transport
 
 
 struct HTTPTransport(Transport):
-    """The default transport. A connection pool and nothing else, yet."""
+    """The default transport. A connection pool and nothing else, yet.
+
+    ```mojo
+    from httpx import Client, HTTPTransport, Limits, erase_transport
+
+
+    def main() raises:
+        var transport = HTTPTransport(limits=Limits(max_connections=10))
+        with Client(transport=erase_transport(transport^)) as client:
+            print(client.get("https://example.com/").status_code)
+    ```
+    """
 
     var pool: SharedPool
 

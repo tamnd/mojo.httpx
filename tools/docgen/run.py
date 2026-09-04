@@ -275,8 +275,19 @@ def exports():
             found[public] = (module, declared.strip())
 
     module = None
+    fenced = False
     for line in source.splitlines():
         text = line.strip()
+        # The docstrings in this file carry examples, and an example imports
+        # `httpx` the way a caller would. Read as an import list that says every
+        # name in it lives in the package root, which is where the declarations
+        # are not.
+        if fenced:
+            fenced = text != "```"
+            continue
+        if text == "```mojo":
+            fenced = True
+            continue
         if text.startswith("from httpx"):
             module = text.split()[1]
             rest = text.split(" import ", 1)[1]

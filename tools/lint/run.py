@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Project specific lints for the httpx package.
 
-Four rules, each of which exists because breaking it produces a bug that no
+Five rules, each of which exists because breaking it produces a bug that no
 test would reliably catch.
 
 Layering. The package is a stack, and a module may only import from its own
@@ -24,6 +24,11 @@ Docstrings on the public surface. Every name `import httpx` hands out has to
 carry a docstring, because the API reference is generated from those and a name
 without one shows up in docs/api.md as a bare signature. Nothing about that
 fails, which is the problem: the page still builds and still looks complete.
+
+Examples on the exported types. A paragraph tells you what something is and an
+example tells you how to make one, and the second question is the one somebody
+arrives with. The example has to be a whole program so that `pixi run docex`
+can hand it to the compiler, which is what keeps it true a year from now.
 
     pixi run lint
 """
@@ -204,7 +209,7 @@ def check_layering(files: list[Path]) -> bool:
                 "tools/lint/run.py and say where it belongs.",
             )
             continue
-        text = path.read_text()
+        text = _without_examples(path.read_text())
         for match in IMPORT_RE.finditer(text):
             module = match.group(1)
             target = PACKAGE / module_to_path(module)
@@ -298,7 +303,7 @@ def check_unsafe(files: list[Path]) -> bool:
         layer = layer_of(path)
         module = path.relative_to(PACKAGE).as_posix()
         allowed = layer in UNSAFE_LAYERS or module in UNSAFE_MODULES
-        lines = path.read_text().splitlines()
+        lines = _without_examples(path.read_text()).splitlines()
         for index, line in enumerate(lines):
             if line.lstrip().startswith("#"):
                 continue
@@ -337,7 +342,7 @@ def check_deadlines(files: list[Path]) -> bool:
     found = Findings()
     for path in files:
         layer = layer_of(path)
-        text = path.read_text()
+        text = _without_examples(path.read_text())
         lines = text.splitlines()
         for index, line in enumerate(lines):
             if line.lstrip().startswith("#"):
@@ -401,7 +406,7 @@ INIT = "__init__.mojo"
 # afterwards rather than matched precisely, because a regex that tried to spell
 # the whole thing would be longer than the function that reads it.
 EXPORT_RE = re.compile(
-    r"^from[ \t]+httpx[\w.]*[ \t]+import[ \t]+([^\n]*(?:\n[ \t]+[^\n]*)*)", re.M
+    r"^from[ \t]+(httpx[\w.]*)[ \t]+import[ \t]+([^\n]*(?:\n[ \t]+[^\n]*)*)", re.M
 )
 ALIAS_RE = re.compile(r"^comptime\s+(\w+)\s*=", re.M)
 
@@ -410,6 +415,16 @@ ALIAS_RE = re.compile(r"^comptime\s+(\w+)\s*=", re.M)
 RENAME_RE = re.compile(r"\b(\w+)\s+as\s+(\w+)\b")
 
 DEFINITION_RE = re.compile(r"^(?:struct|trait)\s+(\w+)|^def\s+(\w+)|^comptime\s+(\w+)\s*=")
+
+# An alias whose value starts with a type name, which is how `Client`, its async
+# twin and the two mount tables are declared.
+TYPE_ALIAS_RE = re.compile(r"^comptime\s+\w+\s*=\s*[A-Z]\w*")
+
+# What an example looks like, and what makes it a program rather than a snippet.
+# Both spellings have to agree with tools/docex/run.py, which is the thing that
+# actually compiles them.
+FENCE = "```mojo"
+ENTRY = "def main("
 
 
 def _without_prose(text: str) -> str:
@@ -423,6 +438,32 @@ def _without_prose(text: str) -> str:
     return re.sub(r"(?m)#.*$", "", text)
 
 
+def _without_examples(text: str) -> str:
+    """The source with the inside of every ```mojo block blanked out.
+
+    A docstring example is a program written from the outside, so it imports
+    `httpx` and calls the public API, and every check here that reads a line at
+    a time would otherwise see it as code in this file. The layering check is
+    the loud one: `from httpx import Client` inside a transport docstring is an
+    import from the top of the package into layer 8, which is exactly the thing
+    it exists to refuse, and exactly what an example is supposed to look like.
+
+    Blanked rather than dropped so that a finding still points at the line it is
+    on.
+    """
+    out = []
+    inside = False
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if inside:
+            out.append("" if stripped != "```" else line)
+            inside = stripped != "```"
+        else:
+            out.append(line)
+            inside = stripped == "```mojo"
+    return "\n".join(out)
+
+
 def _is_public(name: str) -> bool:
     """Whether a re-exported name is part of the API.
 
@@ -434,19 +475,25 @@ def _is_public(name: str) -> bool:
     return not name.startswith("_") or name.startswith("__")
 
 
-def exported_names(files: list[Path]) -> dict[str, str]:
-    """Every name `import httpx` hands out, mapped to the name it is defined as.
+def exported_names(files: list[Path]) -> dict[str, tuple[str, str]]:
+    """Every name `import httpx` hands out, and where its definition lives.
 
-    The two differ only for a rename, and there is one of those today. The value
-    is what to look for in the package, the key is what a caller writes.
+    The key is what a caller writes. The value is the name it is declared under,
+    which differs only for a rename, and the module it was imported from.
+
+    The module matters because a rename can make two things share a name. Today
+    `Mounts` is both a struct in `_transport/mounts.mojo`, exported as
+    `MountTable`, and an alias in `__init__.mojo` for that struct with its
+    parameter filled in. Looking either of them up by name alone finds whichever
+    file sorts first and documents the wrong one.
     """
-    out: dict[str, str] = {}
+    out: dict[str, tuple[str, str]] = {}
     for path in files:
         if path.name != INIT or path.parent != PACKAGE:
             continue
         source = _without_prose(path.read_text())
         for match in EXPORT_RE.finditer(source):
-            body = match.group(1)
+            module, body = match.group(1), match.group(2)
             renamed = {new: old for old, new in RENAME_RE.findall(body)}
             for word in re.split(r"[,\s()]+", body):
                 if not re.fullmatch(r"[A-Za-z_]\w*", word or "") or word == "as":
@@ -455,14 +502,49 @@ def exported_names(files: list[Path]) -> dict[str, str]:
                     continue
                 if not _is_public(word):
                     continue
-                out[word] = renamed.get(word, word)
+                out[word] = (renamed.get(word, word), module)
         for match in ALIAS_RE.finditer(source):
-            out[match.group(1)] = match.group(1)
+            out[match.group(1)] = (match.group(1), "httpx")
     return out
 
 
-def _has_docstring(lines: list[str], index: int) -> bool:
-    """Whether the definition starting at `index` is followed by a docstring.
+def _definitions(files: list[Path]) -> dict[tuple[str, str], tuple[Path, int, list[str]]]:
+    """Where every top level definition in the package is, by module and name."""
+    out: dict[tuple[str, str], tuple[Path, int, list[str]]] = {}
+    for path in files:
+        module = path.relative_to(PACKAGE).as_posix()
+        lines = path.read_text().splitlines()
+        for index, line in enumerate(lines):
+            match = DEFINITION_RE.match(line)
+            if not match:
+                continue
+            name = match.group(1) or match.group(2) or match.group(3)
+            out.setdefault((module, name), (path, index, lines))
+    return out
+
+
+def _find(
+    definitions: dict[tuple[str, str], tuple[Path, int, list[str]]],
+    declared: str,
+    module: str,
+) -> tuple[Path, int, list[str]] | None:
+    """The definition an export points at.
+
+    The module it was imported from is tried first. Falling back to any module
+    covers a name that was re-exported once already on its way up, which is not
+    something the package does today but is not worth failing over.
+    """
+    here = definitions.get((module_to_path(module), declared))
+    if here is not None:
+        return here
+    for (_, name), where in definitions.items():
+        if name == declared:
+            return where
+    return None
+
+
+def _docstring_of(lines: list[str], index: int) -> str | None:
+    """The docstring on the definition starting at `index`, or None.
 
     The header can run over many lines, so it is walked to the line that ends
     it: a closing colon for a `def`, `struct` or `trait`, and the first line for
@@ -475,11 +557,27 @@ def _has_docstring(lines: list[str], index: int) -> bool:
         while cursor < len(lines) and not lines[cursor].rstrip().endswith(":"):
             cursor += 1
         if cursor >= len(lines):
-            return False
+            return None
     cursor += 1
     while cursor < len(lines) and not lines[cursor].strip():
         cursor += 1
-    return cursor < len(lines) and lines[cursor].strip().startswith('"""')
+    if cursor >= len(lines) or not lines[cursor].strip().startswith('"""'):
+        return None
+    first = lines[cursor].strip()
+    if first.endswith('"""') and len(first) > 3:
+        return first
+    out = [lines[cursor]]
+    cursor += 1
+    while cursor < len(lines):
+        out.append(lines[cursor])
+        if '"""' in lines[cursor]:
+            break
+        cursor += 1
+    return "\n".join(out)
+
+
+def _has_docstring(lines: list[str], index: int) -> bool:
+    return _docstring_of(lines, index) is not None
 
 
 def check_docstrings(files: list[Path]) -> bool:
@@ -494,18 +592,11 @@ def check_docstrings(files: list[Path]) -> bool:
     wanted = exported_names(files)
     if not wanted:
         return found.report("docstrings")
-    seen: dict[str, tuple[Path, int, list[str]]] = {}
-    for path in files:
-        lines = path.read_text().splitlines()
-        for index, line in enumerate(lines):
-            match = DEFINITION_RE.match(line)
-            if not match:
-                continue
-            name = match.group(1) or match.group(2) or match.group(3)
-            seen.setdefault(name, (path, index, lines))
+    definitions = _definitions(files)
     init = PACKAGE / INIT
-    for public, defined in sorted(wanted.items()):
-        if defined not in seen:
+    for public, (defined, module) in sorted(wanted.items()):
+        where = _find(definitions, defined, module)
+        if where is None:
             found.add(
                 init,
                 1,
@@ -513,7 +604,7 @@ def check_docstrings(files: list[Path]) -> bool:
                 "A stale re-export compiles until somebody imports the name.",
             )
             continue
-        path, index, lines = seen[defined]
+        path, index, lines = where
         if not _has_docstring(lines, index):
             found.add(
                 path,
@@ -523,6 +614,60 @@ def check_docstrings(files: list[Path]) -> bool:
                 "bare signature.",
             )
     return found.report("docstrings")
+
+
+def check_examples(files: list[Path]) -> bool:
+    """Every exported type carries a compilable example.
+
+    Types only, not every exported name. A type is what somebody looks up when
+    they do not know how to build one, and the answer to that is a few lines of
+    code and not a paragraph. The error predicates are the other end of it:
+    twenty one of them differing by one word, where twenty one examples would
+    say less than the one sentence each already has.
+
+    A whole program rather than a snippet, because `pixi run docex` compiles
+    these and a snippet cannot be compiled. It is also the more honest form. An
+    example that leaves out the imports is one nobody has run.
+    """
+    found = Findings()
+    wanted = exported_names(files)
+    if not wanted:
+        return found.report("examples")
+    definitions = _definitions(files)
+    for public, (defined, module) in sorted(wanted.items()):
+        where = _find(definitions, defined, module)
+        if where is None:
+            continue
+        path, index, lines = where
+        if not _is_type(lines[index]):
+            continue
+        docstring = _docstring_of(lines, index) or ""
+        if FENCE not in docstring:
+            found.add(
+                path,
+                index + 1,
+                f"{public} is an exported type with no example. Put a ```mojo "
+                "block in its docstring showing how to make one.",
+            )
+        elif ENTRY not in docstring:
+            found.add(
+                path,
+                index + 1,
+                f"the example on {public} is a fragment rather than a program. "
+                "Give it a `def main` so pixi run docex can compile it.",
+            )
+    return found.report("examples")
+
+
+def _is_type(line: str) -> bool:
+    """Whether a definition line declares a type.
+
+    An alias counts when its right hand side starts with a type name, which is
+    how `Client` and `Mounts` are declared. `MOJO_MIN_VERSION` is an alias too
+    and is not a type, and telling them apart by the shape of the value is
+    enough here and does not need the compiler.
+    """
+    return line.startswith(("struct ", "trait ")) or bool(TYPE_ALIAS_RE.match(line))
 
 
 def _functions(lines: list[str]) -> list[tuple[str, str, int, int]]:
@@ -641,6 +786,21 @@ SELFTEST_CASES = [
         '"""m."""\n\nfrom httpx._models.ghost import Ghost\n',
         check_docstrings,
     ),
+    (
+        # An exported type documented in prose and nothing else.
+        "__init__.mojo",
+        '"""m."""\n\ncomptime Widget = Gadget\n"""A widget."""\n',
+        check_examples,
+    ),
+    (
+        # And one whose example is a snippet, which reads like an example and
+        # cannot be compiled, so nothing would ever tell anyone it had rotted.
+        "__init__.mojo",
+        '"""m."""\n\ncomptime Widget = Gadget\n"""A widget.\n\n'
+        "```mojo\nvar w = Widget()\n```\n"
+        '"""\n',
+        check_examples,
+    ),
 ]
 
 
@@ -686,6 +846,7 @@ def main() -> int:
         check_unsafe(files),
         check_deadlines(files),
         check_docstrings(files),
+        check_examples(files),
     ]
     print("")
     if all(results):

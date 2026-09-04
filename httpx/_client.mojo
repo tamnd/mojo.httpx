@@ -963,4 +963,15 @@ def _default_transport(
 
 
 comptime Client = BaseClient[AnyTransport, _default_transport]
-"""The synchronous client. See `BaseClient` for everything it can do."""
+"""The synchronous client. See `BaseClient` for everything it can do.
+
+```mojo
+from httpx import Client, URL
+
+
+def main() raises:
+    with Client(base_url=URL("https://api.example.com")) as client:
+        var r = client.get("/users/1")
+        print(r.status_code, r.text())
+```
+"""
