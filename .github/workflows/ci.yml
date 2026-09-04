@@ -57,6 +57,12 @@ jobs:
       # docs/api.md is generated from the source and committed. This is what
       # catches a renamed argument that nobody re-rendered the page for.
       - run: pixi run docs-check
+      # The same export list, checked against the test suite instead. A public
+      # name that no test mentions is behaviour nobody has pinned down, and it
+      # is invisible to the compiler and to a passing suite. It sits here rather
+      # than on the test job because it reads the tests as text and never builds
+      # them, so it wants the toolchain and not the matrix.
+      - run: pixi run census
 
   docs:
     name: docs
