@@ -220,6 +220,8 @@ tools/fleet/run.sh --role interop -- pixi run interop-proxy
 
 The script copies the working tree over SSH, installs the pinned toolchain on the other end, and runs the task. It holds no credentials and needs no runner registered with GitHub. The only requirement is that `ssh <name>` already works.
 
+One thing about it is worth knowing before you read a result. The remote script arrives on the far end's stdin, because the Windows host answers with cmd.exe and cannot be handed a quoted bash command any other way. A command that reads stdin therefore reads the rest of the script, and the lines after it are never run. The symptom is a run that stops partway through and reports nothing, no output, no error and no exit status, which is easy to mistake for the task itself dying. The body of the remote script is a brace group with its input taken from `/dev/null` so this cannot happen, and anything added there has to stay inside that group.
+
 ### The machines
 
 | Host | Platform | Roles |
