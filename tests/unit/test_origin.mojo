@@ -117,6 +117,19 @@ def test_an_ipv6_host_keeps_its_brackets_off() raises:
     assert_equal(origin.port, 8080)
 
 
+def test_an_authority_is_the_host_and_port() raises:
+    var origin = _origin("https://example.com/thing")
+    assert_equal(origin.authority(), "example.com:443")
+
+
+def test_an_ipv6_authority_gets_its_brackets_back() raises:
+    """Which is the form a CONNECT request line takes. Without the brackets the
+    colon before the port is one more colon in the address, and a proxy reading
+    the line has no way to tell where the address ends."""
+    var origin = _origin("https://[::1]:8443/thing")
+    assert_equal(origin.authority(), "[::1]:8443")
+
+
 def test_a_relative_url_has_no_origin() raises:
     var url = URL("/just/a/path")
     var raised = False

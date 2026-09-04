@@ -63,17 +63,23 @@ struct Origin(Equatable, ImplicitlyCopyable, Movable, Writable):
         # byte is the whole test.
         return ":" in self.host
 
+    def authority(self) -> String:
+        """`example.com:443`, which is the form a CONNECT request line and a
+        `Host` header both take.
+
+        An address gets its brackets back here. Without them the colon before
+        the port is just one more colon in an IPv6 address, and a proxy reading
+        the request line has no way to tell where the address ends.
+        """
+        if self.is_ipv6_literal():
+            return String("[", self.host, "]:", self.port)
+        return String(self.host, ":", self.port)
+
     def write_to[W: Writer](self, mut writer: W):
         """`https://example.com:443`, which is what a user should see in an
         error. The port is shown even when it is the default, because an error
-        about a connection should say exactly what was connected to, and an
-        address gets its brackets back so that the port is still readable."""
-        writer.write(self.scheme, "://")
-        if self.is_ipv6_literal():
-            writer.write("[", self.host, "]")
-        else:
-            writer.write(self.host)
-        writer.write(":", self.port)
+        about a connection should say exactly what was connected to."""
+        writer.write(self.scheme, "://", self.authority())
 
 
 def origin_for(url: URL) raises -> Origin:

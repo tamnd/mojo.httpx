@@ -41,6 +41,11 @@ connection to the server would be filed under different keys for the same host,
 or worse, under the same one. Deciding at the pool rather than at the request
 means the connection to the proxy is only ever reused by another request that is
 also going through it.
+
+A tunnel is the exception that proves it. A `CONNECT` to an https server is filed
+under the server rather than under the proxy, because that is what is on the far
+end of it: the pipe reaches one host and nothing else, so a request for a
+different host cannot use it even though it went through the same proxy.
 """
 
 from std.memory import ArcPointer
@@ -54,6 +59,7 @@ from httpx._io.deadline import (
     now_ns,
 )
 from httpx._io.dns import Resolver
+from httpx._io.socket import TcpStream
 from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.response import Response
@@ -63,6 +69,7 @@ from httpx._pool.limits import Limits
 from httpx._pool.origin import Origin, origin_for
 from httpx._pool.proxy import Hop, Proxy, route_through
 from httpx._proto.h1.head import ResponseHead
+from httpx._proto.h1.tunnel import open_tunnel
 from httpx._proto.h1.writer import TargetForm
 from httpx._stream.config import TlsConfig
 from httpx._stream.stream import Stream
@@ -226,7 +233,7 @@ struct ConnectionPool(Movable):
         kept a copy of every request it has ever sent.
         """
         var route = self._route(request, form)
-        var conn = self._acquire(route.origin, deadlines)
+        var conn = self._acquire(route, deadlines)
         self._leased += 1
 
         var response: Response
@@ -249,23 +256,33 @@ struct ConnectionPool(Movable):
         return route_through(self.proxy, request, form)
 
     def _acquire(
-        mut self, origin: Origin, deadlines: Deadlines
+        mut self, route: Hop, deadlines: Deadlines
     ) raises -> Connection:
-        """A connection to `origin`, reused if there is a sound one to reuse.
+        """A connection for `route`, reused if there is a sound one to reuse.
 
         A new connection comes back already knowing which protocol it speaks.
         `Connection` asks the stream what ALPN settled on, which is the only
         place the answer exists and the only moment it can be had, so there is
         no protocol decision anywhere else in the pool.
+
+        Reuse is decided by `route.origin` alone and that is enough, because a
+        pool is either a direct pool or a proxy pool for its whole life. Within
+        one pool the same origin always means the same way of getting there.
         """
+        var origin = route.origin
         var found = self._take_idle(origin)
         if found:
             return found.take()
 
         self._make_room(origin, deadlines)
-        var tcp = connect_to_host(
-            self.resolver, origin.host, origin.port, deadlines.connect
-        )
+        var tcp: TcpStream
+        if route.connect_via:
+            tcp = self._tunnel_to(origin, route.connect_via.value(), deadlines)
+        else:
+            tcp = connect_to_host(
+                self.resolver, origin.host, origin.port, deadlines.connect
+            )
+
         if not origin.is_secure():
             # Always HTTP/1.1. HTTP/2 without TLS exists but has no negotiation
             # in it: both ends have to have been told beforehand, and a client
@@ -291,6 +308,29 @@ struct ConnectionPool(Movable):
                 )
             )
         )
+
+    def _tunnel_to(
+        mut self, target: Origin, via: Origin, deadlines: Deadlines
+    ) raises -> TcpStream:
+        """Open a socket to `via` and CONNECT it through to `target`.
+
+        Comes back before TLS, on purpose. What this returns is a bare TCP
+        stream that happens to reach the server rather than the proxy, and
+        `_acquire` then hands it to `TlsStream` with the server's name on it,
+        so the certificate is checked against the host the caller asked for and
+        the proxy is not in a position to present one of its own.
+
+        `via` is an `http://` proxy, which `route_through` has already made sure
+        of, so there is no TLS on this socket until `_acquire` puts it there.
+        """
+        var tcp = connect_to_host(
+            self.resolver, via.host, via.port, deadlines.connect
+        )
+        var headers = Headers()
+        if self.proxy:
+            headers = self.proxy.value().headers.copy()
+        open_tunnel(tcp, target.authority(), headers, deadlines.connect)
+        return tcp^
 
     def _take_idle(mut self, origin: Origin) -> Optional[Connection]:
         """The oldest sound idle connection to `origin`, closing any that are
@@ -516,7 +556,7 @@ def stream_request(
     either way the caller does not have to do anything for that to happen.
     """
     var route = pool[]._route(request, form)
-    var conn = pool[]._acquire(route.origin, deadlines)
+    var conn = pool[]._acquire(route, deadlines)
     pool[]._leased += 1
 
     var head: ResponseHead

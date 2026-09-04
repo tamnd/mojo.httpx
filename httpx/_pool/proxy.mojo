@@ -5,6 +5,13 @@ corporate network it is not optional. The client opens a connection to the proxy
 instead of to the server, writes the whole URL in the request line rather than
 just the path, and the proxy makes the real request and hands the answer back.
 
+That only works for `http://`. An `https://` request is encrypted end to end, so
+there is no URL for the proxy to read and no response for it to hand back, and
+the client asks for a tunnel instead: a `CONNECT` naming the host and port, and
+after the 200 the socket is a pipe the proxy relays without looking at. The TLS
+handshake then runs inside it, to the real server, with the real certificate. See
+`httpx._proto.h1.tunnel`.
+
 Two details are load bearing and both are about credentials. `Proxy-Authorization`
 is not `Authorization`: it authenticates the client to the proxy and is consumed
 by the proxy, whereas `Authorization` is for the server at the far end and must
@@ -142,23 +149,48 @@ struct Proxy(Movable, Writable):
 
 
 struct Hop(ImplicitlyCopyable, Movable):
-    """Where the socket goes, and what the request line says.
+    """Where the socket goes, how it gets there, and what the request line says.
 
-    The two answers come apart the moment a proxy is involved: the connection is
-    to the proxy and the request target names the server. Returned together
-    because working one out without the other is how a request ends up asking a
-    proxy for `/path`, which every proxy answers with a 400.
+    The answers come apart the moment a proxy is involved. A forwarded request
+    connects to the proxy and names the server in its request target. A tunnelled
+    one connects to the proxy and then reaches the server, and its request target
+    is an ordinary path again. Returned together because working one out without
+    the other is how a request ends up asking a proxy for `/path`, which every
+    proxy answers with a 400.
     """
 
     var origin: Origin
-    """The host to open a connection to, and the key a pool files it under."""
+    """The far end of the connection, and the key a pool files it under.
+
+    The server for a direct request and for a tunnel, the proxy for a plain
+    http request being forwarded. A tunnel is keyed by the server because that
+    is what it reaches: it is a private pipe to one host, and handing it to a
+    request for a different host would send that request somewhere it never
+    asked to go. A forwarding connection is keyed by the proxy because that is
+    what it reaches too, and any other request through the same proxy can use it.
+    """
 
     var form: TargetForm
     """The request target shape to write."""
 
-    def __init__(out self, origin: Origin, form: TargetForm):
+    var connect_via: Optional[Origin]
+    """The proxy to open a CONNECT tunnel through, when there is one.
+
+    Nothing on a direct request and nothing on a plain http request being
+    forwarded, because neither of those tunnels. When it is set the socket goes
+    to this address, the CONNECT names `origin`, and everything after the 200
+    is between us and `origin` with the proxy relaying bytes it cannot read.
+    """
+
+    def __init__(
+        out self,
+        origin: Origin,
+        form: TargetForm,
+        var connect_via: Optional[Origin] = None,
+    ):
         self.origin = origin
         self.form = form
+        self.connect_via = connect_via^
 
 
 def route_through(
@@ -166,13 +198,18 @@ def route_through(
 ) raises -> Hop:
     """Decide the hop for one request, and put on it whatever the hop needs.
 
-    Without a proxy this is the identity: connect to the server named in the URL
-    and write the path. With one, the connection goes to the proxy, the request
-    line carries the whole URL so the proxy knows what to fetch, and the proxy's
-    own headers go on. `Proxy-Authorization` is added here, below the event hooks
-    and the auth flow, because it belongs to this hop rather than to the request
-    the caller wrote, and a hook that logged the request should not be printing
-    the credential for the proxy.
+    Three outcomes. Without a proxy this is the identity: connect to the server
+    named in the URL and write the path. With a proxy and an `http://` target the
+    connection goes to the proxy, the request line carries the whole URL so the
+    proxy knows what to fetch, and the proxy's own headers go on. With a proxy and
+    an `https://` target neither of those would work, because the request is about
+    to be encrypted and the proxy could not read the URL if it wanted to, so the
+    hop says to open a tunnel and the request is left exactly as it was.
+
+    `Proxy-Authorization` is added here, below the event hooks and the auth flow,
+    because it belongs to this hop rather than to the request the caller wrote,
+    and a hook that logged the request should not be printing the credential for
+    the proxy.
 
     A form the caller asked for that is not `ORIGIN` is left alone. Those are
     `CONNECT` and `OPTIONS *`, which are already addressed at the hop in front
@@ -187,19 +224,31 @@ def route_through(
 
     ref via = proxy.value()
     if target.is_secure():
-        raise new_error(
-            ErrorKind.PROXY_ERROR,
-            String(
-                "reaching ",
-                target,
-                " through the proxy at ",
-                via.url,
-                (
-                    " needs a CONNECT tunnel, which this client cannot open"
-                    " yet, so only http:// targets can go through a proxy"
+        var hop_origin = via.origin()
+        if hop_origin.is_secure():
+            # Refused here rather than when the socket is opened, so that
+            # nothing has been evicted from a pool for a connection that was
+            # never going to be made.
+            raise new_error(
+                ErrorKind.UNSUPPORTED_PROTOCOL,
+                String(
+                    "reaching ",
+                    target,
+                    " through the https proxy at ",
+                    hop_origin,
+                    (
+                        " needs TLS inside TLS, which this client cannot do"
+                        " yet, so an https target needs an http:// proxy"
+                    ),
                 ),
-            ),
-        )
+            )
+
+        # A tunnel, and deliberately without `via.apply`. The proxy's headers go
+        # on the CONNECT that opens the pipe, and putting them on the request
+        # inside it as well would send the proxy's password end to end to a
+        # server that has no business seeing it. The pool reads them off its own
+        # `proxy` when it opens the tunnel.
+        return Hop(target, form, Optional(hop_origin))
 
     via.apply(request)
     var wire = form

@@ -13,6 +13,13 @@ Run it with `--port 0` and it prints `PORT <n>` on stdout as soon as it is
 listening, then serves until it is killed. The port line is how a test knows both
 which port to talk to and that the server is ready, which beats sleeping and
 hoping.
+
+`--tls` serves the same routes over https with the certificate in
+`tests/fixtures/tls`, which is a self signed certificate for localhost that is
+also its own trust anchor. It is there so that the CONNECT tunnel tests have a
+real https server on the far end of the tunnel, and so that the https path can be
+exercised without the network. `tests/fixtures/tls/README.md` says how it was
+made and why checking a private key into a repository is fine in this one case.
 """
 
 from __future__ import annotations
@@ -21,6 +28,8 @@ import argparse
 import gzip
 import itertools
 import json
+import os
+import ssl
 import sys
 import threading
 import time
@@ -600,15 +609,44 @@ class Server(ThreadingHTTPServer):
             return next(self._conn_counter)
 
 
+CERT_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "fixtures", "tls"
+)
+
+
+def wrap_in_tls(server):
+    """Put the test certificate in front of an already listening server.
+
+    Wrapping the listening socket rather than each accepted one, which is what
+    `ssl` is built for and what keeps `serve_forever` unchanged. The port has
+    already been chosen and reported by the time this runs, so a test learns the
+    port the same way whether or not TLS is on.
+    """
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(
+        os.path.join(CERT_DIR, "server.pem"),
+        os.path.join(CERT_DIR, "server.key"),
+    )
+    # http/1.1 only, and said out loud rather than left to the default. Our
+    # client offers h2 as well on an https connection, and a server that stayed
+    # quiet about ALPN would leave the client to guess, which is the one thing
+    # ALPN exists to stop.
+    ctx.set_alpn_protocols(["http/1.1"])
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--tls", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
     server = Server((args.host, args.port), Handler)
     server.verbose = args.verbose
+    if args.tls:
+        wrap_in_tls(server)
     print("PORT %d" % server.server_address[1], flush=True)
     try:
         server.serve_forever()
