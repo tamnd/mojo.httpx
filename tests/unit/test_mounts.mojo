@@ -14,6 +14,7 @@ number came back, and that reads better than an assertion about a header.
 
 from std.testing import assert_equal, assert_false, assert_raises, assert_true
 
+from httpx import AsyncMounts, MountTable
 from httpx._aio_client import AsyncClient, gather
 from httpx._client import Client
 from httpx._io.deadline import Deadlines
@@ -24,7 +25,7 @@ from httpx._models.url import URL
 from httpx._pool.proxy import Proxy
 from httpx._transport.aio_base import AnyAsyncTransport, erase_async_transport
 from httpx._transport.base import AnyTransport, Transport, erase_transport
-from httpx._transport.blocked import async_blocked, blocked
+from httpx._transport.blocked import BlockedTransport, async_blocked, blocked
 from httpx._transport.mock import MockRouter, Route
 from httpx._transport.mounts import Mounts, URLPattern
 
@@ -233,6 +234,57 @@ def test_a_prefix_length_with_no_address_in_front_is_refused() raises:
         _ = URLPattern("all:///8")
 
 
+def test_a_wildcard_host_is_kept_as_written_as_well_as_as_matched() raises:
+    # Two flags rather than one, because the leading `*` and the `*.` differ
+    # only in whether the domain itself is in. The host keeps the `*` because
+    # the ordering rule measures its length.
+    var loose = URLPattern("all://*example.com")
+    assert_true(loose.subdomains)
+    assert_false(loose.strict)
+    assert_equal(loose.host, "*example.com")
+    assert_true(loose.matches(URL("http://example.com/")))
+
+    var strict = URLPattern("all://*.example.com")
+    assert_true(strict.subdomains)
+    assert_true(strict.strict)
+    assert_false(strict.matches(URL("http://example.com/")))
+    assert_true(strict.matches(URL("http://api.example.com/")))
+
+    var plain = URLPattern("all://example.com")
+    assert_false(plain.subdomains)
+    assert_false(plain.strict)
+
+
+def test_a_host_that_is_an_address_is_kept_as_a_number() raises:
+    # A prefix of -1 is what tells `matches` to compare hosts as text, so a name
+    # and an address have to come out of the parse looking different.
+    var name = URLPattern("all://example.com")
+    assert_equal(name.network.family, 0)
+    assert_equal(name.prefix, -1)
+
+    # An address written on its own is a range of one, which is why there is no
+    # separate exact address comparison anywhere in `matches`.
+    var one = URLPattern("all://127.0.0.1")
+    assert_equal(one.network.family, 4)
+    assert_equal(one.prefix, 32)
+
+    var wide = URLPattern("all://10.0.0.0/8")
+    assert_equal(wide.network.family, 4)
+    assert_equal(wide.prefix, 8)
+
+    var six = URLPattern("all://[fd00::]/16")
+    assert_equal(six.network.family, 6)
+    assert_equal(six.prefix, 16)
+
+
+def test_a_wildcard_host_is_never_read_as_an_address() raises:
+    # `*.0.0.1` is not an address and must not become one, or a pattern about
+    # subdomains would quietly turn into a pattern about a network.
+    var pattern = URLPattern("all://*.10.0.0.1")
+    assert_equal(pattern.network.family, 0)
+    assert_equal(pattern.prefix, -1)
+
+
 def test_a_tighter_range_is_tried_before_a_wider_one() raises:
     # Host length would put these in whichever order the network addresses
     # happen to be spelled, which is why ranges are ordered by prefix instead.
@@ -274,6 +326,20 @@ def test_patterns_that_tie_keep_the_order_they_were_added() raises:
     routes.mount("http://", _answering(200))
     routes.mount("all://", _answering(201))
     assert_equal(routes.entries[0].pattern.pattern, "http://")
+
+
+def test_neither_of_two_equally_specific_patterns_beats_the_other() raises:
+    # The answer the sort relies on to leave the mount order alone. If a tie
+    # answered True one way round, the order of a table would depend on how the
+    # sort happened to pair its entries up.
+    var one = URLPattern("all://example.com")
+    var other = URLPattern("all://example.org")
+    assert_false(one.beats(other))
+    assert_false(other.beats(one))
+
+    var with_port = URLPattern("all://*:8080")
+    assert_true(with_port.beats(one))
+    assert_false(one.beats(with_port))
 
 
 def test_mounting_the_same_pattern_twice_replaces_it() raises:
@@ -358,6 +424,26 @@ def test_a_blocked_mount_can_say_why() raises:
         _ = client.get("http://internal.test/")
 
 
+def test_a_blocked_transport_keeps_the_reason_it_was_built_with() raises:
+    # `blocked()` is a one line factory over this, so a caller who wants the
+    # struct, to put one in a list or to look at what a mount was built with,
+    # gets the same thing. Empty is the default message rather than no message.
+    assert_equal(
+        BlockedTransport("not ours to call").reason, "not ours to call"
+    )
+    assert_equal(BlockedTransport().reason, "")
+
+    var routes = Mounts[AnyTransport]()
+    routes.mount(
+        "all://internal.test", erase_transport(BlockedTransport("say why"))
+    )
+    var client = Client(
+        transport=Optional[AnyTransport](_answering(200)), mounts=routes^
+    )
+    with assert_raises(contains="say why"):
+        _ = client.get("http://internal.test/")
+
+
 def test_a_blocked_mount_refuses_a_stream_as_well() raises:
     var routes = Mounts[AnyTransport]()
     routes.mount("http://", blocked())
@@ -433,6 +519,28 @@ def test_without_the_bypass_the_same_request_goes_through_the_proxy() raises:
     assert_true("x-proxy-target" in response.headers)
     server.stop()
     proxy.stop()
+
+
+def test_the_exported_table_is_this_one_with_the_transport_filled_in() raises:
+    # `MountTable` is the struct, and `Mounts` and `AsyncMounts` are it with the
+    # transport type already chosen, which is what a caller writing `Mounts()`
+    # is relying on. An alias pointing at the wrong transport would compile
+    # everywhere except where a client is built, so it is checked here rather
+    # than left to whichever example noticed first.
+    var routes = MountTable[AnyTransport]()
+    routes.mount("all://mocked.test", _answering(201))
+    var client = Client(
+        transport=Optional[AnyTransport](_answering(200)), mounts=routes^
+    )
+    assert_equal(client.get("http://mocked.test/").status_code, 201)
+
+    var async_routes = AsyncMounts()
+    async_routes.mount("all://mocked.test", _async_answering(201))
+    var async_client = AsyncClient(
+        transport=Optional[AnyAsyncTransport](_async_answering(200)),
+        mounts=async_routes^,
+    )
+    assert_equal(async_client.get("http://mocked.test/").status_code, 201)
 
 
 def test_the_async_client_routes_by_mount_too() raises:

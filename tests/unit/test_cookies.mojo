@@ -25,6 +25,7 @@ from httpx._models.cookies import (
     parse_set_cookie,
     path_matches,
 )
+from httpx._models.headers import Headers
 from httpx._models.url import URL
 
 comptime NOW = 1700000000
@@ -440,3 +441,54 @@ def test_printing_a_cookie_does_not_print_its_value() raises:
     assert_true("supersecret" not in shown)
     assert_true("session=[11 bytes]" in shown)
     assert_true("Secure" in shown)
+
+
+def test_a_cookie_put_in_by_hand_is_sent_like_a_parsed_one() raises:
+    # `store` is the way in for a cookie that was built rather than parsed, and
+    # it skips every scoping check, which is why nothing above the jar uses it.
+    var jar = CookieJar()
+    jar.store(Cookie("a", "1", "example.com", "/", creation=NOW))
+    var found = jar.matching(URL("https://example.com/x"), NOW)
+    assert_equal(len(found), 1)
+    assert_equal(found[0].name, "a")
+    assert_equal(found[0].creation, NOW)
+
+
+def test_matching_leaves_out_what_does_not_belong_on_the_request() raises:
+    var jar = CookieJar()
+    jar.store(Cookie("here", "1", "example.com", "/", creation=NOW))
+    jar.store(Cookie("elsewhere", "2", "other.example", "/", creation=NOW))
+    var found = jar.matching(URL("https://example.com/x"), NOW)
+    assert_equal(len(found), 1)
+    assert_equal(found[0].name, "here")
+
+
+def test_extract_applies_every_set_cookie_and_counts_what_stuck() raises:
+    # The count is what tells a caller something changed, which the size of the
+    # jar does not: a refresh of a cookie already there leaves the size alone.
+    var jar = CookieJar()
+    var headers = Headers()
+    headers.append("set-cookie", "a=1")
+    headers.append("set-cookie", "b=2")
+    headers.append("set-cookie", "c=3; Domain=elsewhere.example")
+    var url = URL("https://example.com/")
+    assert_equal(jar.extract(url, headers, NOW), 2)
+    assert_equal(len(jar.matching(url, NOW)), 2)
+
+
+def test_extracting_from_a_response_with_no_set_cookie_stores_nothing() raises:
+    var jar = CookieJar()
+    assert_equal(jar.extract(URL("https://example.com/"), Headers(), NOW), 0)
+
+
+def test_cookies_extracts_into_the_jar_underneath_it() raises:
+    var cookies = Cookies()
+    var headers = Headers()
+    headers.append("set-cookie", "a=1; Path=/deep")
+    var deep = URL("https://example.com/deep/x")
+    assert_equal(cookies.extract(deep, headers, NOW), 1)
+    assert_equal(cookies["a"], "1")
+    # The dictionary on top holds names and values. The jar underneath is what
+    # holds the scoping, so it is the one that knows the cookie is not for /.
+    assert_equal(len(cookies.jar.matching(deep, NOW)), 1)
+    assert_equal(len(cookies.jar.matching(URL("https://example.com/"), NOW)), 0)

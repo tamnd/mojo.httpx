@@ -112,6 +112,18 @@ def test_a_mock_transport_records_what_it_was_given() raises:
     assert_equal(transport.requests[1].url.path(), "/two")
 
 
+def test_a_mock_transports_handler_can_be_swapped_partway_through() raises:
+    # The field is public so a test that wants the second call answered
+    # differently can change it, rather than building a second transport and
+    # losing the recording the first one had already made.
+    var transport = MockTransport(_hello)
+    _ = transport.handle_request(_request("/one"), _deadlines())
+    transport.handler = _teapot
+    var response = transport.handle_request(_request("/two"), _deadlines())
+    assert_equal(response.status_code, 418)
+    assert_equal(len(transport.requests), 2)
+
+
 def test_an_erased_transport_still_answers() raises:
     var transport = erase_transport[MockTransport](MockTransport(_hello))
     var response = transport.handle_request(_request("/erased"), _deadlines())

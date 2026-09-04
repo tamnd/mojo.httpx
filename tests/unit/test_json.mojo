@@ -606,3 +606,42 @@ def test_response_json_on_an_empty_body() raises:
     var r = response_with("", "application/json")
     with assert_raises(contains="the body is empty"):
         _ = r.json()
+
+
+def test_every_value_answers_one_kind_predicate() raises:
+    # Six kinds and six predicates, so the useful check is that each value says
+    # yes to exactly one of them.
+    var doc = parse('{"n":null,"b":true,"i":1,"s":"x","a":[],"o":{}}')
+    var root = doc.value()
+    assert_true(root["n"].is_null())
+    assert_true(root["b"].is_bool())
+    assert_true(root["i"].is_number())
+    assert_true(root["s"].is_string())
+    assert_true(root["a"].is_array())
+    assert_true(root["o"].is_object())
+    assert_true(root.is_object())
+
+    assert_false(root["b"].is_null())
+    assert_false(root["i"].is_string())
+    assert_false(root["s"].is_number())
+    assert_false(root["a"].is_object())
+    assert_false(root["o"].is_array())
+
+
+def test_a_number_is_a_number_however_it_is_written() raises:
+    var doc = parse("[0, -2, 3.5, 1e3]")
+    var root = doc.value()
+    for i in range(len(root)):
+        assert_true(root[i].is_number())
+        assert_false(root[i].is_string())
+
+
+def test_parse_takes_bytes_where_loads_takes_text() raises:
+    # The two entry points onto the same parser. `parse` is what a caller with a
+    # body in hand uses, since a body is bytes and turning it into a String
+    # first would copy it and could fail on input the parser is about to reject
+    # anyway.
+    var body = String('{"ok":true}').as_bytes()
+    var doc = Json.parse(body)
+    assert_true(doc.value()["ok"].as_bool())
+    assert_equal(String(doc), String(Json.loads('{"ok":true}')))

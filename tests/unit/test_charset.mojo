@@ -306,3 +306,14 @@ def test_a_detector_survives_a_copy() raises:
     var default = DefaultEncoding(always_windows)
     var again = default.copy()
     assert_equal(again.resolve(List[UInt8]()), "windows-1252")
+
+
+def test_a_default_encoding_holds_a_name_or_a_detector_and_not_both() raises:
+    # The pair stands in for a union type Mojo does not have, so the invariant
+    # worth pinning is that no constructor leaves both set.
+    var named = DefaultEncoding("iso-8859-1")
+    assert_false(Bool(named.detect))
+    assert_equal(named.name, "iso-8859-1")
+    var detecting = DefaultEncoding(always_windows)
+    assert_true(Bool(detecting.detect))
+    assert_equal(detecting.name, "utf-8")

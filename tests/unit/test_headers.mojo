@@ -459,3 +459,22 @@ def test_the_value_check_accepts_exactly_what_it_should() raises:
             accepted = False
         var legal = (code >= 0x20 and code != 0x7F) or code == 0x09
         assert_equal(accepted, legal)
+
+
+def test_a_value_comes_back_as_the_bytes_that_were_supplied() raises:
+    # The text accessors decode as latin-1, which cannot fail and cannot say
+    # what the bytes were. This is the pair to `raw_name` and it is what a
+    # caller reading a header that is not text has to use.
+    # The pair to `raw_name`, and the difference from reading by name: a name
+    # that appears twice comes back joined, where each field line still has its
+    # own value and this is the only way to get at it.
+    var headers = Headers()
+    headers.append("Accept", "text/html")
+    headers.append("Accept", "text/plain")
+    assert_equal(
+        String(StringSpan(from_utf8=headers.raw_value(0))), "text/html"
+    )
+    assert_equal(
+        String(StringSpan(from_utf8=headers.raw_value(1))), "text/plain"
+    )
+    assert_equal(headers["Accept"], "text/html, text/plain")

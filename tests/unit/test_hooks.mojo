@@ -18,6 +18,8 @@ from httpx._auth import basic_auth, digest_auth
 from httpx._client import Client
 from httpx._exceptions import ErrorKind, kind_of
 from httpx._hooks import (
+    AnyRequestHook,
+    AnyResponseHook,
     EventHooks,
     RequestHook,
     ResponseHook,
@@ -120,6 +122,24 @@ def test_a_plain_function_hook_can_change_the_request() raises:
     var client = Client(event_hooks=hooks^)
     var response = _get(client, server, "/headers")
     assert_true('"x-tagged": "yes"' in response.text().lower())
+    server.stop()
+
+
+def _note(var response: Response) raises -> Response:
+    response.headers["X-Noted"] = "yes"
+    return response^
+
+
+def test_a_plain_function_hook_can_change_the_response() raises:
+    # The response side of the same convenience. Worth its own test because the
+    # two lists are separate and a hook added to the wrong one would still run,
+    # just never on anything the caller was looking at.
+    var server = TestServer()
+    var hooks = EventHooks()
+    hooks.on_response(_note)
+    var client = Client(event_hooks=hooks^)
+    var response = _get(client, server, "/headers")
+    assert_equal(response.headers["X-Noted"], "yes")
     server.stop()
 
 
@@ -327,6 +347,30 @@ def test_copying_the_hook_list_shares_every_hook() raises:
     var passed = hooks.request[0].call(request^)
     _ = passed
     assert_equal(len(other.request[0].state[_SeenRequests]().urls), 1)
+
+
+def test_hooks_of_different_types_live_in_one_list() raises:
+    # The reason there is an erased type at all. A caller's hooks are whatever
+    # structs they wrote, and a list that could only hold one of them would mean
+    # one hook per client.
+    var requests = List[AnyRequestHook]()
+    requests.append(erase_request_hook(_Stamp("first")))
+    requests.append(erase_request_hook(_SeenRequests()))
+    var responses = List[AnyResponseHook]()
+    responses.append(erase_response_hook(_SeenResponses()))
+    responses.append(erase_response_hook(_ReadsTheBody()))
+
+    var request = Request("GET", URL("http://example.com/"))
+    for i in range(len(requests)):
+        request = requests[i].call(request^)
+    assert_equal(request.headers["X-Stamp"], "first")
+    assert_equal(len(requests[1].state[_SeenRequests]().urls), 1)
+
+    for i in range(len(responses)):
+        var response = Response(200, "OK", "HTTP/1.1", Headers())
+        _ = responses[i].call(response^)
+    assert_equal(len(responses[0].state[_SeenResponses]().codes), 1)
+    assert_equal(len(responses[1].state[_ReadsTheBody]().lengths), 1)
 
 
 def test_clear_removes_both_lists() raises:

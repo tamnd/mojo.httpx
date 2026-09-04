@@ -339,3 +339,31 @@ def test_the_boundary_never_appears_inside_a_part() raises:
         count += 1
         at = body.find(boundary, at + boundary.byte_length())
     assert_equal(count, expected)
+
+
+def test_a_file_keeps_the_field_and_filename_it_was_given() raises:
+    # Both go in the part header, and they are separate: the field is the name
+    # the form knows the input by, the filename is what the file was called on
+    # the machine it came from.
+    var upload = FileUpload("avatar", "portrait.png", "bytes")
+    assert_equal(upload.field, "avatar")
+    assert_equal(upload.filename, "portrait.png")
+
+
+def test_a_file_with_no_content_type_guesses_from_its_name() raises:
+    assert_equal(FileUpload("f", "a.png", "x").resolved_type(), "image/png")
+    assert_equal(FileUpload("f", "a.txt", "x").resolved_type(), "text/plain")
+
+
+def test_a_declared_content_type_beats_the_filename() raises:
+    # The caller knows what the bytes are and the extension is only a guess, so
+    # a name that disagrees with what was declared does not get a vote.
+    var upload = FileUpload("f", "a.png", "x", "application/octet-stream")
+    assert_equal(upload.resolved_type(), "application/octet-stream")
+
+
+def test_a_name_with_no_extension_falls_back() raises:
+    assert_equal(
+        FileUpload("f", "README", "x").resolved_type(), DEFAULT_FILE_TYPE
+    )
+    assert_equal(FileUpload("f", "", "x").resolved_type(), DEFAULT_FILE_TYPE)
