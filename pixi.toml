@@ -110,6 +110,13 @@ cli = "mkdir -p build && mojo build -I . -o build/httpx httpx/cli/main.mojo"
 # `python tools/golden/run.py --update` rewrites the files.
 golden = { cmd = "python tools/golden/run.py", depends-on = ["cli"] }
 
+# The API reference, rendered from `mojo doc` output into docs/api.md. The page
+# is committed so that reading the docs needs no toolchain, and `docs-check`
+# fails when it no longer matches the code, which is what keeps a rename from
+# leaving the reference behind.
+docs = "python tools/docgen/run.py"
+docs-check = "python tools/docgen/run.py --check"
+
 # The badssl.com matrix, one host per way of getting TLS wrong. Needs the
 # network and depends on certificates somebody else renews, so it is not part
 # of `check` and not in CI either. It runs on the fleet. See docs/testing.md.
@@ -168,12 +175,11 @@ check = { depends-on = [
   "lint-selftest",
   "vendor-check",
   "generated-check",
+  "docs-check",
   "baseline",
   "test",
   "golden",
 ] }
 
 # Tasks below land with the milestone that needs them. See docs/roadmap.md.
-#   build         M8   mojo build httpx/cli/__main__.mojo -o build/httpx
 #   bench         M2   the benchmark suite
-#   docs          M8   render the mojo doc JSON into the API reference

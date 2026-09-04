@@ -53,6 +53,21 @@ Two rules are checked rather than only recorded. Nothing but the body reaches st
 
 It runs in `pixi run check` and in CI on all three platforms, because it needs nothing but a loopback socket and the binary.
 
+## The API reference
+
+`docs/api.md` is generated from the source and committed, and a check fails when the two have come apart.
+
+```bash
+pixi run docs         # rewrite the page
+pixi run docs-check   # fail when it is not what the code would produce now
+```
+
+`tools/docgen/run.py` runs `mojo doc` over the library, which gives it every declaration with its docstring and the signature the compiler saw, and renders the public ones into one page. What counts as public is read out of the import list in `httpx/__init__.mojo`, because that file is already where the library says what its surface is, and because a re-export leaves no trace in the doc JSON.
+
+The order of the page is a table in the tool, grouped by what a reader is trying to do. A name that is exported and in no group stops the render rather than being appended somewhere, so adding an export makes somebody decide where it belongs. That is the part which keeps the page from turning into an alphabetical list of ninety names.
+
+The page is committed so that reading the docs needs no toolchain, and `docs-check` runs in `pixi run check` and in the CI lint job. It is what catches a renamed argument that nobody re-rendered the page for.
+
 ## The badssl suite
 
 Every way of getting TLS wrong, one host per way.
