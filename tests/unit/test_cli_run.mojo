@@ -255,10 +255,13 @@ def test_a_scheme_this_client_does_not_speak_is_a_usage_error() raises:
     assert_equal(run(_line("ftp://example.com/")), EXIT_USAGE)
 
 
-def test_a_connection_nobody_is_listening_for_is_the_network_code() raises:
-    # Port 1 on loopback, which nothing binds and which fails immediately
-    # rather than after a timeout.
-    assert_equal(run(_line("http://127.0.0.1:1/")), EXIT_NETWORK)
+def test_a_host_that_does_not_resolve_is_the_network_code() raises:
+    # A name under .invalid, which RFC 2606 reserves for exactly this and which
+    # no resolver is allowed to answer. A closed port on loopback would be the
+    # obvious way to write this and it is wrong: under WSL2 a connect to an
+    # unbound loopback port is swallowed by the localhost relay and hangs until
+    # the timeout, so the same command exits 3 there and 2 everywhere else.
+    assert_equal(run(_line("http://no-such-host.invalid/")), EXIT_NETWORK)
 
 
 def test_a_download_writes_the_body_to_the_file() raises:
