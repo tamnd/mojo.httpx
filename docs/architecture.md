@@ -80,7 +80,9 @@ SOCKS5 is the second tunnel and it fits the same seam. `httpx._proto.socks5.open
 
 The async pool refuses both. It opens its sockets inside a coroutine, and a handshake that has to finish before the first request byte has nowhere to run there, so `open` raises on any hop with a `connect_via` on it. Refused rather than ignored, because ignoring it would connect straight to the target and send the request without the proxy.
 
-Mixing proxied and direct traffic is `mounts=`, which is a map from URL pattern to transport and so is a layer above this one. [proxies.md](proxies.md) has the user facing side.
+Mixing proxied and direct traffic is `mounts=`, and it lives a layer above this one for exactly that reason: a pool cannot proxy some requests and not others, so the choice has to be made before a pool is picked. `httpx._transport.mounts` holds a list of patterns and transports in search order, `BaseClient._dispatch` asks it which transport a request goes to, and everything below that point is a pool that only ever does one thing.
+
+`proxy=` is built on top of the same mechanism rather than beside it. The client's own transport is always the unproxied one and the proxy is a mount on `all://`, which is what makes an entry with no transport on it mean something: it falls back to the client's transport, and that is only a way out of the proxy if the client's transport is not itself proxied. `NO_PROXY` is the same shape of table read out of the environment, which is why it was arranged this way before it was needed. [proxies.md](proxies.md) has the user facing side.
 
 ## JSON is an arena, and the parser has its own stack
 

@@ -2,7 +2,7 @@
 
 The goal is that code written against httpx2 reads the same here, and that a request going out over the wire has the same bytes in it. Where that is not possible, the difference is deliberate and it is written down on this page rather than left for somebody to find at three in the morning.
 
-This page is about behaving differently while doing the same job. Things that are simply not here yet, such as CONNECT tunnelling and the brotli and zstd codecs, are on [limitations.md](limitations.md) instead.
+This page is about behaving differently while doing the same job. Things that are simply not here yet, such as the brotli and zstd codecs and reading a proxy out of the environment, are on [limitations.md](limitations.md) instead.
 
 Two kinds of difference show up. The first kind is forced by the language: Mojo has no dynamic `Any`, no exception subclassing, no generators and no keyword argument packing, so anything built on those has to be spelled differently. The second kind is a judgement call, where copying httpx2 exactly was possible and we chose not to. The second kind is much shorter and each entry says what the alternative was.
 
@@ -103,6 +103,26 @@ httpx2 accepts `proxy="http://localhost:3128"` or `proxy=httpx.Proxy(...)` and s
 Mojo has no runtime type dispatch, so the string form would have to be a second overload of the client constructor, which already has seventeen keyword arguments. And building a `Proxy` parses a URL, which can fail, so the string form would move that failure from where the mistake was written to somewhere inside the first request. The extra call names what it builds and puts the error where it belongs.
 
 The same reasoning as the auth tuple below, and the same shape of answer.
+
+### `mounts=` is a table built a mount at a time
+
+httpx2 takes a dictionary, `mounts={"all://example.com": transport, "all://internal": None}`. Here it is a `Mounts` value with `mount` and `bypass` on it, handed to the client with `mounts=routes^`.
+
+Mojo has no dictionary literal that can hold a transport, since a transport is a move only value and the keys have to be parsed before they mean anything. Building the table a mount at a time is the same amount of typing and it moves two failures earlier: a pattern that is a typo raises where it was written rather than becoming a mount that never fires, and the search order is settled as each entry goes in rather than being recomputed on the first request. `None` becoming a named call, `bypass`, is the part of this that reads better than the original, because an empty entry in a dict does not say which of the two empty things it means.
+
+### Blocking a pattern is a transport, and httpx has no spelling for it
+
+`mounts={"http://": None}` in httpx2 does not block plaintext. It sends those requests to the client's own transport, which is the no proxy escape hatch and nothing more, and a reader who expected a wall gets the opposite of one. httpx2's own documentation calls the feature "no-proxy support" for that reason.
+
+So the two are separate here. `bypass` is httpx2's `None`, byte for byte the same behaviour, and refusing a request is `blocked()`, a transport that raises naming the URL it would not send. Blocking had to be added rather than left out, because a client that cannot say no to a scheme is a client that leaks one, and it is a transport rather than a flag on the table so that a caller who wants to count refusals or word them differently writes an ordinary `Transport` instead of asking for another flag.
+
+### A mount pattern is parsed more strictly
+
+Two patterns that httpx2 accepts raise here.
+
+A path on a pattern, `all://example.com/api`, is an error. httpx2 parses it and then ignores the path, so the mount matches every request to that host and the author of the configuration believes they narrowed it. Routing looks at the scheme, the host and the port and there is no reading of a path that would work, so saying so is better than matching more than was asked for.
+
+An IPv6 address without brackets, `all://::1`, is an error rather than being taken as the host `:` on port 1. That is the reading a URL parser gives it and it matches nothing ever, which is the failure mode the whole parser is trying to avoid. `all://[::1]` is the way to write it.
 
 ### The auth tuple shorthand is a function
 

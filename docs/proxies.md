@@ -71,7 +71,7 @@ The visible consequence is a good one. Two requests to two different servers thr
 
 A tunnel is filed under the server instead, and that is the same rule rather than an exception to it: a connection is keyed by what is on the far end of it, and the far end of a tunnel is the server.
 
-Mixing proxied and direct traffic is what `mounts=` is for, and that is not here yet.
+Mixing proxied and direct traffic is what `mounts=` is for, and it does it by having more than one pool rather than by teaching one pool to do both. [Mounts](#mounts) below.
 
 ## `https://` through a tunnel
 
@@ -143,6 +143,82 @@ destination
 Pooling is worth one note. Everything through SOCKS is a tunnel, and a tunnel is filed under the server on the far end of it, so two requests to the same server reuse a connection and two requests to different servers cannot. A forwarding HTTP proxy is the opposite: every `http://` request through it goes to the same address, so they all share. That is not a setting, it is what the two protocols are.
 
 The async client cannot do SOCKS yet, and says so rather than quietly connecting straight to the target. It opens its sockets inside a coroutine and has nowhere to put a handshake that has to finish first. The same is true of `CONNECT` tunnels, for the same reason.
+
+## Mounts
+
+A client has one transport, and `mounts=` is how it gets more than one. Each entry pairs a URL pattern with a transport, the request's URL is matched against the patterns from most specific to least, and the first one that matches wins. Nothing matched means the client's own transport.
+
+```mojo
+var routes = Mounts()
+routes.mount("all://internal.example.com", erase_transport(HTTPTransport()))
+with Client(mounts=routes^) as client:
+    var inside = client.get("https://internal.example.com/health")
+    var outside = client.get("https://example.com/")
+```
+
+The table is a `Mounts` value built a mount at a time rather than a dictionary literal, because Mojo has no literal that can hold a transport. Adding a mount parses its pattern and files it in search order there and then, so a typo is an error where it was written rather than a mount that silently never fires.
+
+### The pattern language
+
+A pattern is written as a URL and not as a bare scheme, so `http://` and not `http`. The trailing punctuation is not decoration: `http` on its own is ambiguous between a scheme and a host, and httpx rejects it for the same reason. The scheme, the host and the port are each optional, and an omitted one matches anything.
+
+| Pattern | Matches |
+| --- | --- |
+| `all://` | every request |
+| `http://` | every `http://` request |
+| `all://example.com` | that host, on any scheme, on any port |
+| `https://example.com` | that host over TLS |
+| `all://*.example.com` | strict subdomains, so not `example.com` itself |
+| `all://*example.com` | `example.com` and its subdomains |
+| `all://*:8080` | anything on port 8080 |
+| `https://example.com:444` | all three at once |
+
+Hosts are compared case insensitively, a subdomain wildcard only matches at a label boundary so `all://*example.com` does not match `notexample.com`, and an IPv6 literal is written with brackets, `all://[::1]`.
+
+A port that the scheme implies anyway is dropped when the pattern is parsed. `https://example.com:443` means every ordinary request to that host over TLS, not only the ones somebody spelled with a port on them, because a URL does not carry a default port once it has been parsed and a pattern that insisted on 443 would match nothing at all. That is httpx's reading of it too.
+
+### The order they are tried in
+
+Most specific first, and specific means what httpx means by it: a pattern naming a port beats one that does not, then a longer host beats a shorter one, then a longer scheme beats a shorter one. Patterns that tie are tried in the order they were added.
+
+The host comparison is on the host as written, `*` included, which is what makes `all://*.example.com` beat `all://example.com`. That is worth knowing because it is not what a reader would guess: the more specific looking exact host loses to the wildcard. It is httpx's ordering and changing it would mean a configuration copied over from httpx routing somewhere else.
+
+### `proxy=` is a mount underneath
+
+`Client(proxy=...)` builds a proxied transport and mounts it on `all://`. The client's own transport is always the unproxied one. So a mount you add yourself for a particular host is tried first and wins, and mounting `all://` yourself replaces the proxy entirely.
+
+That arrangement is not an implementation detail that could have gone the other way. It is the only one in which an entry saying "no transport for this pattern" means anything useful, because falling back to the client's own transport is the way out of a proxy, and if the client's own transport were the proxied one there would be no way out.
+
+### Taking one host back out of the proxy
+
+That way out is `bypass`, which is httpx's `mounts={"...": None}`:
+
+```mojo
+var routes = Mounts()
+routes.bypass("all://internal.example.com")
+with Client(proxy=Optional[Proxy](Proxy("http://localhost:3128")), mounts=routes^) as client:
+    var direct = client.get("http://internal.example.com/health")
+    var proxied = client.get("http://example.com/")
+```
+
+Everything still goes through the proxy except `internal.example.com`, which goes straight out. On a client with no proxy a bypass changes nothing, because the client's own transport is where an unmatched request was going anyway. This is the mechanism `NO_PROXY` will be built on.
+
+### Refusing a scheme
+
+Bypassing is not blocking, and the two are separate calls because a hole in a proxy rule and a wall are not the same instruction. Blocking is a transport that raises, mounted like any other:
+
+```mojo
+var routes = Mounts()
+routes.mount("http://", blocked("plaintext is not allowed from this service"))
+```
+
+A request that lands on it fails with `the request to http://example.com/ was not sent, because plaintext is not allowed from this service`, at the call rather than at the socket, and nothing leaves the machine. The reason is optional and there is a default. A caller who wants different behaviour, counting what was refused for instance, writes their own `Transport` and mounts that, which is the point of blocking being a transport rather than a flag.
+
+### Closing, and the async client
+
+Closing the client closes every transport mounted on it, in the same call that closes its own. A transport handed to two clients is closed by whichever one goes first, which is the same rule as `transport=`.
+
+`AsyncClient` takes `AsyncMounts`, holding async transports, and routes the same way. `gather` routes each request in a round after the event hooks have run, since a hook can rewrite the URL, and then sends one batch per distinct transport. Requests that land on different mounts therefore do not overlap each other, which is a cost of routing by URL, so a batch that wants everything in flight at once wants to be going to one transport.
 
 ## Environment variables
 

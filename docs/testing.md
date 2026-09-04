@@ -190,6 +190,8 @@ var client = Client(transport^)
 
 `handle.state[MockRouter]()` reads the router back after the client has taken it, because a copy of an erased transport is the same transport. `router.calls` is every request that arrived, `route.calls` is what each route answered, and `assert_all_called()` fails a test whose route pattern was wrong and never matched. The README has a fuller example.
 
+A test that only wants to stub out part of the world mounts the router instead of passing it as the transport. `mounts=` routes by URL pattern, so `routes.mount("all://payments.example.com", erase_transport(router^))` fakes one dependency and lets everything else go out for real. Mounting `blocked()` on `all://` under that is the way to make a test fail loudly when the code under test reaches somewhere nobody stubbed, rather than quietly opening a socket from a test run. [proxies.md](proxies.md) has the pattern language.
+
 ## Vendored corpora
 
 The conformance tests run against files somebody else maintains: the public suffix list and its cases, the WHATWG URL cases, the Unicode and IDNA tables, the http-state cookie tests and the http2jp HPACK stories. Those files live in `tests/data` and are committed, so a test run never reaches the network and a checkout from six months ago asserts exactly what it asserted then.

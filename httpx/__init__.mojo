@@ -72,10 +72,35 @@ from httpx._transport.aio_base import (
 from httpx._transport.aio_http import AsyncHTTPTransport
 from httpx._transport.base import AnyTransport, Transport, erase_transport
 from httpx._transport.http import HTTPTransport
+from httpx._transport.blocked import (
+    BlockedTransport,
+    async_blocked,
+    blocked,
+)
 from httpx._transport.mock import MockRouter, MockTransport, Route
+from httpx._transport.mounts import Mounts as MountTable
+from httpx._transport.mounts import URLPattern
 from httpx._util.charset import DefaultEncoding
 from httpx._util.duration import Duration
 from httpx._util.links import Link, parse_links
+
+comptime Mounts = MountTable[AnyTransport]
+"""The routing table a `Client` takes, built up a mount at a time.
+
+```mojo
+var routes = Mounts()
+routes.mount("all://internal.example.com", erase_transport(HTTPTransport()))
+routes.mount("http://", blocked())
+```
+
+A named type rather than a dictionary literal because Mojo has no literal that
+holds a transport, and because the entries have to be parsed and ordered, which
+is work that has to happen somewhere and is better done as each one is added
+than at the first request.
+"""
+
+comptime AsyncMounts = MountTable[AnyAsyncTransport]
+"""The same for an `AsyncClient`, holding async transports."""
 
 comptime __version__ = "0.0.1"
 
