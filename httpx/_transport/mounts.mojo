@@ -34,6 +34,14 @@ each optional, and an omitted one matches anything:
     all://*example.com      example.com and its subdomains
     all://*:8080            anything on port 8080
     https://example.com:444 all three
+    all://10.0.0.0/8        every address in that range
+    all://[fd00::]/8        the same for IPv6
+
+A host that is an address is compared as a number rather than as text, so
+`all://127.0.0.1` matches a URL written `http://0177.0.0.1/` as well, which is
+the same address to every resolver on the machine. A prefix length is the only
+thing allowed after the authority, since anything else there is a path and a
+path is not something routing can act on.
 
 A pattern has to be written as a URL and not as a bare scheme, so `http://` and
 not `http`. The trailing slashes are not decoration: `http` alone is ambiguous
@@ -46,6 +54,11 @@ naming a port beats one that does not, then a longer host beats a shorter one,
 then a longer scheme beats a shorter one. Patterns that tie are tried in the
 order they were added.
 
+Two patterns that both name a range are ordered by prefix length instead, the
+tighter one first, which httpx has nothing to say about because httpx has no
+ranges. Ordering those by host length would sort them by how the network
+address happens to be spelled.
+
 The host rule is length on the host as written, `*` included, which is what
 makes `all://*.example.com` beat `all://example.com`. That is worth knowing
 because it is not what a reader would guess: the more specific looking exact
@@ -56,6 +69,7 @@ mean a configuration copied over from httpx routing somewhere else.
 from httpx._exceptions import ErrorKind, new_error
 from httpx._models.url import URL, default_port_for
 from httpx._transport.handle import TransportHandle
+from httpx._util.ip import IpAddress, in_network, parse_ip_address
 
 
 struct URLPattern(ImplicitlyCopyable, Movable, Writable):
@@ -90,7 +104,20 @@ struct URLPattern(ImplicitlyCopyable, Movable, Writable):
     """Whether that `*` was `*.`, which excludes the domain itself."""
 
     var _suffix: String
-    """`host` with the wildcard removed, lowercased, brackets stripped."""
+    """`host` with the wildcard removed, lowercased, brackets stripped.
+
+    Empty when the host is an address, since those are compared as numbers.
+    """
+
+    var network: IpAddress
+    """The address the host names, and family 0 when the host is a name."""
+
+    var prefix: Int
+    """How many bits of `network` have to match, and -1 when there is none.
+
+    An address written on its own gets the whole width, so an exact address and
+    a range are the same comparison with a different number in it.
+    """
 
     def __init__(out self, pattern: StringSpan) raises:
         """Parse `pattern`, raising if it is not one.
@@ -106,6 +133,8 @@ struct URLPattern(ImplicitlyCopyable, Movable, Writable):
         self.subdomains = False
         self.strict = False
         self._suffix = String()
+        self.network = IpAddress()
+        self.prefix = -1
 
         var text = String(pattern)
         if text == "":
@@ -136,20 +165,26 @@ struct URLPattern(ImplicitlyCopyable, Movable, Writable):
 
         var slash = rest.find("/")
         if slash >= 0:
-            # A path on a mount would match nothing extra and hide everything it
-            # was meant to narrow, since routing happens on scheme, host and port
-            # and never looks at the path.
-            raise new_error(
-                ErrorKind.INVALID_ARGUMENT,
-                String(
-                    "the mount pattern '",
-                    text,
-                    (
-                        "' has a path on it, and routing only looks at the"
-                        " scheme, the host and the port"
+            # The one thing that can follow the authority is a prefix length,
+            # which is a range of addresses rather than a path. Anything else
+            # would match nothing extra and hide everything the pattern was
+            # meant to narrow, since routing looks at the scheme, the host and
+            # the port and never at the path.
+            self.prefix = _prefix_bits(String(rest[byte = slash + 1 :]))
+            if self.prefix < 0:
+                raise new_error(
+                    ErrorKind.INVALID_ARGUMENT,
+                    String(
+                        "the mount pattern '",
+                        text,
+                        (
+                            "' has a path on it, and routing only looks at the"
+                            " scheme, the host and the port"
+                        ),
                     ),
-                ),
-            )
+                )
+            var head = String(rest[byte=0:slash])
+            rest = head^
 
         if not rest.startswith("[") and _colons(rest) > 1:
             # Without brackets there is no telling an IPv6 address from a host
@@ -184,6 +219,18 @@ struct URLPattern(ImplicitlyCopyable, Movable, Writable):
                     self.port = None
 
         if host == "" or host == "*":
+            if self.prefix >= 0:
+                raise new_error(
+                    ErrorKind.INVALID_ARGUMENT,
+                    String(
+                        "the mount pattern '",
+                        text,
+                        (
+                            "' has a prefix length on nothing, and a prefix"
+                            " length needs an address in front of it"
+                        ),
+                    ),
+                )
             return
 
         self.host = host.copy()
@@ -197,7 +244,41 @@ struct URLPattern(ImplicitlyCopyable, Movable, Writable):
             self.subdomains = True
             var tail = String(matched[byte=1:])
             matched = tail^
-        self._suffix = _bare_host(matched)
+
+        if not self.subdomains:
+            # Addresses are compared as numbers rather than as text, so the two
+            # spellings of one address are one host here. `0177.0.0.1` and
+            # `127.0.0.1` reach the same machine and a pattern written with one
+            # of them has to match a URL written with the other.
+            self.network = parse_ip_address(matched)
+        if self.network.family == 0:
+            if self.prefix >= 0:
+                raise new_error(
+                    ErrorKind.INVALID_ARGUMENT,
+                    String(
+                        "the mount pattern '",
+                        text,
+                        (
+                            "' has a prefix length on something that is not an"
+                            " IP address"
+                        ),
+                    ),
+                )
+            self._suffix = _bare_host(matched)
+            return
+
+        if self.prefix < 0:
+            self.prefix = self.network.bits()
+        elif self.prefix > self.network.bits():
+            raise new_error(
+                ErrorKind.INVALID_ARGUMENT,
+                String(
+                    "the mount pattern '",
+                    text,
+                    "' has a prefix length above ",
+                    self.network.bits(),
+                ),
+            )
 
     def matches(self, url: URL) raises -> Bool:
         """Whether a request for `url` should go to whatever this is mounted on.
@@ -213,6 +294,13 @@ struct URLPattern(ImplicitlyCopyable, Movable, Writable):
             var given = url.port()
             if not given or given.value() != self.port.value():
                 return False
+
+        if self.prefix >= 0:
+            return in_network(
+                parse_ip_address(StringSpan(from_utf8=url.raw_host())),
+                self.network,
+                self.prefix,
+            )
 
         if self._suffix == "":
             return True
@@ -236,6 +324,12 @@ struct URLPattern(ImplicitlyCopyable, Movable, Writable):
         var theirs = 0 if other.port else 1
         if mine != theirs:
             return mine < theirs
+        if self.prefix >= 0 and other.prefix >= 0:
+            # Two ranges, so the tighter one first. Nothing in httpx to copy
+            # here, because httpx has no ranges, and host length would order
+            # these by how the network address happens to be spelled.
+            if self.prefix != other.prefix:
+                return self.prefix > other.prefix
         var mine_host = self.host.byte_length()
         var their_host = other.host.byte_length()
         if mine_host != their_host:
@@ -289,6 +383,24 @@ def _port_value(digits: String, pattern: String) raises -> Optional[UInt16]:
                 ),
             )
     return Optional[UInt16](UInt16(value))
+
+
+def _prefix_bits(text: String) -> Int:
+    """The `/16` of a pattern as a number, or -1 when it is not one.
+
+    Three digits at most, which is enough for 128 and keeps `/2016` a path
+    rather than a prefix length nobody could have meant. Whether the number
+    fits the address is the caller's question, because the answer depends on
+    which family the address is and the message should say so.
+    """
+    if text == "" or text.byte_length() > 3:
+        return -1
+    var value = 0
+    for byte in text.as_bytes():
+        if byte < UInt8(ord("0")) or byte > UInt8(ord("9")):
+            return -1
+        value = value * 10 + Int(byte - UInt8(ord("0")))
+    return value
 
 
 def _bare_host(host: String) -> String:

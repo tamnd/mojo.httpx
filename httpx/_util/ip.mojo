@@ -20,6 +20,11 @@ the shape of an allowlist bypass: the check reads `0x7f.1`, decides it is not
 localhost, and the connection goes to localhost anyway. Recognising every form
 and writing the dotted quad is what closes it, so the string that is checked is
 the string that is dialled.
+
+`IpAddress` and `in_network` at the bottom are the third job, and they are here
+rather than next to their caller because they are the same knowledge read a
+different way. A rule like `NO_PROXY=10.0.0.0/8` is about a range, and no
+spelling of an address can be masked to a prefix length while it is still text.
 """
 
 from httpx._bytes import _hex_digit, is_digit
@@ -358,6 +363,117 @@ def parse_ipv4[o: ImmOrigin](host: Span[UInt8, o]) raises -> String:
             shift *= 256
         out += String((address // shift) % 256)
     return out^
+
+
+struct IpAddress(ImplicitlyCopyable, Movable):
+    """One address as a number, so two of them can be compared bit by bit.
+
+    The parsers above answer in the shapes a URL wants, eight groups or a dotted
+    string, and neither of those can be masked to a prefix length. Anything that
+    has to decide whether an address falls inside a network needs the number, so
+    this is that number: sixteen bytes as two halves, with an IPv4 address in
+    the low thirty two bits of `lo` and nothing in `hi`.
+
+    A family of zero means the text was not an address at all, which is a state
+    worth having because the callers are all asking about a host that is much
+    more likely to be a name.
+    """
+
+    var family: Int
+    """4, 6, or 0 for something that is not an address."""
+
+    var hi: UInt64
+    """The first eight bytes of an IPv6 address, and zero for IPv4."""
+
+    var lo: UInt64
+    """The last eight bytes, or the whole IPv4 address."""
+
+    def __init__(out self, family: Int = 0, hi: UInt64 = 0, lo: UInt64 = 0):
+        self.family = family
+        self.hi = hi
+        self.lo = lo
+
+    def bits(self) -> Int:
+        """How many bits the address has, which is how long a prefix can be."""
+        return 32 if self.family == 4 else 128
+
+
+def parse_ip_address(host: StringSpan) -> IpAddress:
+    """`host` as a number, or a family of zero when it is not an address.
+
+    Brackets are stripped first, so a host taken straight out of a URL and a
+    host written by hand come out the same. This does not raise: every caller
+    is asking whether a host is an address, and a name is the ordinary answer
+    rather than a failure.
+    """
+    var text = String(host)
+    if text.startswith("[") and text.endswith("]") and text.byte_length() > 2:
+        var inner = String(text[byte = 1 : text.byte_length() - 1])
+        text = inner^
+
+    if text.find(":") >= 0:
+        try:
+            var pieces = parse_ipv6(text.as_bytes())
+            var hi = UInt64(0)
+            var lo = UInt64(0)
+            for i in range(4):
+                hi = (hi << 16) | UInt64(pieces[i])
+            for i in range(4, 8):
+                lo = (lo << 16) | UInt64(pieces[i])
+            return IpAddress(6, hi, lo)
+        except:
+            return IpAddress()
+
+    if not looks_like_ipv4(text.as_bytes()):
+        return IpAddress()
+    try:
+        var dotted = parse_ipv4(text.as_bytes())
+        var value = UInt64(0)
+        var octet = UInt64(0)
+        for byte in dotted.as_bytes():
+            if byte == _DOT:
+                value = (value << 8) | octet
+                octet = 0
+                continue
+            octet = octet * 10 + UInt64(byte - _ZERO)
+        value = (value << 8) | octet
+        return IpAddress(4, 0, value)
+    except:
+        return IpAddress()
+
+
+def in_network(address: IpAddress, network: IpAddress, prefix: Int) -> Bool:
+    """Whether `address` falls inside `network/prefix`.
+
+    Two addresses of different families never match, which is the right answer
+    rather than a technicality: an IPv4 mapped IPv6 address reaches the same
+    machine, and a rule written about one of the two spellings was written about
+    that spelling.
+    """
+    if address.family == 0 or address.family != network.family:
+        return False
+    var width = address.bits()
+    if prefix < 0 or prefix > width:
+        return False
+
+    if width == 32:
+        var shift = 32 - prefix
+        # Shifting a 64 bit value by 64 or more is undefined, and a prefix of
+        # zero is a real thing to write, so the whole match is answered here.
+        if shift >= 32:
+            return True
+        return (address.lo >> UInt64(shift)) == (network.lo >> UInt64(shift))
+
+    if prefix <= 64:
+        var shift = 64 - prefix
+        if shift >= 64:
+            return True
+        return (address.hi >> UInt64(shift)) == (network.hi >> UInt64(shift))
+    if address.hi != network.hi:
+        return False
+    return (address.lo >> UInt64(128 - prefix)) == (
+        network.lo >> UInt64(128 - prefix)
+    )
 
 
 def _bad4[o: ImmOrigin](text: Span[UInt8, o], why: StaticString) -> Error:

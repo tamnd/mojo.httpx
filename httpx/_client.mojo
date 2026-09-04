@@ -63,6 +63,7 @@ from httpx._pool.proxy import Proxy
 from httpx._redirects import DEFAULT_MAX_REDIRECTS, build_redirect_request
 from httpx._stream.config import ClientCert, SSLVerify, TlsConfig
 from httpx._transport.base import AnyTransport, erase_transport
+from httpx._transport.environ import environment_proxies
 from httpx._transport.handle import TransportHandle
 from httpx._transport.http import HTTPTransport
 from httpx._transport.mounts import Mounts
@@ -205,6 +206,13 @@ struct BaseClient[
         rather than a string because building one parses a URL and so can raise,
         and `Proxy("http://localhost:3128")` is the one extra call that buys.
 
+        `trust_env` is on by default and covers two things: the TLS trust store,
+        and the proxy variables in the environment. When it is on and neither
+        `proxy` nor `transport` was given, `HTTP_PROXY`, `HTTPS_PROXY`,
+        `ALL_PROXY` and `NO_PROXY` become mounts on this client.
+        `httpx._transport.environ` has the rules, including the CGI check that
+        stops a request header from choosing where a server sends its traffic.
+
         `mounts` routes by URL, and is how one client sends some traffic through
         a proxy and the rest direct, answers one domain from a mock, or refuses a
         scheme outright. Entries are tried most specific first and the first one
@@ -244,6 +252,22 @@ struct BaseClient[
                 self._mounts.mount(
                     "all://", Self.make_default(bounds, tls, proxy^)
                 )
+            elif trust_env:
+                # Only when the caller named no proxy of their own, which is
+                # httpx's rule as well. Code that went to the trouble of saying
+                # where its traffic goes is not overruled by a variable that was
+                # exported for something else.
+                var found = environment_proxies()
+                while len(found) > 0:
+                    var route = found.pop(0)
+                    var pattern = route.pattern.copy()
+                    if route.proxy:
+                        self._mounts.mount(
+                            pattern,
+                            Self.make_default(bounds, tls, route.proxy.take()),
+                        )
+                    else:
+                        self._mounts.bypass(pattern)
         # After the proxy, so that a caller who mounts `all://` themselves gets
         # theirs rather than the proxy, and so that a bypass they wrote lands on
         # a table where the proxy is already the thing being bypassed.
