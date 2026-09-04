@@ -112,6 +112,7 @@ from httpx._transport.mounts import URLPattern
 from httpx._util.charset import DefaultEncoding
 from httpx._util.duration import Duration
 from httpx._util.links import Link, parse_links
+from httpx._util.version import VERSION as _VERSION
 
 comptime Mounts = MountTable[AnyTransport]
 """The routing table a `Client` takes, built up a mount at a time.
@@ -131,7 +132,10 @@ than at the first request.
 comptime AsyncMounts = MountTable[AnyAsyncTransport]
 """The same for an `AsyncClient`, holding async transports."""
 
-comptime __version__ = "0.0.1"
+comptime __version__ = _VERSION
+"""The library version, under the name httpx2 uses so that a version check
+ported from Python keeps working. `_util/version.mojo` is where it is set, and
+the default `User-Agent` is built from the same string."""
 
 comptime MOJO_MIN_VERSION = "1.0.0"
 """The oldest Mojo toolchain this release is tested against."""

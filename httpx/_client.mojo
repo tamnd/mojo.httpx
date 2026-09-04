@@ -68,14 +68,7 @@ from httpx._transport.handle import TransportHandle
 from httpx._transport.http import HTTPTransport
 from httpx._transport.mounts import Mounts
 from httpx._util.charset import DefaultEncoding
-
-comptime USER_AGENT = "mojo-httpx/0.0.1"
-"""What this library calls itself.
-
-Held here rather than read from `__version__` because `httpx/__init__.mojo`
-imports this file, and a module cannot import the package that imports it. The
-release checklist checks the two agree.
-"""
+from httpx._util.version import USER_AGENT
 
 
 struct BaseClient[

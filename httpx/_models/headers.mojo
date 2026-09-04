@@ -168,6 +168,19 @@ struct HeaderEntry(Movable):
 
 
 struct Headers(Boolable, Movable, Sized, Writable):
+    """The header fields of a request or a response.
+
+    A list rather than a dictionary, because HTTP allows a name to appear more
+    than once and the order it appears in is part of the message. Lookups are
+    case insensitive both ways, `__getitem__` and `get` answer with the first
+    value for a name, and `get_list` answers with all of them, which is what the
+    handful of headers that are allowed to repeat need.
+
+    Writing one out redacts `Authorization`, `Proxy-Authorization`, `Cookie` and
+    `Set-Cookie`, so a debug print cannot put a credential in a log. Asking for
+    the value by name still gives the value.
+    """
+
     var _list: List[HeaderEntry]
     var _index: Dict[String, List[UInt32]]
     var _encoding: Optional[String]

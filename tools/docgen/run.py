@@ -254,6 +254,11 @@ def exports():
     The two names come apart on `import Mounts as MountTable`, where the
     reference has to look the declaration up under one name and print it under
     the other.
+
+    A leading underscore means the name is only there to build something else.
+    Mojo re-exports whatever a package imports and gives no way to keep one out,
+    so that spelling is how the file says a name is not part of the surface. Two
+    underscores are public again, since `__version__` is.
     """
     source = (PACKAGE / "__init__.mojo").read_text()
     found = {}
@@ -264,7 +269,10 @@ def exports():
             if not name:
                 continue
             declared, _, exported = name.partition(" as ")
-            found[(exported or declared).strip()] = (module, declared.strip())
+            public = (exported or declared).strip()
+            if public.startswith("_") and not public.startswith("__"):
+                continue
+            found[public] = (module, declared.strip())
 
     module = None
     for line in source.splitlines():
