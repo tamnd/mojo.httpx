@@ -25,6 +25,7 @@ from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.url import URL
 from httpx._proto.h1.aio import AsyncH1Connection, Exchange, exchange
+from httpx._stream.aio_stream import AsyncStream
 
 from tests.support.loopback import Loopback, Peer
 
@@ -230,8 +231,10 @@ struct Work(Movable):
 
 def _connect(listener: Loopback) raises -> AsyncH1Connection:
     return AsyncH1Connection(
-        AsyncTcpStream(
-            open_stream(listener.addr, "loopback", Deadline.after(5.0))
+        AsyncStream(
+            AsyncTcpStream(
+                open_stream(listener.addr, "loopback", Deadline.after(5.0))
+            )
         )
     )
 

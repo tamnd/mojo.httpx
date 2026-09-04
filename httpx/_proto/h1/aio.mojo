@@ -58,11 +58,9 @@ abandoned.
 from std.ffi import c_int
 
 from httpx._exceptions import ErrorKind, new_error
-from httpx._ffi.c import errno
-from httpx._ffi.errno import Op, interrupted, would_block
-from httpx._ffi.socket import POLLIN, POLLOUT
+from httpx._ffi.errno import Op
+from httpx._ffi.openssl import SslCtx
 from httpx._io.aio import Outcome, poll_slice, slice_for, yield_now
-from httpx._io.aio_socket import AsyncTcpStream
 from httpx._io.deadline import Deadline
 from httpx._io.socket import TcpStream
 from httpx._models.headers import Headers
@@ -71,6 +69,7 @@ from httpx._models.response import Response
 from httpx._proto.h1.head import ResponseHead
 from httpx._proto.h1.machine import H1Machine, remote_error
 from httpx._proto.h1.writer import TargetForm, chunk, terminal_chunk
+from httpx._stream.aio_stream import AsyncStream, STREAM_AGAIN, STREAM_BROKEN
 
 comptime READ_SIZE = 8192
 """How much to ask the kernel for at a time. Matches the synchronous driver."""
@@ -218,7 +217,7 @@ struct AsyncH1Connection(Movable):
     in a function that was allowed to have them.
     """
 
-    var stream: AsyncTcpStream
+    var stream: AsyncStream
     var machine: H1Machine
 
     var outbox: List[UInt8]
@@ -239,7 +238,7 @@ struct AsyncH1Connection(Movable):
     var scratch: List[UInt8]
     """The read buffer, made once and reused for the same reason."""
 
-    def __init__(out self, var stream: AsyncTcpStream):
+    def __init__(out self, var stream: AsyncStream):
         self.stream = stream^
         self.machine = H1Machine()
         self.outbox = List[UInt8]()
@@ -249,8 +248,8 @@ struct AsyncH1Connection(Movable):
     @staticmethod
     def detached() -> Self:
         """A connection with no socket yet, for a caller that has to own the
-        field before it owns the connection. See `AsyncTcpStream.detached`."""
-        return Self(AsyncTcpStream.detached())
+        field before it owns the connection. See `AsyncStream.detached`."""
+        return Self(AsyncStream.detached())
 
     def adopt(mut self, var inner: TcpStream):
         """Take the socket a connect just produced and start a fresh exchange.
@@ -264,6 +263,46 @@ struct AsyncH1Connection(Movable):
         self.machine = H1Machine()
         self.outbox = List[UInt8]()
         self.written = 0
+
+    def start_tls(mut self, ctx: SslCtx, hostname: String, verify: Bool) raises:
+        """Put a TLS session on the socket, for the caller to shake hands over.
+
+        Forwarded rather than done here, because the connection has no opinion
+        about encryption: it writes bytes and reads bytes, and which of the two
+        streams carries them is settled before the first request goes out. See
+        `AsyncStream.start_tls`.
+        """
+        self.stream.start_tls(ctx, hostname, verify)
+
+    def handshaking(self) -> Bool:
+        """Whether a TLS session has been started and is not agreed yet."""
+        return self.stream.handshaking()
+
+    def try_handshake(mut self) -> Int:
+        """One step of the TLS handshake, with no waiting."""
+        return self.stream.try_handshake()
+
+    def is_secure(self) -> Bool:
+        return self.stream.is_secure()
+
+    def is_open(self) -> Bool:
+        """Whether there is a socket here at all.
+
+        What tells a detached connection from one the connect has filled in,
+        which is how the pool's connect loop knows whether the race is still to
+        run. A closed connection answers the same as a detached one, and the
+        pool never asks about one of those.
+        """
+        return self.stream.is_open()
+
+    def want(self) -> Int16:
+        """Which way the socket has to move, after a step said to wait."""
+        return self.stream.want()
+
+    def failure(self, op: Op) -> Error:
+        """The reason the last step gave up, worded. See `AsyncStream.failure`.
+        """
+        return self.stream.failure(op)
 
     def fd(self) -> c_int:
         return self.stream.fd()
@@ -309,7 +348,10 @@ struct AsyncH1Connection(Movable):
         return self.written >= len(self.outbox)
 
     def write_some(mut self) -> Int:
-        """One `send` of what is left of the outbox. Negative leaves errno set.
+        """One `send` of what is left of the outbox, with no waiting.
+
+        The codes are `AsyncStream`'s: a count, `STREAM_AGAIN` to wait for
+        `want`, or `STREAM_BROKEN` for a failure `failure` will word.
 
         Counts what went out itself, because the caller that would otherwise
         hold the offset is a coroutine and would lose it at the next wait.
@@ -320,7 +362,10 @@ struct AsyncH1Connection(Movable):
         return n
 
     def read_some(mut self) -> Int:
-        """One `recv` into the machine. Zero is end of stream, negative errno.
+        """One `recv` into the machine, with no waiting.
+
+        Zero is the end of the stream. The negative codes are the ones
+        `write_some` reports.
         """
         var n = self.stream.try_read(Span(self.scratch))
         if n > 0:
@@ -336,8 +381,16 @@ struct AsyncH1Connection(Movable):
         self.machine.abandon()
         self.stream.close()
 
+    @no_inline
     def finish(mut self):
-        """Close the socket if the exchange ended the connection."""
+        """Close the socket if the exchange ended the connection.
+
+        Not inlined, and that is the compiler rather than a judgement about
+        size. Inlined into the tail of a coroutine, the load of `machine` is
+        sunk into the branch that closes the stream and the module then fails to
+        lower with `operand #0 does not dominate this use`. Keeping the call a
+        call keeps the load where it was written.
+        """
         if self.machine.wants_close():
             self.stream.close()
 
@@ -523,14 +576,11 @@ def _write_step[
         var n = conn[].write_some()
         if n > 0:
             continue
-        var problem = errno()
-        if interrupted(problem):
-            continue
-        if not would_block(problem):
-            result[].fail_outcome(Outcome.from_errno(problem, Op.WRITE))
+        if n != STREAM_AGAIN:
+            result[].fail(conn[].failure(Op.WRITE))
             return _FAILED
         var writable = poll_slice(
-            conn[].fd(), POLLOUT, deadline, slice_for(rounds)
+            conn[].fd(), conn[].want(), deadline, slice_for(rounds)
         )
         if writable.failed():
             result[].fail_outcome(writable)
@@ -595,14 +645,11 @@ def _read_step[
         if n == 0:
             _settle_at_eof(conn, result)
             return _FAILED if result[].failed() else _DONE
-        var problem = errno()
-        if interrupted(problem):
-            continue
-        if not would_block(problem):
-            result[].fail_outcome(Outcome.from_errno(problem, Op.READ))
+        if n != STREAM_AGAIN:
+            result[].fail(conn[].failure(Op.READ))
             return _FAILED
         var readable = poll_slice(
-            conn[].fd(), POLLIN, deadline, slice_for(rounds)
+            conn[].fd(), conn[].want(), deadline, slice_for(rounds)
         )
         if readable.failed():
             result[].fail_outcome(readable)
@@ -718,4 +765,6 @@ def _phrase(op: Op, peer: String) -> String:
     """
     if op == Op.WRITE:
         return String("write to ", peer)
+    if op == Op.CONNECT:
+        return String("connect to ", peer)
     return String("read from ", peer)

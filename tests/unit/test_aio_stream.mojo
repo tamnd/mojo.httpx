@@ -367,18 +367,20 @@ def test_aiter_bytes_reads_a_body_already_in_memory() raises:
     server.stop()
 
 
-def test_an_async_stream_to_an_https_url_is_refused() raises:
-    """Refused the same way a buffered one is, and for the same reason.
-
-    There is no async TLS handshake yet, and sending in the clear because the
-    secure path is unfinished is not something this library does.
+def test_an_async_stream_reads_its_body_over_https() raises:
+    """A streamed body has more to go wrong on an encrypted connection than a
+    buffered one, because each chunk is its own coroutine and the TLS session
+    lives in the connection between them. A record split across two chunks is
+    what would break if it did not.
     """
-    var client = AsyncClient()
-    var raised = False
-    try:
-        _ = client.stream("GET", "https://example.com/")
-    except e:
-        raised = True
-        assert_true("https" in String(e))
-    assert_true(raised)
+    var server = TestServer(tls=True)
+    var client = AsyncClient(verify=TestServer.tls_verify())
+    var response = _client_stream(client, server, "/chunked")
+
+    assert_equal(response.status_code, 200)
+    assert_false(response.is_closed)
+    var body = _drain(response)
+    var joined = String(StringSpan(unsafe_from_utf8=Span(body)))
+    assert_equal(joined, "chunk one chunk two chunk three")
     client.close()
+    server.stop()

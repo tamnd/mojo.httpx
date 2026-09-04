@@ -26,6 +26,7 @@ would make it work.
 
 from httpx._exceptions import ErrorKind, new_error
 from httpx._ffi.netdb import is_ip_literal
+from httpx._ffi.socket import POLLIN, POLLOUT
 from httpx._ffi.openssl import (
     SSL_ERROR_SSL,
     SSL_ERROR_SYSCALL,
@@ -50,6 +51,19 @@ from httpx._ffi.openssl import (
 from httpx._io.deadline import Deadline
 from httpx._io.socket import TcpStream
 from std.ffi import c_int
+
+comptime TLS_AGAIN = -1
+"""The step could not finish and the socket has to move first.
+
+Which way it has to move is `TlsStream.want`, and it is not always the way the
+operation would suggest: a TLS read can want to write and a TLS write can want
+to read, because renegotiation and post handshake authentication send records
+in the direction opposite to the data. Getting this wrong produces a client
+that works until the day a server asks for a new key.
+"""
+
+comptime TLS_BROKEN = -2
+"""The step failed and `TlsStream.trouble` is the sentence saying why."""
 
 
 def _certificate_advice(code: Int, hostname: StringSpan) -> String:
@@ -121,6 +135,32 @@ struct TlsStream(Movable):
     var _hostname: String
     var _closed: Bool
 
+    var _want: Int16
+    """Which way the socket has to move before the last step can be retried.
+
+    `POLLIN` or `POLLOUT`, and only meaningful straight after a step returned
+    `TLS_AGAIN`. A TLS read can want to write and a TLS write can want to read,
+    so this is not something a caller can work out from the operation it asked
+    for. Renegotiation and post handshake authentication are when it happens.
+    """
+
+    var _agreed: Bool
+    """Whether the handshake has finished.
+
+    False on a stream the async path built and has not driven to the end yet.
+    The synchronous constructor never hands out a stream where this is false,
+    because it does not return until the handshake is over.
+    """
+
+    var _trouble: String
+    """What went wrong, worded, from the step that failed.
+
+    The steps cannot raise, because the async driver reaches them from a
+    coroutine and a coroutine may not catch. So a step that fails writes the
+    sentence here and returns `TLS_BROKEN`, and whichever side of the boundary
+    is allowed to raise turns it into an error.
+    """
+
     def __init__(
         out self,
         var tcp: TcpStream,
@@ -141,11 +181,36 @@ struct TlsStream(Movable):
         context decides whether the chain is checked, and this decides whether
         the name is. They are always set together, and the caller that has the
         config is the one place that can be sure of it.
+
+        The async path cannot use this one, because there is no way to wait
+        inside a constructor without blocking the worker. It uses the overload
+        without a deadline and drives `try_handshake` itself.
+        """
+        self = Self(tcp^, ctx, hostname, verify)
+        self._handshake(deadline)
+
+    def __init__(
+        out self,
+        var tcp: TcpStream,
+        ctx: SslCtx,
+        hostname: String,
+        verify: Bool,
+    ) raises:
+        """Everything the other constructor does except the handshake.
+
+        The one caller is the async connect, which has to run the handshake a
+        step at a time and give the worker back in between. Nothing else should
+        want this: a stream from here has agreed nothing with the far end, and
+        reading from it before `try_handshake` says it is done reads a
+        handshake record as though it were a body.
         """
         self._tcp = tcp^
         self._ssl = Ssl(ctx)
         self._hostname = hostname.copy()
         self._closed = False
+        self._agreed = False
+        self._want = POLLIN
+        self._trouble = String()
         self._ssl.set_fd(self._tcp.fd())
 
         # RFC 6066 section 3 says SNI carries a host name, not an address, so a
@@ -159,30 +224,133 @@ struct TlsStream(Movable):
         if verify:
             self._ssl.set_verify_hostname(hostname)
 
-        self._handshake(deadline)
-
     def __deinit__(deinit self):
         pass
+
+    def is_established(self) -> Bool:
+        """Whether the handshake is over and the session may carry data."""
+        return self._agreed
+
+    def want(self) -> Int16:
+        """`POLLIN` or `POLLOUT`, after a step that returned `TLS_AGAIN`."""
+        return self._want
+
+    def trouble(self) -> String:
+        """The wording from the step that returned `TLS_BROKEN`."""
+        return self._trouble.copy()
+
+    def _again(mut self, code: Int) -> Bool:
+        """Record the direction a WANT asked for. False if it was not a WANT."""
+        if code == SSL_ERROR_WANT_READ:
+            self._want = POLLIN
+            return True
+        if code == SSL_ERROR_WANT_WRITE:
+            self._want = POLLOUT
+            return True
+        return False
+
+    def try_handshake(mut self) -> Int:
+        """One `SSL_connect`, with no waiting.
+
+        1 when the handshake is complete, `TLS_AGAIN` when it needs the socket
+        to move in the direction `want` reports, `TLS_BROKEN` when it failed and
+        `trouble` says why.
+        """
+        try:
+            clear_errors()
+            var rc = self._ssl.connect()
+            if rc == 1:
+                self._agreed = True
+                return 1
+            var code = self._ssl.last_error(rc)
+            if self._again(code):
+                return TLS_AGAIN
+            self._trouble = self._handshake_trouble(code)
+        except e:
+            self._trouble = String(e)
+        return TLS_BROKEN
+
+    def try_read[o: MutOrigin](mut self, buf: Span[UInt8, o]) -> Int:
+        """One `SSL_read`, with no waiting. See `try_handshake` for the codes.
+
+        Zero is a clean end of stream and nothing else. A connection that simply
+        stops is `TLS_BROKEN`, because those two look identical to the HTTP layer
+        above and are not the same thing at all: one is a server that finished,
+        the other is somebody cutting the wire in the middle of a body whose
+        length nothing declared.
+        """
+        try:
+            clear_errors()
+            var n = self._ssl.read(buf)
+            if n > 0:
+                return Int(n)
+            var code = self._ssl.last_error(n)
+            if self._again(code):
+                return TLS_AGAIN
+            if code == SSL_ERROR_ZERO_RETURN:
+                return 0
+            if code == SSL_ERROR_SYSCALL and self._ssl.peer_sent_close_notify():
+                return 0
+            self._trouble = self._read_trouble(code)
+        except e:
+            self._trouble = String(e)
+        return TLS_BROKEN
+
+    def try_write[
+        o: ImmOrigin
+    ](mut self, data: Span[UInt8, o], offset: Int = 0) -> Int:
+        """One `SSL_write` from `offset` on. See `try_handshake` for the codes.
+
+        `SSL_write` is all or nothing unless partial writes are turned on, and
+        they are not, so a call that reports a count has written that many. The
+        offset is still here because a retry after a WANT has to present the
+        same bytes at the same address, and a caller that tracks progress is the
+        shape that keeps that true.
+        """
+        try:
+            if offset >= data.__len__():
+                return 0
+            clear_errors()
+            var n = self._ssl.write(data[offset:])
+            if n > 0:
+                return Int(n)
+            var code = self._ssl.last_error(n)
+            if self._again(code):
+                return TLS_AGAIN
+            self._trouble = String(
+                "TLS write to ", self._hostname, " failed: ", error_text()
+            )
+        except e:
+            self._trouble = String(e)
+        return TLS_BROKEN
 
     def _handshake(mut self, deadline: Deadline) raises:
         """Drive `SSL_connect` to completion, or explain why it stopped."""
         while True:
             deadline.check(String("TLS handshake with ", self._hostname))
-            clear_errors()
-            var rc = self._ssl.connect()
+            var rc = self.try_handshake()
             if rc == 1:
                 return
-            var code = self._ssl.last_error(rc)
-            if code == SSL_ERROR_WANT_READ:
-                _ = self._tcp.wait_readable(deadline)
-                continue
-            if code == SSL_ERROR_WANT_WRITE:
-                _ = self._tcp.wait_writable(deadline)
-                continue
-            var failure = self._handshake_error(code)
-            raise failure^
+            if rc == TLS_BROKEN:
+                raise new_error(ErrorKind.CONNECT_ERROR, self._trouble)
+            self._wait(deadline)
 
-    def _handshake_error(self, code: Int) raises -> Error:
+    def _read_trouble(self, code: Int) raises -> String:
+        """Why a read that was neither data nor a clean end of stream failed."""
+        if code == SSL_ERROR_SYSCALL:
+            return String(
+                "the connection to ",
+                self._hostname,
+                (
+                    " ended without a TLS close notify, so the response may"
+                    " have been cut short by something other than the server."
+                ),
+            )
+        return String(
+            "TLS read from ", self._hostname, " failed: ", error_text()
+        )
+
+    def _handshake_trouble(self, code: Int) raises -> String:
         """Turn a failed handshake into something worth reading.
 
         The certificate check is first because it is by far the most common
@@ -192,37 +360,28 @@ struct TlsStream(Movable):
         """
         var verdict = self._ssl.verify_result()
         if verdict != X509_V_OK:
-            return new_error(
-                ErrorKind.CONNECT_ERROR,
-                String(
-                    "the TLS certificate from ",
-                    self._hostname,
-                    " was rejected: ",
-                    verify_error_text(verdict),
-                    ".",
-                    _certificate_advice(verdict, self._hostname),
-                ),
+            return String(
+                "the TLS certificate from ",
+                self._hostname,
+                " was rejected: ",
+                verify_error_text(verdict),
+                ".",
+                _certificate_advice(verdict, self._hostname),
             )
         if code == SSL_ERROR_SYSCALL or code == SSL_ERROR_ZERO_RETURN:
-            return new_error(
-                ErrorKind.CONNECT_ERROR,
-                String(
-                    "the connection to ",
-                    self._hostname,
-                    (
-                        " closed during the TLS handshake. A server that only"
-                        " speaks plain HTTP on this port does exactly this."
-                    ),
+            return String(
+                "the connection to ",
+                self._hostname,
+                (
+                    " closed during the TLS handshake. A server that only"
+                    " speaks plain HTTP on this port does exactly this."
                 ),
             )
-        return new_error(
-            ErrorKind.CONNECT_ERROR,
-            String(
-                "the TLS handshake with ",
-                self._hostname,
-                " failed: ",
-                error_text(),
-            ),
+        return String(
+            "the TLS handshake with ",
+            self._hostname,
+            " failed: ",
+            error_text(),
         )
 
     def fd(self) -> c_int:
@@ -268,40 +427,12 @@ struct TlsStream(Movable):
         """
         while True:
             deadline.check(String("TLS read from ", self._hostname))
-            clear_errors()
-            var n = self._ssl.read(buf)
-            if n > 0:
-                return Int(n)
-            var code = self._ssl.last_error(n)
-            if code == SSL_ERROR_WANT_READ:
-                _ = self._tcp.wait_readable(deadline)
-                continue
-            if code == SSL_ERROR_WANT_WRITE:
-                _ = self._tcp.wait_writable(deadline)
-                continue
-            if code == SSL_ERROR_ZERO_RETURN:
-                return 0
-            if code == SSL_ERROR_SYSCALL:
-                if self._ssl.peer_sent_close_notify():
-                    return 0
-                raise new_error(
-                    ErrorKind.READ_ERROR,
-                    String(
-                        "the connection to ",
-                        self._hostname,
-                        (
-                            " ended without a TLS close notify, so the response"
-                            " may have been cut short by something other than"
-                            " the server."
-                        ),
-                    ),
-                )
-            raise new_error(
-                ErrorKind.READ_ERROR,
-                String(
-                    "TLS read from ", self._hostname, " failed: ", error_text()
-                ),
-            )
+            var n = self.try_read(buf)
+            if n >= 0:
+                return n
+            if n == TLS_BROKEN:
+                raise new_error(ErrorKind.READ_ERROR, self._trouble)
+            self._wait(deadline)
 
     def write[
         o: ImmOrigin
@@ -317,24 +448,20 @@ struct TlsStream(Movable):
         var sent = 0
         while sent < data.__len__():
             deadline.check(String("TLS write to ", self._hostname))
-            clear_errors()
-            var n = self._ssl.write(data[sent:])
+            var n = self.try_write(data, sent)
             if n > 0:
-                sent += Int(n)
+                sent += n
                 continue
-            var code = self._ssl.last_error(n)
-            if code == SSL_ERROR_WANT_READ:
-                _ = self._tcp.wait_readable(deadline)
-                continue
-            if code == SSL_ERROR_WANT_WRITE:
-                _ = self._tcp.wait_writable(deadline)
-                continue
-            raise new_error(
-                ErrorKind.WRITE_ERROR,
-                String(
-                    "TLS write to ", self._hostname, " failed: ", error_text()
-                ),
-            )
+            if n == TLS_BROKEN:
+                raise new_error(ErrorKind.WRITE_ERROR, self._trouble)
+            self._wait(deadline)
+
+    def _wait(mut self, deadline: Deadline) raises:
+        """Block until the socket can move the way the last step asked for."""
+        if self._want == POLLIN:
+            _ = self._tcp.wait_readable(deadline)
+        else:
+            _ = self._tcp.wait_writable(deadline)
 
     def has_data_waiting(self) raises -> Bool:
         """Whether a read right now would return something.

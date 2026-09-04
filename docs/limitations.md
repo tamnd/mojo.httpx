@@ -10,8 +10,7 @@ Everything here is either tracked on the [roadmap](roadmap.md) or written up in 
 
 `AsyncClient` is real and it is not at parity with `Client` yet. [async.md](async.md) has the whole picture, including what Mojo 1.0.0 allows a coroutine to do, which is what most of this list comes down to.
 
-- No `https://`. There is no async TLS handshake, because OpenSSL's socket BIO does its own blocking reads and writes on the descriptor, which is exactly what the async path exists to avoid. Doing it properly needs memory BIOs. An https URL raises with a message saying so rather than being sent in the clear.
-- No HTTP/2, for the same reason. HTTP/2 is negotiated in the TLS handshake, so no async TLS means no async ALPN and no async h2.
+- No HTTP/2. The async pool speaks HTTP/1.1, so it does not offer `h2` in ALPN whatever the client was configured with, because advertising a protocol and then not speaking it is worse than not having it. `https://` itself works, over HTTP/1.1.
 - No streaming request bodies and no `Expect: 100-continue`. Both need a second source driven between writes, which is another suspending loop, and the async driver refuses them with an invalid argument error.
 - No cancellation. Nothing that stands for a request in flight can be handed to a user, so what stops a request is its deadline or closing its response. `tests/unit/test_aio_cancel.mojo` is the whole of what those do.
 - `gather` raises the first failure and drops the other responses, the way `asyncio.gather` does by default. There is no `return_exceptions` equivalent, because the pool underneath reports a batch as one outcome rather than as a list of them.

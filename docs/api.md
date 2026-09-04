@@ -715,7 +715,7 @@ from httpx import AsyncClient
 
 def main() raises:
     with AsyncClient() as client:
-        var r = client.get("http://example.com/")
+        var r = client.get("https://example.com/")
         print(r.status_code, r.text())
 ```
 
@@ -5377,9 +5377,9 @@ struct AsyncHTTPTransport
 
 The default async transport. An async connection pool and nothing else.
 
-http only for now. The pool refuses an https request with a message saying
-so rather than sending it in the clear, because there is no async TLS
-handshake yet. See `httpx._pool.aio_pool`.
+http and https, both over HTTP/1.1. The handshake runs in the connect loop
+without holding a worker, which `httpx._pool.aio_pool` explains. What it
+will not do yet is reach a server through a proxy that needs a tunnel.
 
 ```mojo
 from httpx import AsyncClient, AsyncHTTPTransport, erase_async_transport
@@ -5387,7 +5387,7 @@ from httpx import AsyncClient, AsyncHTTPTransport, erase_async_transport
 def main() raises:
     var transport = erase_async_transport(AsyncHTTPTransport())
     with AsyncClient(transport=transport^) as client:
-        print(client.get("http://example.com/").status_code)
+        print(client.get("https://example.com/").status_code)
 ```
 
 | Field | Type |
@@ -5410,11 +5410,12 @@ raising function to fill in a default.
 def __init__(
     out self,
     var limits: Limits,
+    var tls: TlsConfig = TlsConfig(),
     var proxy: Optional[Proxy] = None,
 ) raises
 ```
 
-Limits, and a proxy to send everything through.
+Limits, certificates, and a proxy to send everything through.
 
 The proxy belongs to the pool rather than to a request, so a transport
 built with one sends every request through it, the same as the

@@ -24,15 +24,16 @@ from httpx._pool.aio_pool import (
 )
 from httpx._pool.limits import Limits
 from httpx._pool.proxy import Proxy
+from httpx._stream.config import TlsConfig
 from httpx._transport.aio_base import AsyncTransport
 
 
 struct AsyncHTTPTransport(AsyncTransport):
     """The default async transport. An async connection pool and nothing else.
 
-    http only for now. The pool refuses an https request with a message saying
-    so rather than sending it in the clear, because there is no async TLS
-    handshake yet. See `httpx._pool.aio_pool`.
+    http and https, both over HTTP/1.1. The handshake runs in the connect loop
+    without holding a worker, which `httpx._pool.aio_pool` explains. What it
+    will not do yet is reach a server through a proxy that needs a tunnel.
 
     ```mojo
     from httpx import AsyncClient, AsyncHTTPTransport, erase_async_transport
@@ -41,7 +42,7 @@ struct AsyncHTTPTransport(AsyncTransport):
     def main() raises:
         var transport = erase_async_transport(AsyncHTTPTransport())
         with AsyncClient(transport=transport^) as client:
-            print(client.get("http://example.com/").status_code)
+            print(client.get("https://example.com/").status_code)
     ```
     """
 
@@ -57,15 +58,20 @@ struct AsyncHTTPTransport(AsyncTransport):
         self.pool = SharedAsyncPool(AsyncConnectionPool(Limits()))
 
     def __init__(
-        out self, var limits: Limits, var proxy: Optional[Proxy] = None
+        out self,
+        var limits: Limits,
+        var tls: TlsConfig = TlsConfig(),
+        var proxy: Optional[Proxy] = None,
     ) raises:
-        """Limits, and a proxy to send everything through.
+        """Limits, certificates, and a proxy to send everything through.
 
         The proxy belongs to the pool rather than to a request, so a transport
         built with one sends every request through it, the same as the
         synchronous transport does.
         """
-        self.pool = SharedAsyncPool(AsyncConnectionPool(limits^, proxy=proxy^))
+        self.pool = SharedAsyncPool(
+            AsyncConnectionPool(limits^, tls=tls^, proxy=proxy^)
+        )
 
     def handle_request(
         mut self, var request: Request, deadlines: Deadlines
