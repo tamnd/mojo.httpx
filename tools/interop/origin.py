@@ -1,15 +1,16 @@
-"""The HTTP/1.1 origin that every HTTP/2 front end in the suite proxies to.
+"""The HTTP/1.1 origin that both interop suites put something in front of.
 
-One origin behind four servers rather than four servers each configured to
-answer for themselves. What is being tested is the HTTP/2 each of them speaks,
-not how each one serves a file, and giving them all the same answers to give is
-what makes one case table apply to all four. A difference in a result is then a
-difference in the protocol handling and not a difference in what nginx and Caddy
-think a directory listing looks like.
+The HTTP/2 suite runs four front ends over it and the proxy suite runs four
+proxies to it. One origin rather than one per server, because what is being
+tested is the protocol each server speaks and not how each one serves a file,
+and giving them all the same answers to give is what makes one case table apply
+to all of them. A difference in a result is then a difference in the protocol
+handling and not a difference in what nginx and Caddy think a directory listing
+looks like.
 
 It speaks HTTP/1.1 and nothing else. The front end is what turns it into HTTP/2,
 which is also how almost every HTTP/2 deployment in the world is actually put
-together.
+together, and a forward proxy leaves it as it is.
 """
 
 from __future__ import annotations

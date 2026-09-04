@@ -62,13 +62,37 @@ pixi run interop-h2 --only nginx    # one server, repeat the flag for more
 
 The four are not four ways of asking the same question. nginx and Caddy are web servers that grew an HTTP/2 front end, Envoy is an HTTP/2 stack that grew a proxy, and nghttpx is the reference implementation's own server, written by the people who wrote the RFC. They disagree about window sizes, about how many frames a body arrives in, about whether a header block is Huffman coded, and about how strict to be with what we send. A client tested against one of them has been tested against one set of choices.
 
-All four sit in front of the same HTTP/1.1 origin, `tools/interop/h2_origin.py`, so all four have the same answers to give and a difference in a result is a difference in the HTTP/2 rather than in what each server thinks a directory listing looks like. It is also how almost every HTTP/2 deployment in the world is actually put together, which is what makes the translation each front end performs worth testing rather than an artefact of the setup.
+All four sit in front of the same HTTP/1.1 origin, `tools/interop/origin.py`, so all four have the same answers to give and a difference in a result is a difference in the HTTP/2 rather than in what each server thinks a directory listing looks like. It is also how almost every HTTP/2 deployment in the world is actually put together, which is what makes the translation each front end performs worth testing rather than an artefact of the setup.
 
 The cases are mostly about the parts of HTTP/2 that have no HTTP/1.1 equivalent, since the rest is already covered by unit tests and by the parity suite. Flow control is the main one: a 200 KiB upload and a 1 MiB download both exceed the 65535 octet initial window and cannot complete unless both sides exchange `WINDOW_UPDATE` correctly, and nothing smaller than a real server on the other end will tell you whether that works. The last case asks a server that speaks HTTP/2 for HTTP/1.1 and checks it gets it, because a suite where every case is an HTTP/2 case passes on a client that has forgotten how to negotiate and simply assumes.
 
 The suite has already earned its keep. It found that we sent no `content-length` on a request body we had in hand. That is legal in HTTP/2, where `END_STREAM` is what frames a body, and it is fine right up to the point where a front end has to proxy the request to an HTTP/1.1 origin, because with no length the only framing left for that hop is chunked. nginx buffers the body and adds a length of its own, so it passed. The other three streamed it through as chunked and the POST arrived empty. Three implementations disagreeing with us is not three bugs.
 
 It needs Docker and it pulls four images, so it is not part of `pixi run check` and not in CI. It runs on the fleet. The certificates are generated on first use into `tools/interop/.h2certs/`, last thirty days, and are not checked in.
+
+## The proxy interop suite
+
+Forty seven cases against Squid, tinyproxy, mitmproxy and Dante, all four in Docker on the loopback address.
+
+```bash
+pixi run interop-proxy                 # all four, then take them down
+pixi run interop-proxy --keep          # leave them running to poke at
+pixi run interop-proxy --only squid    # one proxy, repeat the flag for more
+```
+
+The four are picked for how different they are. Squid is what a corporate network actually runs, thirty years old and tolerant of almost anything. tinyproxy is a few thousand lines that forward and tunnel and nothing else, so a request that is not quite right fails against it first. mitmproxy exists to break the tunnel open, which is what makes it the only one here that can prove the tunnelling cases check what they claim to. Dante speaks SOCKS5, which is not HTTP and shares no code with the other three on either side of the connection.
+
+They all reach the same origin the HTTP/2 suite uses, `tools/interop/origin.py`, and the tunnelling cases go to `tlsorigin`, which is nginx holding the suite's own certificate in front of that same origin.
+
+Two things about the addresses are load bearing. The proxies are reached on `127.0.0.1`, where their ports are published, and the targets are named `origin` and `tlsorigin`, which are Docker network names that do not resolve on the machine running the suite. A client that resolved the target itself instead of handing the name to the proxy would fail every case with a resolver error, which is the failure worth catching, and no case here can pass by accident on a direct connection.
+
+Nine cases are the same for all three HTTP proxies: the absolute form request line, a `Host` naming the server rather than the proxy, a POST body, a megabyte, a streamed body, a 500, HEAD, several requests on one connection, and a relative redirect resolved and then proxied again. Squid and tinyproxy also get the tunnelling group, where the certificate that comes back through the CONNECT has to be the origin's own and not anything the proxy has, which is the whole claim a tunnel makes.
+
+The rest are the cases where the proxies differ on purpose. Squid is configured to refuse a CONNECT to anything but port 443, so there is a real refused tunnel to check, and a refusal has to arrive as an error carrying the status because a tunnel that was never opened has no channel for a response to come back through. The second tinyproxy wants credentials, which gives the contrast that matters: a refused forwarded request is an ordinary 407 `Response` with the challenge on it, and the identical refusal on a CONNECT is an error. Dante has the same pair over SOCKS5, where the credentials go into the handshake as RFC 1929 length prefixed fields rather than into a header, and offering none to a proxy that wants them has to say so rather than reporting a closed connection.
+
+The mitmproxy pair is the one to read if you read only one. The first case asks for a tunnel while trusting the suite's own CA and requires it to fail, because a proxy answering the handshake with its own certificate is a party in the middle. The second trusts mitmproxy's CA on purpose and requires the same request to succeed, which is what somebody debugging their own traffic does, and it is also what stops the first case from passing on a client that cannot handshake through a tunnel at all.
+
+Squid, tinyproxy and Dante are built from `debian:bookworm-slim` rather than pulled, because every published image for them is somebody's own arrangement with its own entry point. Each product is one image and two containers, with the configuration file as the argument, so the plain listener and the one that wants credentials are the same build. It needs Docker, so like the HTTP/2 suite it is not part of `pixi run check` and not in CI, and it runs on the fleet. Certificates go into `tools/interop/.proxycerts/`, along with the CA mitmproxy generates for itself on first start, and none of it is checked in.
 
 ## The differential fuzzers
 
@@ -140,6 +164,7 @@ tools/fleet/run.sh --role fuzz      # every host with that role
 tools/fleet/run.sh -- pixi run bench
 tools/fleet/run.sh --role interop -- pixi run badssl
 tools/fleet/run.sh --role interop -- pixi run interop-h2
+tools/fleet/run.sh --role interop -- pixi run interop-proxy
 ```
 
 The script copies the working tree over SSH, installs the pinned toolchain on the other end, and runs the task. It holds no credentials and needs no runner registered with GitHub. The only requirement is that `ssh <name>` already works.

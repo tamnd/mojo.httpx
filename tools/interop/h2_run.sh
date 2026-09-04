@@ -90,7 +90,7 @@ echo "=== servers"
 
 docker run -d --name origin --network "$NET" \
   -v "$CONF:/conf:ro" \
-  python:3.12-alpine python /conf/h2_origin.py >/dev/null
+  python:3.12-alpine python /conf/origin.py >/dev/null
 echo "    origin"
 
 if wanted nginx; then
