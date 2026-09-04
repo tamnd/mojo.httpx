@@ -119,11 +119,11 @@ def test_an_explicit_header_wins_over_the_url() raises:
 
 
 def test_a_scheme_that_is_not_a_proxy_scheme_is_refused() raises:
-    """SOCKS is a later milestone and is not this code path. Accepting the
-    scheme and then speaking HTTP at a SOCKS port would fail somewhere much
-    further down, with a message about a malformed response."""
+    """Accepting a scheme and then speaking HTTP at whatever is listening on
+    that port would fail somewhere much further down, with a message about a
+    malformed response. SOCKS is accepted and is `test_socks5`."""
     with assert_raises(contains="not a proxy scheme"):
-        _ = Proxy("socks5://proxy.example:1080")
+        _ = Proxy("ftp://proxy.example:2121")
 
 
 def test_a_proxied_request_asks_for_the_whole_url() raises:

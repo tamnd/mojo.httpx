@@ -76,6 +76,10 @@ A `CONNECT` tunnel is the one case where the key is the target rather than the p
 
 The tunnel itself is `httpx._proto.h1.tunnel.open_tunnel`, and it works on a raw `TcpStream` rather than on a `Stream`. It has to: TLS is the thing being tunnelled, and `TlsStream` runs its handshake as part of construction, so the CONNECT has to finish while the socket is still bare. `open_tunnel` also refuses a proxy that sends anything after its `200`. In practice a proxy never does, because the client speaks first inside a tunnel, but if one did those bytes would have nowhere to go: OpenSSL reads the descriptor itself and there is no way to hand it bytes already taken off.
 
+SOCKS5 is the second tunnel and it fits the same seam. `httpx._proto.socks5.open_socks5` runs the RFC 1928 exchange on a bare `TcpStream` and hands back a socket that reaches the target, which is exactly what `open_tunnel` hands back, so `ConnectionPool._acquire` does not know which of the two happened and `TlsStream` goes on top of either. The scheme on `Hop.connect_via` is what picks between them and that is the only place the difference is visible. What is different above the pool is the routing: a SOCKS proxy never reads the request, so `route_through` sends every target through it as a tunnel, `http://` ones included, and adds nothing to the request. It also means a SOCKS pool gets less reuse than a forwarding one, since two servers are always two connections.
+
+The async pool refuses both. It opens its sockets inside a coroutine, and a handshake that has to finish before the first request byte has nowhere to run there, so `open` raises on any hop with a `connect_via` on it. Refused rather than ignored, because ignoring it would connect straight to the target and send the request without the proxy.
+
 Mixing proxied and direct traffic is `mounts=`, which is a map from URL pattern to transport and so is a layer above this one. [proxies.md](proxies.md) has the user facing side.
 
 ## JSON is an arena, and the parser has its own stack

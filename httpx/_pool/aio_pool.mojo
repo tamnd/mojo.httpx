@@ -666,6 +666,23 @@ struct AsyncConnectionPool(Movable):
         # After the https check, so that an https request through a proxy is
         # turned away by the reason that is actually stopping it here.
         var route = route_through(self.proxy, request, form)
+        if route.connect_via:
+            # A tunnel of either kind is a handshake on the socket before the
+            # request goes out, and the socket here is not opened until the
+            # coroutine runs. Refused rather than ignored: carrying on would
+            # connect straight to the target and send the request without the
+            # proxy, which is a request going somewhere the caller told it not
+            # to go.
+            raise new_error(
+                ErrorKind.INVALID_ARGUMENT,
+                String(
+                    "the async pool cannot open a tunnel yet, so reaching ",
+                    route.origin,
+                    " through ",
+                    route.connect_via.value(),
+                    " has to go through the synchronous client for now",
+                ),
+            )
         var origin = route.origin
         var wire = route.form
 
