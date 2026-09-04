@@ -4,7 +4,7 @@ The goal is that code written against httpx2 reads the same here, and that a req
 
 The file is still called `deviations.md` because a lot of code comments point at it by name. This is the page to read when you are porting something.
 
-This page is about behaving differently while doing the same job. Things that are simply not here yet, such as the async TLS handshake, are on [limitations.md](limitations.md) instead.
+This page is about behaving differently while doing the same job. Things that are simply not here yet, such as HTTP/2 on the async client, are on [limitations.md](limitations.md) instead.
 
 Two kinds of difference show up. The first kind is forced by the language: Mojo has no dynamic `Any`, no exception subclassing, no generators and no keyword argument packing, so anything built on those has to be spelled differently. The second kind is a judgement call, where copying httpx2 exactly was possible and we chose not to. The second kind is much shorter and each entry says what the alternative was.
 

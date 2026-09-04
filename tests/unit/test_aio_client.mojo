@@ -12,9 +12,10 @@ auth retries came out of a different instantiation and were never exercised.
 Every one of these ran through code that has only ever been compiled for this
 client.
 
-The last few are about what the async client cannot do yet. Both of them raise
-with something a reader can act on, and both are tested here so that the day
-they start working, these are the tests that fail and say so.
+The two https tests near the end are here rather than in
+`tests/unit/test_tls.mojo` for the same reason as the rest: the handshake is the
+same handshake, but a failure inside a coroutine has further to travel before it
+reaches the caller, and that journey is what the second of them checks.
 
 Every call that needs the server goes through a helper taking the server as an
 argument, for the reason `tests/unit/test_client.mojo` gives: Mojo ends a value's
@@ -29,7 +30,7 @@ from httpx._auth import basic_auth
 from httpx._client import USER_AGENT
 from httpx._codec.decode import accept_encoding
 from httpx._config import Timeout
-from httpx._exceptions import ErrorKind, is_invalid_argument, kind_of
+from httpx._exceptions import ErrorKind, kind_of
 from httpx._hooks import (
     EventHooks,
     RequestHook,
@@ -366,16 +367,35 @@ def test_aio_client_takes_a_transport_the_caller_built() raises:
     assert_equal(response.status_code, 201)
 
 
-def test_aio_client_refuses_https_rather_than_sending_in_the_clear() raises:
-    """No async handshake yet, so the only safe answer is to say so."""
+def test_aio_client_talks_to_an_https_server() raises:
+    """A real handshake driven from a coroutine, and a real answer after it.
+
+    The same server and the same certificate `tests/unit/test_tls.mojo` uses
+    against the synchronous client, because the two run the same handshake: the
+    async path only moves the waiting between steps one level up.
+    """
+    var server = TestServer(tls=True)
+    var client = AsyncClient(verify=TestServer.tls_verify())
+    var response = _get(client, server, "/get")
+
+    assert_equal(response.status_code, 200)
+    assert_equal(response.json()["method"].as_string(), "GET")
+    client.close()
+
+
+def test_aio_client_refuses_a_certificate_nobody_trusts() raises:
+    """The half that matters. A client that accepted this would pass the test
+    above and be worth nothing, and a handshake that fails inside a coroutine
+    has further to travel to reach the caller than one that fails on a thread,
+    so it is checked here rather than assumed from the synchronous path."""
+    var server = TestServer(tls=True)
     var client = AsyncClient()
     var raised = False
     try:
-        _ = client.get("https://example.com/")
+        _ = _get(client, server, "/get")
     except e:
         raised = True
-        assert_true(is_invalid_argument(e))
-        assert_true("https" in String(e))
+        assert_true("verify" in String(e) or "certificate" in String(e))
     assert_true(raised)
     client.close()
 

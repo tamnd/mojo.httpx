@@ -84,6 +84,20 @@ struct AsyncTcpStream(Movable):
         self._inner.close()
         self._inner = inner^
 
+    def take_inner(mut self) -> TcpStream:
+        """Hand the socket over, leaving a detached stream behind.
+
+        The one caller is `AsyncStream.start_tls`, which has to give the
+        descriptor to a `TlsStream` and cannot copy it: two owners would mean
+        two closes, and the second one lands on whatever connection the number
+        was reused for. Swapped rather than moved out, because Mojo will not
+        move a field with a destructor out of a value that still has to be
+        destroyed.
+        """
+        var taken = TcpStream(INVALID_FD, String())
+        swap(taken, self._inner)
+        return taken^
+
     def fd(self) -> c_int:
         """The raw descriptor. Nothing outside this layer may close it."""
         return self._inner.fd()

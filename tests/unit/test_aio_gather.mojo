@@ -371,3 +371,27 @@ def test_gather_works_over_a_mock_transport() raises:
 
     assert_equal(responses[0].status_code, 201)
     assert_equal(responses[1].status_code, 202)
+
+
+def test_gather_over_https_shakes_every_hand_at_once() raises:
+    """The reason a handshake in a coroutine was worth writing.
+
+    Nothing is reusable here because every request in the batch has to open its
+    own connection, so each one runs a whole handshake, and each one gives way
+    in the middle of it several times. A handshake that held its worker would
+    turn this batch into a queue.
+    """
+    var server = TestServer(tls=True)
+    var client = AsyncClient(verify=TestServer.tls_verify())
+
+    var paths = List[String]()
+    for i in range(4):
+        paths.append(String("/get?i=", i))
+    var requests = _paths(client, server, paths)
+    var responses = _gather(client, server, requests^)
+
+    assert_equal(len(responses), 4)
+    for i in range(4):
+        assert_equal(responses[i].status_code, 200)
+        assert_true(String("i=", i) in responses[i].text())
+    client.close()

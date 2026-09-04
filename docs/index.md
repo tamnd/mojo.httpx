@@ -2,7 +2,7 @@
 
 mojo.httpx is a full featured HTTP client for Mojo, with the same API and the same developer experience as [httpx2](https://github.com/pydantic/httpx2). If you already know `requests` or `httpx`, you already know most of this.
 
-The library is pre-alpha. HTTP/1.1 and HTTP/2 both work, over plain TCP and over TLS, with connection pooling, streaming in both directions, proxies, cookies, redirects, authentication and content decoding. The async client works over `http://` and refuses `https://`, because there is no async TLS handshake yet. [Limitations](limitations.md) is the honest list of everything that is missing or does less than it should.
+The library is pre-alpha. HTTP/1.1 and HTTP/2 both work, over plain TCP and over TLS, with connection pooling, streaming in both directions, proxies, cookies, redirects, authentication and content decoding. The async client works over `http://` and `https://`, speaking HTTP/1.1 only. [Limitations](limitations.md) is the honest list of everything that is missing or does less than it should.
 
 ## Where to start
 

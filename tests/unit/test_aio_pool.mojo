@@ -23,19 +23,17 @@ uses.
 from std.runtime.asyncrt import TaskGroup, _run, parallelism_level
 from std.testing import assert_equal, assert_false, assert_true
 
-from httpx._exceptions import (
-    is_connect_error,
-    is_invalid_argument,
-    is_pool_timeout,
-)
+from httpx._exceptions import is_connect_error, is_pool_timeout
 from httpx._io.aio import yield_now
 from httpx._io.deadline import Deadline, Deadlines
 from httpx._models.request import Request
 from httpx._models.url import URL
 from httpx._pool.aio_pool import AsyncConnectionPool, PoolCall, pooled_exchange
 from httpx._pool.limits import Limits
+from httpx._stream.config import TlsConfig
 
 from tests.support.loopback import Loopback, Peer, dead_address
+from tests.support.testserver import TestServer
 
 comptime OK_RESPONSE = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
 
@@ -113,18 +111,81 @@ def test_aio_pool_a_connection_the_server_dropped_is_not_handed_out() raises:
     assert_equal(pool.finish(work.calls[second]).status_code, 200)
 
 
-def test_aio_pool_https_is_refused_rather_than_sent_in_the_clear() raises:
+def test_aio_pool_an_https_request_shakes_hands_before_it_sends() raises:
+    """The handshake driven by the coroutine rather than by a client above it.
+
+    A real server rather than the hand driven loopback the rest of this file
+    uses, because the server side of a handshake is OpenSSL and writing one a
+    step at a time here would be testing the test. What this checks is the pool
+    side: that `open` builds an https call, that `pooled_exchange` runs the
+    handshake inside its connect loop, and that the answer comes back through
+    `finish` the same as a plain one.
+    """
+    var server = TestServer(tls=True)
+    var tls = TlsConfig()
+    tls.verify = TestServer.tls_verify()
+    var pool = AsyncConnectionPool(Limits(), tls=tls^)
+    var request = Request("GET", URL(server.url("/get")))
+    var call = pool.open(request, Deadlines.never())
+    var budget = _budget()
+    _run(
+        pooled_exchange(
+            Pointer(to=call.race),
+            Pointer(to=call.conn),
+            Pointer(to=call.securing),
+            Pointer(to=request),
+            Pointer(to=call.result),
+            call.connecting,
+            budget.connect,
+            budget.write,
+            budget.read,
+            call.form,
+        )
+    )
+
+    var response = pool.finish(call)
+    assert_equal(response.status_code, 200)
+    assert_true('"method": "GET"' in response.text())
+    assert_equal(pool.leased_count(), 0)
+    assert_equal(pool.idle_count(), 1)
+    server.stop()
+
+
+def test_aio_pool_a_certificate_nobody_trusts_stops_the_connect() raises:
+    """A handshake failure has to reach `finish` as an exception, the same as a
+    refused connect. It is recorded on the exchange rather than raised, because
+    the coroutine that noticed it cannot raise, and a pool that lost the reason
+    would report a working server as unreachable."""
+    var server = TestServer(tls=True)
     var pool = AsyncConnectionPool(Limits())
-    var request = Request("GET", URL("https://example.com/"))
+    var request = Request("GET", URL(server.url("/get")))
+    var call = pool.open(request, Deadlines.never())
+    var budget = _budget()
+    _run(
+        pooled_exchange(
+            Pointer(to=call.race),
+            Pointer(to=call.conn),
+            Pointer(to=call.securing),
+            Pointer(to=request),
+            Pointer(to=call.result),
+            call.connecting,
+            budget.connect,
+            budget.write,
+            budget.read,
+            call.form,
+        )
+    )
 
     var raised = False
     try:
-        _ = pool.open(request, Deadlines.never())
+        _ = pool.finish(call)
     except e:
         raised = True
-        assert_true(is_invalid_argument(e))
-        assert_true("https" in String(e))
+        assert_true("verify" in String(e) or "certificate" in String(e))
     assert_true(raised)
+    assert_equal(pool.leased_count(), 0)
+    assert_equal(pool.idle_count(), 0)
+    server.stop()
 
 
 def test_aio_pool_a_refused_connect_comes_back_from_finish() raises:
@@ -140,6 +201,7 @@ def test_aio_pool_a_refused_connect_comes_back_from_finish() raises:
         pooled_exchange(
             Pointer(to=call.race),
             Pointer(to=call.conn),
+            Pointer(to=call.securing),
             Pointer(to=request),
             Pointer(to=call.result),
             call.connecting,
@@ -397,6 +459,7 @@ async def _one_of_them[
             pooled_exchange(
                 Pointer(to=work[].calls[i].race),
                 Pointer(to=work[].calls[i].conn),
+                Pointer(to=work[].calls[i].securing),
                 Pointer(to=work[].requests[i]),
                 Pointer(to=work[].calls[i].result),
                 work[].calls[i].connecting,
@@ -421,6 +484,7 @@ async def _all_of_them[
             pooled_exchange(
                 Pointer(to=work[].calls[i].race),
                 Pointer(to=work[].calls[i].conn),
+                Pointer(to=work[].calls[i].securing),
                 Pointer(to=work[].requests[i]),
                 Pointer(to=work[].calls[i].result),
                 work[].calls[i].connecting,

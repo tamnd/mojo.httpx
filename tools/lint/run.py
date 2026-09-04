@@ -255,13 +255,13 @@ def justified(lines: list[str], index: int) -> bool:
     docstring below counts.
 
     The search below a signature runs to the end of the parameter list rather
-    than a fixed few lines. An async driver takes three pointers and two
-    deadlines and its closing bracket is nine lines down, and a first parameter
-    that fell outside the window was being asked to justify itself separately
-    from the docstring that already does.
+    than a fixed few lines. The pooled async exchange takes four pointers, three
+    deadlines and two mode flags, so its docstring is sixteen lines below its
+    first parameter, and a first parameter that fell outside the window was being
+    asked to justify itself separately from the docstring that already does.
     """
     if in_signature(lines, index):
-        for offset in range(0, 12):
+        for offset in range(0, 20):
             position = index + offset
             if position < len(lines) and '"""' in lines[position]:
                 return True

@@ -33,9 +33,11 @@ the async client alone while every method on `BaseClient` belongs to both.
 `a`. `httpx._models.response` says why that is the honest answer rather than a
 shortcut.
 
-The one thing the async client will not do is an `https://` URL, which raises,
-because there is no async TLS handshake and sending in the clear because the
-secure path is unfinished is not a thing this library will do.
+`https://` works, over HTTP/1.1. The handshake happens in the connect loop
+without holding a worker, and it is the same handshake the synchronous client
+runs, with the same certificate checks. What is not here is HTTP/2, which the
+async pool does not offer in ALPN, and a proxy that needs a tunnel, which is
+refused rather than quietly bypassed.
 """
 
 from httpx._auth import AnyAuth
@@ -60,18 +62,13 @@ def _default_async_transport(
 ) raises -> AnyAsyncTransport:
     """The pool an async client gets when the caller named no transport.
 
-    `tls` is dropped. Everything in it describes a handshake, and the async pool
-    refuses an `https://` request before it would get as far as one, so there is
-    nothing here for it to configure yet. It stays in the signature because the
-    signature is shared with the synchronous client, and because this is where
-    it starts being used the day the handshake exists.
-
-    `proxy` is not dropped. Forward proxying is `http://` only either way, so
-    the async pool can do all of it that the synchronous one can, and a proxy
-    quietly ignored would be a client sending traffic straight out of a network
-    that expects it to go through the proxy.
+    The same three pieces the synchronous client passes on, and they mean the
+    same things. The one thing the async pool does with `tls` that the
+    synchronous one does not is refuse to offer h2 in ALPN, because it speaks
+    HTTP/1.1 and advertising a protocol it cannot speak would be worse than not
+    having it.
     """
-    return erase_async_transport(AsyncHTTPTransport(limits^, proxy^))
+    return erase_async_transport(AsyncHTTPTransport(limits^, tls^, proxy^))
 
 
 comptime AsyncClient = BaseClient[AnyAsyncTransport, _default_async_transport]
@@ -83,7 +80,7 @@ from httpx import AsyncClient
 
 def main() raises:
     with AsyncClient() as client:
-        var r = client.get("http://example.com/")
+        var r = client.get("https://example.com/")
         print(r.status_code, r.text())
 ```
 """

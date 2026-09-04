@@ -5,7 +5,9 @@ the same as one through the synchronous transport, since that is the promise the
 whole async path is being built to keep. That a batch really overlaps, which is
 the only reason the async transport exists at all. And that the vtable reaches
 the concrete type underneath in both directions, because a dispatch that quietly
-went to the wrong place would show up as a hang somewhere far from here.
+went to the wrong place would show up as a hang somewhere far from here. And
+that the TLS configuration reaches the pool, which is a one line join that has
+already been got wrong once.
 
 The server is the real one from `tests/server/server.py` rather than a loopback
 socket driven by hand. `tests/unit/test_aio_pool.mojo` drives both ends itself,
@@ -18,17 +20,14 @@ answers on threads is exactly that.
 from std.runtime.asyncrt import parallelism_level
 from std.testing import assert_equal, assert_true
 
-from httpx._exceptions import (
-    is_connect_error,
-    is_invalid_argument,
-    is_pool_timeout,
-)
+from httpx._exceptions import is_connect_error, is_pool_timeout
 from httpx._io.deadline import NANOS_PER_SECOND, Deadlines, now_ns
 from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.response import Response
 from httpx._models.url import URL
 from httpx._pool.limits import Limits
+from httpx._stream.config import TlsConfig
 from httpx._transport.aio_base import AnyAsyncTransport, erase_async_transport
 from httpx._transport.aio_http import AsyncHTTPTransport
 from httpx._transport.mock import MockRouter, MockTransport, Route
@@ -240,19 +239,22 @@ def test_aio_transport_close_releases_the_pooled_connections() raises:
     assert_equal(transport.pool[].total_count(), 0)
 
 
-def test_aio_transport_https_is_refused_rather_than_sent_in_the_clear() raises:
-    """Until there is an async handshake, the answer has to be a refusal."""
-    var transport = AsyncHTTPTransport()
-    var raised = False
-    try:
-        _ = transport.handle_request(
-            Request("GET", URL("https://example.com/")), _deadlines()
-        )
-    except e:
-        raised = True
-        assert_true(is_invalid_argument(e))
-        assert_true("https" in String(e))
-    assert_true(raised)
+def test_aio_transport_sends_over_https() raises:
+    """The transport carries the TLS configuration down to the pool.
+
+    Worth its own test rather than being covered by the client one above it,
+    because the wiring between the two used to drop `tls` on the floor and a
+    dropped trust store looks exactly like a certificate that is not trusted.
+    """
+    var server = TestServer(tls=True)
+    var tls = TlsConfig()
+    tls.verify = TestServer.tls_verify()
+    var transport = AsyncHTTPTransport(Limits(), tls^)
+    var response = _send_one(
+        transport, server, Request("GET", URL(server.url("/get")))
+    )
+    assert_equal(response.status_code, 200)
+    transport.close()
 
 
 def test_aio_transport_a_batch_through_a_limit_of_one_still_answers() raises:

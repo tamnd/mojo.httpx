@@ -67,7 +67,7 @@ A caller sitting on a half read body is holding a connection and no worker at al
 
 ## What it will not do
 
-An `https://` URL raises, with a message saying so rather than being sent in the clear. There is no async TLS handshake yet. HTTP/2 is out for the same reason, since it is negotiated in the handshake, and so is a `CONNECT` tunnel or a SOCKS proxy. Forwarding a plain `http://` request through an HTTP proxy does work.
+`https://` works, over HTTP/1.1. What is out is HTTP/2, because the async pool does not offer `h2` in ALPN, and a `CONNECT` tunnel or a SOCKS proxy, because both need a handshake finished before the connection is usable and there is nowhere in the connect loop to put one. Forwarding a plain `http://` request through an HTTP proxy does work.
 
 There is no `task.cancel()`, because there is nothing that stands for a request in flight to give you. What stops a request is its deadline, which is checked several times a second rather than at the end of whatever the server is doing, or closing its response. Either way the connection is closed rather than pooled and the pool slot comes back.
 
@@ -254,13 +254,21 @@ Closing the client does not stop anything either. It closes the connections sitt
 
 If a later Mojo grows a cancellation token, the place it goes is the poll loop in `httpx/_io/aio.mojo`. That loop already comes back around several times a second to look at a deadline, so checking one more thing there is a small change, and nothing above `httpx/_io/` would need to know.
 
+## How https works here
+
+There is one TLS implementation and the async path uses it. `TlsStream` in `httpx/_stream/tls.mojo` already keeps its socket non blocking and already talks to OpenSSL one step at a time, because OpenSSL asks for more data by returning `SSL_ERROR_WANT_READ` rather than by blocking. Its `try_handshake`, `try_read` and `try_write` are exactly the steps a coroutine needs, and its `read` and `write` are those same steps with a `poll` between them. So both clients run the same handshake, the same certificate checks and the same record layer, and the only thing that differs is who does the waiting.
+
+That is why there are no memory BIOs. The socket BIO blocks when the descriptor does, and this descriptor never does.
+
+Which way to wait has to be asked rather than assumed, and `AsyncStream.want` is what answers. A TLS read can want to write and a TLS write can want to read, because renegotiation and post handshake authentication send records in the direction opposite to the data. A driver that polls for readability because it happened to be reading works until the day a server asks for a new key.
+
+The handshake runs inside the connect loop in `httpx/_pool/aio_pool.mojo` rather than in a loop of its own, because a coroutine here is allowed two suspending loops and not three. A connection with no descriptor yet is one the race has not won, and one that has a descriptor and has agreed nothing is one still shaking hands, so which half a pass of the loop is in comes off the connection rather than out of a phase kept beside it. The connect deadline covers both halves, which is what the synchronous path does too: a server that accepts a connection and then says nothing is a connect that never finished, whatever the kernel thinks of it.
+
 ## What the async client cannot do yet
 
-An `https://` URL is refused, and it raises with a message saying so rather than doing something almost right. There is no async TLS handshake, because OpenSSL's socket BIO does its own blocking reads and writes on the descriptor, which is exactly what the async path exists to avoid. Doing it properly means memory BIOs, where OpenSSL never touches the socket and the library does all the reading and writing under its own rules. That is wanted anyway, since it would also let the SIGPIPE workaround in `docs/tls.md` go away. Until then the answer is a refusal, because sending in the clear because the secure path is unfinished is not a thing this library will do.
+Streaming request bodies and `Expect: 100-continue` are refused by the async driver, one layer down. Both need a second source driven between writes, which is another suspending loop.
 
-Streaming request bodies and `Expect: 100-continue` are refused the same way, one layer down, by the async driver. Both need a second source driven between writes, which is another suspending loop.
-
-HTTP/2 is out for the same reason https is, since it is negotiated in the TLS handshake. [limitations.md](limitations.md) collects these together with everything else the library does not do yet, so a reader deciding whether this fits does not have to assemble the list from the design pages.
+HTTP/2 is out. It is negotiated by ALPN in the handshake, and the async pool asks for HTTP/1.1 only whatever the client was configured with, because offering a protocol it cannot speak would get a settings frame back where it expected a status line. [limitations.md](limitations.md) collects these together with everything else the library does not do yet, so a reader deciding whether this fits does not have to assemble the list from the design pages.
 
 ## What we are taking on knowingly
 

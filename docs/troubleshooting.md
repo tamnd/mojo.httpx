@@ -188,15 +188,19 @@ Set `default_encoding=DefaultEncoding("iso-8859-1")` on the client if you know w
 
 ## The async client
 
-### `InvalidArgument: the async pool cannot speak https yet, so ORIGIN has to go through the synchronous client for now`
+### An https request through the async client is slower than the same one through `Client`
 
-There is no async TLS handshake. OpenSSL's socket BIO does its own blocking reads and writes on the descriptor, which is exactly what the async path exists to avoid, and doing it properly needs memory BIOs. It is refused rather than sent in the clear.
+One request at a time, it will be, by roughly the length of a handshake. The synchronous handshake sits in `poll` until the socket moves. The async one comes back around its loop several times a second to look at the deadline, so a handshake that needs four round trips can spend a millisecond or two waiting to notice each one. That is the same trade every wait in the async path makes, and it is written up under waiting in [async](docs/async.md).
 
-Use `Client` for `https://` today. `AsyncClient` works over `http://`, including through an HTTP proxy.
+It is the wrong measurement anyway. Send four requests with `gather` and the four handshakes overlap, which is what the async client is for. One request at a time has nothing to overlap with, so `Client` is the better answer for it.
+
+### `h2` is never negotiated on the async client
+
+The async pool asks for HTTP/1.1 only in ALPN, whatever `http2=` was set to on the client, because it speaks HTTP/1.1 and offering `h2` would get a settings frame back where it expected a status line. Use `Client(http2=True)` for HTTP/2 today.
 
 ### A tunnel or a SOCKS proxy raises on the async client
 
-Same shape of answer. The async client opens its sockets inside a coroutine and has nowhere to put a handshake that has to finish first, so `CONNECT` and SOCKS5 both raise rather than being ignored. Forwarding a plain `http://` request through an HTTP proxy is the one proxy shape it does.
+The async client opens its sockets inside a coroutine and has nowhere to put a proxy handshake that has to finish before the connection is usable at all, so `CONNECT` and SOCKS5 both raise rather than being ignored. A TLS handshake fits because it folds into the connect loop, and neither of these does. Forwarding a plain `http://` request through an HTTP proxy is the one proxy shape it does.
 
 ### `gather` raised and I lost the other responses
 

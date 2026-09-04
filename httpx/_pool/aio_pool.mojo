@@ -58,21 +58,41 @@ loop may read a scalar and not much else: a helper that answered the same
 question by looking at the length of the address list fails to lower. The caller
 knows the answer before the coroutine starts, so it says so.
 
+## How TLS fits into the connect loop
+
+An https request shakes hands in the loop that opened the socket rather than in
+a loop of its own, and that is the compiler rather than the design. A coroutine
+may have a synchronous step between its first suspending loop and its second and
+may not have one between its second and its third, so a third loop here would
+have nowhere to put the turn around that already stands between the write and
+the read. `_connect_step` therefore runs the race until it has a winner and then
+drives `SSL_connect` a step at a time over the same socket, and both halves give
+the worker back the same way.
+
+None of the handshake itself is written twice. The steps are `TlsStream`'s, the
+same code the synchronous pool hands its sockets to, and
+`httpx._stream.aio_stream` says why a non blocking socket BIO is all it needs.
+
 ## What is not here yet
 
-https. There is no async TLS handshake, so an https request is refused with a
-message that says so rather than being quietly sent in the clear. The handshake
-is its own suspending loop, because OpenSSL asks for more socket data by
-returning WANT_READ rather than by waiting, and it is the next piece.
+Tunnels. Reaching a server through an `http://` or a SOCKS proxy means a
+handshake on the socket before the request goes out, which is a third thing for
+the connect loop to drive. Refused rather than ignored, because carrying on
+would send the request straight to the target.
+
+HTTP/2. This pool speaks HTTP/1.1, so it does not offer h2 in ALPN whatever the
+client was configured with, and a server therefore never picks it.
 """
 
 from std.memory import ArcPointer
 from std.runtime.asyncrt import TaskGroup, _run
 
 from httpx._exceptions import ErrorKind, is_connect_error, new_error
+from httpx._ffi.errno import Op
 from httpx._ffi.netdb import SockAddr
-from httpx._io.aio import yield_now
-from httpx._io.aio_connect import RACING, Race, _race_step, start_race
+from httpx._ffi.openssl import SslCtx
+from httpx._io.aio import Outcome, poll_slice, slice_for, yield_now
+from httpx._io.aio_connect import RACING, SETTLED, Race, _race_step, start_race
 from httpx._io.deadline import NANOS_PER_SECOND, Deadline, Deadlines, now_ns
 from httpx._io.dns import Resolver
 from httpx._models.headers import Headers
@@ -98,6 +118,68 @@ from httpx._proto.h1.aio import (
 )
 from httpx._proto.h1.head import ResponseHead
 from httpx._proto.h1.writer import TargetForm
+from httpx._stream.aio_stream import STREAM_AGAIN
+from httpx._stream.config import TlsConfig
+
+
+comptime SharedSslCtx = ArcPointer[SslCtx]
+"""A TLS context more than one request can hold.
+
+Shared rather than copied because building one parses the trust store, which
+for the default bundle is a hundred and fifty certificates and would be the
+most expensive thing in the client if it happened per request. An `SSL_CTX` is
+not copyable and every request that is about to connect needs to reach the same
+one, so a handle it is.
+"""
+
+
+struct Securing(Movable):
+    """What the connect loop needs to put TLS on the socket it just opened.
+
+    Lives in the caller's memory beside the race, for the reason everything else
+    a suspension has to survive does: the coroutine reaches it through a pointer
+    and cannot hold any of it in its own frame.
+
+    A plain `http://` request has one of these too, with no context in it, and
+    the connect loop reads that as nothing to do. A field that is sometimes
+    absent is cheaper than a second shape of `PoolCall`.
+    """
+
+    var ctx: Optional[SharedSslCtx]
+    """The pool's context, or nothing for a request that is not encrypted."""
+
+    var hostname: String
+    """The name to send in SNI and to check the certificate against.
+
+    The host the caller asked for, not the address the race won with. A
+    certificate is issued for a name, and checking it against whichever of the
+    host's addresses answered first would fail on every host with more than one.
+    """
+
+    var verify: Bool
+    """Whether to check the certificate against the name. See `TlsStream`."""
+
+    var rounds: Int
+    """How many times the handshake has given way, which only picks how long a
+    pass may sit in a poll. Same counter and same meaning as the one in the race
+    and the ones in the socket waits."""
+
+    def __init__(out self):
+        """A request with no TLS on it."""
+        self.ctx = None
+        self.hostname = String()
+        self.verify = False
+        self.rounds = 0
+
+    @staticmethod
+    def over_tls(
+        var ctx: SharedSslCtx, var hostname: String, verify: Bool
+    ) -> Self:
+        var out = Self()
+        out.ctx = Optional(ctx^)
+        out.hostname = hostname^
+        out.verify = verify
+        return out^
 
 
 struct PoolCall(Movable):
@@ -130,6 +212,9 @@ struct PoolCall(Movable):
     var conn: AsyncH1Connection
     """The connection, detached until there is one. See the module docstring."""
 
+    var securing: Securing
+    """The TLS to put on the socket once the race has won, if any."""
+
     var result: Exchange
 
     var connecting: Int
@@ -143,12 +228,14 @@ struct PoolCall(Movable):
         form: TargetForm,
         var race: Race,
         var conn: AsyncH1Connection,
+        var securing: Securing,
         connecting: Int,
     ):
         self.origin = origin^
         self.form = form
         self.race = race^
         self.conn = conn^
+        self.securing = securing^
         self.result = Exchange()
         self.connecting = connecting
 
@@ -162,12 +249,31 @@ struct PoolCall(Movable):
         `now_ns` and two empty lists, and it is what lets the connect loop be
         skipped by a counter rather than by a second shape of this struct.
         """
-        return Self(origin^, form, Race(List[SockAddr](), String()), conn^, 0)
+        return Self(
+            origin^,
+            form,
+            Race(List[SockAddr](), String()),
+            conn^,
+            Securing(),
+            0,
+        )
 
     @staticmethod
-    def opening(var origin: Origin, form: TargetForm, var race: Race) -> Self:
+    def opening(
+        var origin: Origin,
+        form: TargetForm,
+        var race: Race,
+        var securing: Securing,
+    ) -> Self:
         """A request whose connection does not exist yet."""
-        return Self(origin^, form, race^, AsyncH1Connection.detached(), 1)
+        return Self(
+            origin^,
+            form,
+            race^,
+            AsyncH1Connection.detached(),
+            securing^,
+            1,
+        )
 
     def take_connection(mut self) -> AsyncH1Connection:
         """Hand the connection over, leaving a detached one behind.
@@ -197,10 +303,11 @@ struct PoolCall(Movable):
 
 
 async def pooled_exchange[
-    r: MutOrigin, c: MutOrigin, q: MutOrigin, x: MutOrigin
+    r: MutOrigin, c: MutOrigin, s: MutOrigin, q: MutOrigin, x: MutOrigin
 ](
     race: Pointer[Race, r],
     conn: Pointer[AsyncH1Connection, c],
+    securing: Pointer[Securing, s],
     request: Pointer[Request, q],
     result: Pointer[Exchange, x],
     connecting: Int,
@@ -220,6 +327,9 @@ async def pooled_exchange[
     shared with the standalone async connect and the standalone async driver, so
     there is one implementation of Happy Eyeballs and one of HTTP/1.1 no matter
     which of the three entry points a caller uses.
+
+    The TLS handshake is inside the connect loop rather than beside it, which
+    the module docstring explains: there is no room for a third suspending loop.
 
     Below the connect loop this is `httpx._proto.h1.aio.exchange` doing the same
     things in the same order, because it is the same exchange. It is copied
@@ -258,9 +368,8 @@ async def pooled_exchange[
     in step with this one by hand.
     """
     if connecting == 1:
-        while _race_step(race, connect_at) == RACING:
+        while _connect_step(race, conn, securing, result, connect_at) == RACING:
             await yield_now()
-        _adopt_winner(race, conn, result)
 
     _load_request(conn, request, result, form)
 
@@ -274,11 +383,53 @@ async def pooled_exchange[
     _settle(conn, result, mode)
 
 
-def _adopt_winner[
-    r: MutOrigin, c: MutOrigin, x: MutOrigin
+@no_inline
+def _connect_step[
+    r: MutOrigin, c: MutOrigin, s: MutOrigin, x: MutOrigin
 ](
     race: Pointer[Race, r],
     conn: Pointer[AsyncH1Connection, c],
+    securing: Pointer[Securing, s],
+    result: Pointer[Exchange, x],
+    deadline: Deadline,
+) -> Int:
+    """One pass of getting a usable connection: race, then handshake.
+
+    Both halves in one step, so that the coroutine above has one loop for what
+    is really one job. Which half a pass is in comes from the connection rather
+    than from a phase kept beside it: a connection with no descriptor is one the
+    race has not won yet, and there is no third state, so a separate field would
+    be a second copy of something already known.
+
+    `SETTLED` means stop, whether that is because the connection is ready or
+    because the reason it is not has been recorded on the exchange.
+
+    `@no_inline` because without it the compiler dies with `invalid value index`
+    and no source location while lowering the coroutine above. Adopting the
+    winner used to happen after the connect loop rather than inside it, and
+    moving it in is what brought this on: it catches, and it builds the strings a
+    caught failure is worded with, so inlining it puts a landing pad and its
+    cleanup inside a loop body that the coroutine transform then has to split
+    across a suspension. The barrier keeps all of that in an ordinary frame. It
+    costs one call per pass of a loop that spends its time in `poll`.
+    """
+    if result[].failed():
+        return SETTLED
+    if not conn[].is_open():
+        if _race_step(race, deadline) == RACING:
+            return RACING
+        _adopt_winner(race, conn, securing, result)
+        if result[].failed():
+            return SETTLED
+    return _handshake_step(conn, securing, result, deadline)
+
+
+def _adopt_winner[
+    r: MutOrigin, c: MutOrigin, s: MutOrigin, x: MutOrigin
+](
+    race: Pointer[Race, r],
+    conn: Pointer[AsyncH1Connection, c],
+    securing: Pointer[Securing, s],
     result: Pointer[Exchange, x],
 ):
     """Put the socket the race produced into the detached connection.
@@ -287,12 +438,68 @@ def _adopt_winner[
     recorded failure, since the coroutine above cannot catch one. The connection
     is left detached in that case, and every step after this one finds the
     failure on the exchange and passes.
+
+    Names the peer here rather than leaving it to `_prepare`, which is where the
+    driver does it, because from here on a failure can happen before the request
+    is loaded and the wording of one needs the name.
+
+    The TLS session is started and not driven. `start_tls` agrees nothing with
+    the far end, so what comes back is a connection that is open and not yet
+    usable, which is what `_handshake_step` is for.
     """
     try:
         var stream = race[].take_stream()
         conn[].adopt(stream^)
+        result[].naming(conn[].peer())
+        if securing[].ctx:
+            conn[].start_tls(
+                securing[].ctx.value()[],
+                securing[].hostname,
+                securing[].verify,
+            )
     except e:
         result[].fail(e^)
+
+
+def _handshake_step[
+    c: MutOrigin, s: MutOrigin, x: MutOrigin
+](
+    conn: Pointer[AsyncH1Connection, c],
+    securing: Pointer[Securing, s],
+    result: Pointer[Exchange, x],
+    deadline: Deadline,
+) -> Int:
+    """One `SSL_connect`, and the decision about whether to wait for the socket.
+
+    `SETTLED` for a plain connection, which has nothing to agree, and for one
+    whose handshake has just finished or just failed. `RACING` means the socket
+    has to move before there is any point in asking again, and which way it has
+    to move is `want` rather than anything this could work out for itself: a
+    handshake sends records in both directions.
+
+    The connect deadline covers this as well as the socket, which is what the
+    synchronous path does. A server that accepts a connection and then says
+    nothing is a connect that never finished, whatever the kernel thinks of it.
+    """
+    if not conn[].handshaking():
+        return SETTLED
+    if deadline.expired():
+        result[].fail_outcome(Outcome.from_deadline(deadline, Op.CONNECT))
+        return SETTLED
+    var step = conn[].try_handshake()
+    if step == 1:
+        return SETTLED
+    if step != STREAM_AGAIN:
+        result[].fail(conn[].failure(Op.CONNECT))
+        return SETTLED
+    var ready = poll_slice(
+        conn[].fd(), conn[].want(), deadline, slice_for(securing[].rounds)
+    )
+    if ready.failed():
+        result[].fail_outcome(ready)
+        return SETTLED
+    securing[].rounds += 1
+    return RACING
 
 
 def _load_request[
@@ -406,6 +613,7 @@ async def pooled_batch[
             pooled_exchange(
                 Pointer(to=batch[].calls[i].race),
                 Pointer(to=batch[].calls[i].conn),
+                Pointer(to=batch[].calls[i].securing),
                 Pointer(to=batch[].requests[i]),
                 Pointer(to=batch[].calls[i].result),
                 batch[].calls[i].connecting,
@@ -486,6 +694,22 @@ struct AsyncConnectionPool(Movable):
     var limits: Limits
     var resolver: Resolver
 
+    var tls: TlsConfig
+    """How to shake hands with an https server.
+
+    Held as configuration rather than as a built context, because building one
+    parses the trust store and a client that never makes an https request should
+    not pay for that. `_tls_context` builds it on the first one and every
+    connection after that shares it.
+    """
+
+    var _ssl_ctx: Optional[SharedSslCtx]
+    """The context, once something has needed it.
+
+    Shared rather than owned outright, because a request that is still shaking
+    hands is holding one and the pool is allowed to be closed underneath it.
+    """
+
     var proxy: Optional[Proxy]
     """The proxy every request from this pool goes through, if there is one.
 
@@ -511,13 +735,32 @@ struct AsyncConnectionPool(Movable):
         out self,
         var limits: Limits,
         ttl_seconds: Int = 60,
+        var tls: TlsConfig = TlsConfig(),
         var proxy: Optional[Proxy] = None,
     ):
         self.limits = limits^
         self.resolver = Resolver(ttl_seconds)
+        self.tls = tls^
+        # This pool speaks HTTP/1.1 and nothing else, so it must not offer h2 in
+        # ALPN whatever the client was configured with. Advertising a protocol
+        # and then not speaking it is worse than not having it: the server picks
+        # h2, sends a settings frame, and gets a request line back.
+        self.tls.http2 = False
+        self._ssl_ctx = None
         self.proxy = proxy^
         self._idle = List[AsyncPooledConnection]()
         self._leased = 0
+
+    def _tls_context(mut self) raises -> SharedSslCtx:
+        """The context every https connection from this pool is cut from.
+
+        Built on the first one that needs it and shared by all of them after
+        that. `Ssl` takes its own reference through `SSL_new`, so a handshake in
+        flight keeps the context alive on the OpenSSL side as well.
+        """
+        if not self._ssl_ctx:
+            self._ssl_ctx = Optional(SharedSslCtx(self.tls.build()))
+        return self._ssl_ctx.value().copy()
 
     def idle_count(self) -> Int:
         return len(self._idle)
@@ -558,6 +801,7 @@ struct AsyncConnectionPool(Movable):
             pooled_exchange(
                 Pointer(to=call.race),
                 Pointer(to=call.conn),
+                Pointer(to=call.securing),
                 Pointer(to=request),
                 Pointer(to=call.result),
                 call.connecting,
@@ -652,19 +896,6 @@ struct AsyncConnectionPool(Movable):
         `request` is taken mutably because a proxy adds its headers to it here.
         Nothing else in this method changes it.
         """
-        var target = origin_for(request.url)
-        if target.is_secure():
-            raise new_error(
-                ErrorKind.INVALID_ARGUMENT,
-                String(
-                    "the async pool cannot speak https yet, so ",
-                    target,
-                    " has to go through the synchronous client for now",
-                ),
-            )
-
-        # After the https check, so that an https request through a proxy is
-        # turned away by the reason that is actually stopping it here.
         var route = route_through(self.proxy, request, form)
         if route.connect_via:
             # A tunnel of either kind is a handshake on the socket before the
@@ -697,8 +928,15 @@ struct AsyncConnectionPool(Movable):
         # either platform this library supports, so a coroutine that called it
         # would hold its worker for the whole lookup.
         var race = start_race(self.resolver, origin.host, origin.port)
+        # Built here for the same reason: the first one parses the trust store,
+        # and a coroutine that did that would hold its worker for all of it.
+        var securing = Securing()
+        if origin.is_secure():
+            securing = Securing.over_tls(
+                self._tls_context(), origin.host.copy(), self.tls.verify.enabled
+            )
         self._leased += 1
-        return PoolCall.opening(origin, wire, race^)
+        return PoolCall.opening(origin, wire, race^, securing^)
 
     def finish(mut self, mut call: PoolCall) raises -> Response:
         """The response, or the failure that stopped it from being one.
@@ -1014,6 +1252,7 @@ def stream_request(
         pooled_exchange(
             Pointer(to=call.race),
             Pointer(to=call.conn),
+            Pointer(to=call.securing),
             Pointer(to=request),
             Pointer(to=call.result),
             call.connecting,

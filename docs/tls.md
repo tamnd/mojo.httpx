@@ -126,7 +126,7 @@ Every socket write the library makes itself goes through `send` with `MSG_NOSIGN
 
 The change is made once, on load, and only for a program that is going to speak TLS. If some other part of the program already installed a SIGPIPE handler, that handler is put back and the signal is left alone, on the grounds that a program with an opinion about SIGPIPE outranks this one. macOS is already covered by `SO_NOSIGPIPE` and is not touched.
 
-The real fix is a memory BIO, where OpenSSL never touches the file descriptor and the library does all the writing under its own rules. That is wanted anyway for the async client, and when it lands this goes away.
+The real fix is a memory BIO, where OpenSSL never touches the file descriptor and the library does all the writing under its own rules, and when that lands this goes away. It is not on the async client's account: the async path runs the same socket BIO the synchronous one does, and the descriptor under it never blocks, so it needs nothing here beyond what this already does.
 
 ## Testing
 
