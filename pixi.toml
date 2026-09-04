@@ -96,6 +96,13 @@ generated-check = "python tools/gen_psl.py --check && python tools/gen_cookie_ca
 lint = "python tools/lint/run.py"
 lint-selftest = "python tools/lint/run.py --selftest"
 
+# The `httpx` command, built into build/. Not part of `check`, because the
+# tests drive the CLI through `run(argv)` rather than through a process and so
+# do not need a binary to exist. This is for trying it by hand. It cannot be
+# built into the working directory, because the package is a directory called
+# httpx and the linker will not write over it.
+cli = "mkdir -p build && mojo build -I . -o build/httpx httpx/cli/main.mojo"
+
 # The badssl.com matrix, one host per way of getting TLS wrong. Needs the
 # network and depends on certificates somebody else renews, so it is not part
 # of `check` and not in CI either. It runs on the fleet. See docs/testing.md.

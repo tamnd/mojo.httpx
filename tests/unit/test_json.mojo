@@ -596,7 +596,7 @@ def test_response_json_ignores_the_content_type() raises:
 
 def test_response_json_on_a_body_that_is_not_json() raises:
     var r = response_with("<html>not json</html>", "text/html")
-    with assert_raises(contains="not valid JSON"):
+    with assert_raises(contains="invalid JSON"):
         _ = r.json()
 
 
