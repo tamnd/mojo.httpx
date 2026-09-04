@@ -216,6 +216,37 @@ def random_bytes(count: Int) raises -> List[UInt8]:
     return out^
 
 
+def write_fd[o: ImmOrigin](fd: Int, buf: Pointer[UInt8, o], count: Int) -> Int:
+    """Write to a descriptor. Returns what libc returned.
+
+    A short write is normal and is not an error, exactly as it is for `send`,
+    so the caller loops. Negative means errno has the reason.
+
+    This exists because the standard library's `print` is not a way to put a
+    body on stdout. It appends a newline, it wants text rather than bytes, and
+    a response body is neither guaranteed to be text nor allowed to gain a byte
+    on the way through.
+
+    The types here are `Int` rather than the `c_int` and `c_size_t` the C
+    declaration uses. That is not a slip. The standard library declares `write`
+    for its own file handles, a second declaration of the same symbol with
+    different types is rejected before it ever reaches the linker, and these
+    are the types it picked. Both are pointer sized on every platform this
+    builds for, so it is the same call either way.
+    """
+    return external_call["write", Int](fd, buf, count)
+
+
+def isatty(fd: c_int) -> c_int:
+    """Whether a descriptor is a terminal. One if it is, zero if it is not.
+
+    The whole of the CLI's decoration policy hangs off this call. Anything that
+    is not a terminal is something's input, and something's input does not want
+    colour, or a progress bar, or a body that has been made pretty.
+    """
+    return external_call["isatty", c_int](fd)
+
+
 def cstr_to_string[o: ImmOrigin](s: CStringSlice[o]) -> String:
     """Copy a C string into a `String` we control.
 

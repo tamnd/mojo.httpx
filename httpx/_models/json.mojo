@@ -1268,6 +1268,11 @@ def _bad[o: ImmOrigin](source: Span[UInt8, o], at: Int, why: String) -> Error:
     The excerpt is escaped and length limited by `_quote`, because a body is
     attacker controlled and pasting it raw into an error message is its own
     small vulnerability.
+
+    It does not say where the bytes came from, because it does not know. The
+    same parser reads a response and reads a `--json` body typed at a command
+    line, and a message that named the response was telling somebody who had
+    just made a typo about a response they never received.
     """
     var line = 1
     var column = 1
@@ -1283,7 +1288,7 @@ def _bad[o: ImmOrigin](source: Span[UInt8, o], at: Int, why: String) -> Error:
     return new_error(
         ErrorKind.DECODING_ERROR,
         String(
-            "the response body is not valid JSON at line ",
+            "invalid JSON at line ",
             line,
             " column ",
             column,

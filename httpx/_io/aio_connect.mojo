@@ -27,7 +27,7 @@ step rather than the loop.
 
 from std.runtime.asyncrt import _run
 
-from httpx._exceptions import ErrorKind, new_error
+from httpx._exceptions import ErrorKind, message_of, new_error
 from httpx._ffi.netdb import SockAddr
 from httpx._io.aio import slice_for, yield_now
 from httpx._io.connect import (
@@ -182,7 +182,7 @@ def _race_step[r: MutOrigin](race: Pointer[Race, r], deadline: Deadline) -> Int:
                     )
                 )
             except e:
-                race[].failures.append(String(e))
+                race[].failures.append(message_of(e))
             race[].next_address += 1
             race[].next_start_ns = now_ns() + UInt64(
                 ATTEMPT_DELAY_MS * NANOS_PER_MS

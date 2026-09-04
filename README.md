@@ -328,6 +328,18 @@ Proxies, multipart uploads and custom transports all work the way they do in htt
 | Testing | `MockTransport` and `MockRouter`, no separate package needed |
 | CLI | An `httpx` binary matching httpx2's CLI flag for flag |
 
+## Command line
+
+The same library is also a command line client, built with `pixi run cli`.
+
+```bash
+./build/httpx https://example.com/
+./build/httpx -m POST -j '{"name": "mojo"}' -h Accept application/json https://httpbin.org/post
+./build/httpx --download page.html --fail https://example.com/
+```
+
+The flags are httpx2's, spelled the same way, so a command written for one runs on the other. The body goes to stdout and nothing else does, so it pipes, with warnings and notes kept on stderr. `-v` adds the request head and the response head, `--print` takes httpie's letters for finer control, and the exit code says what went wrong: 1 for the command line, 2 for the network, 3 for a timeout, 4 for TLS, 5 for a redirect loop, 6 for a 4xx or 5xx when you asked for it with `--fail`. [Command line client](docs/cli.md) has the flag table, the output rules and the two places it differs from httpx2.
+
 ## Differences from httpx2
 
 Mojo is not Python, and a few things cannot be copied directly. Every deviation is deliberate and documented rather than accidental.
@@ -380,6 +392,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. It lists 
 - [Request bodies](docs/content.md) for the six body arguments, the content type each implies, and why passing two raises
 - [JSON](docs/json.md) for reading a body, building one, and what the parser refuses
 - [Proxies](docs/proxies.md) for forward proxying, CONNECT tunnels, SOCKS5, proxy credentials, per pattern mounts, and what goes on the wire
+- [Command line client](docs/cli.md) for the flags, what gets printed, and the exit code table
 - [Limitations](docs/limitations.md) for everything that is missing or does less than it should, in one list
 - [Deviations](docs/deviations.md) for every place this behaves differently from httpx2, and why
 - [Async](docs/async.md) for what Mojo's scheduler can and cannot do, measured, and the design that follows from it

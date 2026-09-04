@@ -101,7 +101,7 @@ The same limit applies to documents you build, which is what lets the serializer
 A parse failure says the line, the column, what was expected, and shows the bytes around the problem.
 
 ```
-the response body is not valid JSON at line 3 column 8: expected a value Near: '"b": nope\n}'
+invalid JSON at line 3 column 8: expected a value Near: '"b": nope\n}'
 ```
 
 The excerpt goes through the same escaping every other error in this library uses, so a body containing a terminal escape sequence or a newline cannot reshape the log line it ends up in.

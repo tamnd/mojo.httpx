@@ -20,7 +20,7 @@ socket.mojo. A blocking connect cannot be raced with anything.
 
 from std.ffi import c_int, c_uint
 
-from httpx._exceptions import ErrorKind, new_error
+from httpx._exceptions import ErrorKind, message_of, new_error
 from httpx._ffi.netdb import SockAddr
 from httpx._ffi.socket import PollFd, poll
 from httpx._io.deadline import NANOS_PER_MS, Deadline, now_ns
@@ -118,7 +118,7 @@ def connect_to_addresses[
             try:
                 pending.append(start_connect(addresses[next_address], peer))
             except e:
-                failures.append(String(e))
+                failures.append(message_of(e))
             next_address += 1
             next_start_ns = now_ns() + UInt64(ATTEMPT_DELAY_MS * NANOS_PER_MS)
 
@@ -172,7 +172,7 @@ def winner_index(
         try:
             done = pending[i].finished()
         except e:
-            failures.append(String(e))
+            failures.append(message_of(e))
             _ = pending.pop(i)
             i -= 1
             continue
@@ -188,6 +188,11 @@ def all_failed(peer: String, failures: List[String]) -> Error:
     A host whose IPv6 address is refused and whose IPv4 address times out is a
     different problem from one where both are refused, and the only way for a
     user to tell them apart is to be shown both.
+
+    Every entry in `failures` is a message with its kind name already stripped,
+    because this puts one back on. Collecting the whole `String(e)` instead
+    produced `ConnectError: ConnectError: connect ... refused`, which is what a
+    user saw at a command line before this was noticed.
 
     Shared with the async race, for the reason on `winner_index`.
     """
