@@ -54,6 +54,9 @@ jobs:
       # A lint that has stopped matching anything reports success forever, so
       # the lints are themselves checked against known violations.
       - run: pixi run lint-selftest
+      # docs/api.md is generated from the source and committed. This is what
+      # catches a renamed argument that nobody re-rendered the page for.
+      - run: pixi run docs-check
 
   test:
     name: test ${{ matrix.name }}

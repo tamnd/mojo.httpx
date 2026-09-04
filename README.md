@@ -387,6 +387,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. It lists 
 
 ## Documentation
 
+- [API reference](docs/api.md) for every name `import httpx` gives you, generated from the source
 - [Architecture](docs/architecture.md) for the layer model and the design decisions behind it
 - [TLS](docs/tls.md) for the defaults, custom CA bundles, client certificates, and reading a handshake failure
 - [Request bodies](docs/content.md) for the six body arguments, the content type each implies, and why passing two raises
