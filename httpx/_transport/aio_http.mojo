@@ -33,6 +33,16 @@ struct AsyncHTTPTransport(AsyncTransport):
     http only for now. The pool refuses an https request with a message saying
     so rather than sending it in the clear, because there is no async TLS
     handshake yet. See `httpx._pool.aio_pool`.
+
+    ```mojo
+    from httpx import AsyncClient, AsyncHTTPTransport, erase_async_transport
+
+
+    def main() raises:
+        var transport = erase_async_transport(AsyncHTTPTransport())
+        with AsyncClient(transport=transport^) as client:
+            print(client.get("https://example.com/").status_code)
+    ```
     """
 
     var pool: SharedAsyncPool

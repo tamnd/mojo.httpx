@@ -34,6 +34,34 @@ trait Transport(Movable):
     it, and the four way timeout is the promise this library is built around.
     httpx hides it in an untyped extensions map, which makes the one guarantee
     users care about depend on a string key being spelled right.
+
+    ```mojo
+    from httpx import Client, Deadlines, Request, Response, Transport
+    from httpx import erase_transport
+
+
+    struct Canned(Movable, Transport):
+        def __init__(out self):
+            pass
+
+        def handle_request(
+            mut self, var request: Request, deadlines: Deadlines
+        ) raises -> Response:
+            return Response(200, content=List[UInt8](String("ok").as_bytes()))
+
+        def handle_stream(
+            mut self, var request: Request, deadlines: Deadlines
+        ) raises -> Response:
+            return self.handle_request(request^, deadlines)
+
+        def close(mut self):
+            pass
+
+
+    def main() raises:
+        with Client(transport=erase_transport(Canned())) as client:
+            print(client.get("https://example.com/").text())
+    ```
     """
 
     def handle_request(
@@ -65,7 +93,22 @@ trait Transport(Movable):
 
 
 struct AnyTransport(TransportHandle):
-    """A transport whose type has been forgotten, ready to be stored."""
+    """A transport whose type has been forgotten, ready to be stored.
+
+    ```mojo
+    from httpx import AnyTransport, Client, HTTPTransport, blocked
+    from httpx import erase_transport
+
+
+    def main() raises:
+        var offline = False
+        var transport = erase_transport(HTTPTransport())
+        if offline:
+            transport = blocked("no network in this run")
+        with Client(transport=transport^) as client:
+            print(client.get("https://example.com/").status_code)
+    ```
+    """
 
     var _state: ErasedBox
     var _handle_request: def(

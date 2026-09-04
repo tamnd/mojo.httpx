@@ -45,6 +45,15 @@ struct SSLVerify(ImplicitlyCopyable, Movable):
     theatre: an attacker who can present any certificate can present one with
     the right name on it. There is no configuration in which one is on and the
     other is off.
+
+    ```mojo
+    from httpx import Client, SSLVerify
+
+
+    def main() raises:
+        with Client(verify=SSLVerify.from_file("/etc/ssl/private-ca.pem")) as ca:
+            print(ca.get("https://internal.example.com/").status_code)
+    ```
     """
 
     var enabled: Bool
@@ -107,6 +116,16 @@ struct ClientCert(ImplicitlyCopyable, Movable):
     the key, and a Mojo `String` is not page locked or wiped on free. A
     deployment that cares should use an unencrypted key with file permissions
     doing the work, which is what the password would be protecting anyway.
+
+    ```mojo
+    from httpx import Client, ClientCert
+
+
+    def main() raises:
+        var cert = ClientCert("/etc/ssl/client.pem", "/etc/ssl/client.key")
+        with Client(cert=cert) as client:
+            print(client.get("https://mtls.example.com/").status_code)
+    ```
     """
 
     var certfile: String

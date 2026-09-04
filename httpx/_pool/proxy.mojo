@@ -60,6 +60,16 @@ struct Proxy(Movable, Writable):
 
     Copied explicitly rather than implicitly, because `URL` is, and because a
     value holding a credential is one worth having to name a copy of.
+
+    ```mojo
+    from httpx import Client, Proxy
+
+
+    def main() raises:
+        var proxy = Proxy("http://proxy.internal:8080")
+        with Client(proxy=proxy^) as client:
+            print(client.get("https://example.com/").status_code)
+    ```
     """
 
     var url: URL

@@ -65,7 +65,22 @@ def _exhausted() -> Error:
 
 
 struct ByteChunks(Movable):
-    """Raw or decoded bytes, re-chunked to a size the caller asked for."""
+    """Raw or decoded bytes, re-chunked to a size the caller asked for.
+
+    ```mojo
+    from httpx import Client
+
+
+    def main() raises:
+        with Client() as client:
+            with client.stream("GET", "https://example.com/big.bin") as r:
+                var chunks = r.iter_bytes(65536)
+                var total = 0
+                while chunks.has_next():
+                    total += len(chunks.next())
+                print(total)
+    ```
+    """
 
     var _stream: ByteStream
     var _decoders: List[Decoder]
@@ -186,7 +201,20 @@ struct ByteChunks(Movable):
 
 
 struct TextChunks(Movable):
-    """The body decoded to text, in chunks of a given number of characters."""
+    """The body decoded to text, in chunks of a given number of characters.
+
+    ```mojo
+    from httpx import Client
+
+
+    def main() raises:
+        with Client() as client:
+            with client.stream("GET", "https://example.com/big.txt") as r:
+                var chunks = r.iter_text(65536)
+                while chunks.has_next():
+                    print(chunks.next())
+    ```
+    """
 
     var _bytes: ByteChunks
     var _held: List[UInt8]
@@ -330,6 +358,18 @@ struct TextChunks(Movable):
 
 struct LineChunks(Movable):
     """The body decoded to text and split into lines, without the terminators.
+
+    ```mojo
+    from httpx import Client
+
+
+    def main() raises:
+        with Client() as client:
+            with client.stream("GET", "https://example.com/events") as r:
+                var lines = r.iter_lines()
+                while lines.has_next():
+                    print(lines.next())
+    ```
     """
 
     var _text: TextChunks

@@ -24,7 +24,39 @@ from httpx._util.erase import ErasedBox
 
 
 trait ByteSource(Movable):
-    """Something that can be pulled from until it is empty."""
+    """Something that can be pulled from until it is empty.
+
+    ```mojo
+    from httpx import ByteSource, Client, Headers, Request, URL, erase_source
+
+
+    struct Repeat(ByteSource, Movable):
+        var _left: Int
+
+        def __init__(out self, times: Int):
+            self._left = times
+
+        def read_chunk(mut self) raises -> List[UInt8]:
+            if self._left == 0:
+                return List[UInt8]()
+            self._left -= 1
+            return List[UInt8](String("chunk\n").as_bytes())
+
+        def close(mut self):
+            self._left = 0
+
+        def trailers(self) -> Headers:
+            return Headers()
+
+
+    def main() raises:
+        var request = Request.streaming(
+            "POST", URL("https://example.com/upload"), erase_source(Repeat(3))
+        )
+        with Client() as client:
+            print(client.send(request^).status_code)
+    ```
+    """
 
     def read_chunk(mut self) raises -> List[UInt8]:
         """The next piece of the body. Empty means there is no more.
@@ -56,7 +88,41 @@ trait ByteSource(Movable):
 
 
 struct ByteStream(Movable):
-    """A source whose type has been forgotten, ready to be stored."""
+    """A source whose type has been forgotten, ready to be stored.
+
+    ```mojo
+    from httpx import ByteSource, ByteStream, Headers, Request, URL
+    from httpx import erase_source
+
+
+    struct Hello(ByteSource, Movable):
+        var _sent: Bool
+
+        def __init__(out self):
+            self._sent = False
+
+        def read_chunk(mut self) raises -> List[UInt8]:
+            if self._sent:
+                return List[UInt8]()
+            self._sent = True
+            return List[UInt8](String("hello").as_bytes())
+
+        def close(mut self):
+            self._sent = True
+
+        def trailers(self) -> Headers:
+            return Headers()
+
+
+    def main() raises:
+        var body: ByteStream = erase_source(Hello())
+        var request = Request.streaming(
+            "POST", URL("https://example.com/upload"), body^
+        )
+        var taken = request.take_stream()
+        print(len(taken.read_chunk()), request.body_was_taken())
+    ```
+    """
 
     var _state: ErasedBox
     var _read_chunk: def(ErasedBox) raises thin -> List[UInt8]

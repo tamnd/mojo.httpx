@@ -75,7 +75,18 @@ def _default_async_transport(
 
 
 comptime AsyncClient = BaseClient[AnyAsyncTransport, _default_async_transport]
-"""The async client. See `BaseClient` for everything it can do."""
+"""The async client. See `BaseClient` for everything it can do.
+
+```mojo
+from httpx import AsyncClient
+
+
+def main() raises:
+    with AsyncClient() as client:
+        var r = client.get("https://example.com/")
+        print(r.status_code, r.text())
+```
+"""
 
 
 struct _Slot(Movable):

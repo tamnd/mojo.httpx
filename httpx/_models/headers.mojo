@@ -179,6 +179,19 @@ struct Headers(Boolable, Movable, Sized, Writable):
     Writing one out redacts `Authorization`, `Proxy-Authorization`, `Cookie` and
     `Set-Cookie`, so a debug print cannot put a credential in a log. Asking for
     the value by name still gives the value.
+
+    ```mojo
+    from httpx import Client, Headers
+
+
+    def main() raises:
+        var headers = Headers()
+        headers["User-Agent"] = "my-app/1.0"
+        headers.append("Accept", "application/json")
+        with Client(headers=headers^) as client:
+            var r = client.get("https://example.com/")
+            print(r.headers.get("content-type"))
+    ```
     """
 
     var _list: List[HeaderEntry]

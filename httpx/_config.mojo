@@ -33,6 +33,24 @@ struct Timeout(ImplicitlyCopyable, Movable, Writable):
     and there is nothing to retry against; a read that times out means the
     server took the request and went quiet; a pool timeout means the wait was
     on this program rather than on the network. One number cannot say which.
+
+    ```mojo
+    from httpx import Client, Timeout
+
+
+    def main() raises:
+        with Client(timeout=Timeout.uniform(10.0)) as quick:
+            print(quick.get("https://example.com/").status_code)
+
+        var patient = Timeout(
+            connect_seconds=5.0,
+            read_seconds=60.0,
+            write_seconds=5.0,
+            pool_seconds=5.0,
+        )
+        with Client(timeout=patient) as slow:
+            print(slow.get("https://example.com/big").status_code)
+    ```
     """
 
     var connect: Optional[Float64]

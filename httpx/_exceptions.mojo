@@ -46,6 +46,20 @@ struct ErrorKind(Equatable, ImplicitlyCopyable, Movable):
 
     Nothing uses zero as a child index, which is what makes the prefix trick
     unambiguous.
+
+    ```mojo
+    from httpx import Client, ErrorKind, kind_of
+
+
+    def main() raises:
+        with Client() as client:
+            try:
+                var r = client.get("https://example.com/")
+                print(r.status_code)
+            except e:
+                var kind = kind_of(e)
+                print(kind.name(), kind.matches(ErrorKind.TRANSPORT_ERROR))
+    ```
     """
 
     var value: UInt32

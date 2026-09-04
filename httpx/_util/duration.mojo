@@ -23,7 +23,18 @@ comptime _NANOS_PER_SECOND = 1_000_000_000
 
 
 struct Duration(Comparable, ImplicitlyCopyable, Movable, Writable):
-    """An elapsed time, held as nanoseconds."""
+    """An elapsed time, held as nanoseconds.
+
+    ```mojo
+    from httpx import Client
+
+
+    def main() raises:
+        with Client() as client:
+            var r = client.get("https://example.com/")
+            print(r.elapsed().milliseconds(), r.elapsed().seconds())
+    ```
+    """
 
     var nanoseconds: UInt64
 

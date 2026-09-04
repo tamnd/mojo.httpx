@@ -425,6 +425,19 @@ struct QueryParams(Boolable, Equatable, Movable, Sized, Writable):
     Keys and values are held decoded. Encoding happens on the way out, once, with
     the strict form set, so a value containing `&` cannot introduce a parameter
     that was not there.
+
+    ```mojo
+    from httpx import Client, QueryParams
+
+
+    def main() raises:
+        var params = QueryParams("page=1&tag=new")
+        params = params.add("tag", "featured")
+        print(params.get_list("tag")[1], params.encode())
+        with Client() as client:
+            var r = client.get("https://example.com/items", params=params^)
+            print(r.status_code)
+    ```
     """
 
     var _keys: List[String]
@@ -666,6 +679,17 @@ struct URL(Equatable, Movable, Writable):
     accessors that matter hand out. Returning a view of a `String` would mean
     reconstructing one from bytes at the boundary, and the only way to do that
     without a UTF-8 check is an unsafe call, which does not belong in this layer.
+
+    ```mojo
+    from httpx import URL
+
+
+    def main() raises:
+        var url = URL("https://user@example.com:8443/a/b?page=1#top")
+        print(url.scheme(), url.host(), url.port().value(), url.path())
+        print(url.join("../c"))
+        print(url.copy_set_param("page", "2"))
+    ```
     """
 
     var _raw: Bytes

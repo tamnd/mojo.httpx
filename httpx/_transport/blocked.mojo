@@ -33,6 +33,19 @@ struct BlockedTransport(AsyncTransport, Transport):
     One struct for both clients. The two transport traits differ only by
     `handle_many`, and a transport that never sends anything has the same
     nothing to do in either.
+
+    ```mojo
+    from httpx import BlockedTransport, Client, erase_transport
+
+
+    def main() raises:
+        var transport = erase_transport(BlockedTransport("no network in tests"))
+        with Client(transport=transport^) as client:
+            try:
+                print(client.get("https://example.com/").status_code)
+            except e:
+                print(e)
+    ```
     """
 
     var reason: String

@@ -193,6 +193,20 @@ struct SameSite(Equatable, ImplicitlyCopyable, Movable):
     attribute and a server that writes `SameSite=None` are saying different
     things, and collapsing them loses the only signal a caller has for which
     happened.
+
+    ```mojo
+    from httpx import Cookie, SameSite
+
+
+    def main() raises:
+        var c = Cookie(
+            "session",
+            "abc123",
+            domain="example.com",
+            same_site=SameSite.STRICT,
+        )
+        print(c.same_site.name())
+    ```
     """
 
     var _value: UInt8
@@ -229,6 +243,16 @@ struct Cookie(Copyable, Movable, Writable):
     exactly the host that sent it, while one with `Domain=example.com` belongs
     to that host and every host under it. Both end up with `domain` set to
     something, so without a separate flag the narrow case silently widens.
+
+    ```mojo
+    from httpx import Cookie
+
+
+    def main() raises:
+        var c = Cookie("session", "abc123", domain="example.com", secure=True)
+        print(c.matches("example.com", "/", True))
+        print(c.is_expired(0))
+    ```
     """
 
     var name: String
@@ -482,6 +506,16 @@ struct CookieJar(Boolable, Movable, Sized):
     request means running the domain and path rules against each one, and there
     is no key that could be looked up instead. Jars hold single digit numbers of
     cookies in practice.
+
+    ```mojo
+    from httpx import CookieJar, Cookie, URL
+
+
+    def main() raises:
+        var jar = CookieJar()
+        jar.store(Cookie("session", "abc123", domain="example.com"))
+        print(jar.header_for(URL("https://example.com/account"), 0))
+    ```
     """
 
     var _cookies: List[Cookie]
@@ -676,6 +710,18 @@ struct Cookies(Boolable, Movable, Sized):
     the jar holds the same name for two domains or two paths, the lookup raises
     `CookieConflict` rather than choosing, since either choice would be wrong
     half the time and wrong silently.
+
+    ```mojo
+    from httpx import Client, Cookies
+
+
+    def main() raises:
+        var jar = Cookies()
+        jar.set("consent", "yes", domain="example.com")
+        with Client(cookies=jar^) as client:
+            var r = client.get("https://example.com/account")
+            print(r.status_code, client.cookies.get("session"))
+    ```
     """
 
     var jar: CookieJar

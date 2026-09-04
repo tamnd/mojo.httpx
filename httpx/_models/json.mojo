@@ -148,6 +148,17 @@ struct JsonValue[no: ImmOrigin, to: ImmOrigin](
     `Json` it came from, and Mojo tracks each field's origin separately. They
     are always the same document. Nothing here allocates and nothing here can
     outlive the document, which the compiler enforces.
+
+    ```mojo
+    from httpx import Json
+
+
+    def main() raises:
+        var doc = Json.loads('{"users": [{"name": "alice"}]}')
+        var root = doc.value()
+        var first = root["users"][0]
+        print(first["name"].as_string(), first.is_object())
+    ```
     """
 
     var _nodes: Span[_Node, Self.no]
@@ -380,9 +391,16 @@ struct Json(Movable, Sized, Writable):
     Built by parsing, or assembled a field at a time for a request body:
 
     ```mojo
-    var payload = Json.object()
-    payload.set("name", Json("widget"))
-    payload.set("count", Json(3))
+    from httpx import Client, Json
+
+
+    def main() raises:
+        var body = Json.object()
+        body.set("name", "alice")
+        body.set("admin", True)
+        with Client() as client:
+            var r = client.post("https://example.com/users", json=body^)
+            print(r.json().value()["id"].as_int())
     ```
 
     The root value is always node zero, so an empty `Json` does not exist. A

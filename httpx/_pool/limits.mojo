@@ -45,6 +45,20 @@ struct Limits(ImplicitlyCopyable, Movable, Writable):
     distinction matters: a `max_connections` of zero is a pool that can never
     connect, which is a mistake somebody would rather find at construction than
     at the first request, so it is rejected here.
+
+    ```mojo
+    from httpx import Client, Limits
+
+
+    def main() raises:
+        var limits = Limits(
+            max_connections=100,
+            max_keepalive_connections=20,
+            keepalive_expiry=5.0,
+        )
+        with Client(limits=limits) as client:
+            print(client.get("https://example.com/").status_code)
+    ```
     """
 
     var max_connections: Optional[Int]

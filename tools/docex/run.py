@@ -3,7 +3,8 @@
 A documentation example nobody can run is one nobody can check, and an HTTP
 client's docs are almost entirely examples. So every ```mojo block in the
 markdown here is a whole program rather than a fragment, and this compiles all
-of them against the working tree.
+of them against the working tree. Docstrings count as documentation: the API
+reference is generated from them, so their examples are compiled too.
 
 It catches the ordinary rot, a renamed argument or a method that became a
 field, and it caught two real defects the day it was written: the error
@@ -41,14 +42,28 @@ ROOT = Path(__file__).resolve().parents[2]
 # closer to the example that caused it.
 DEFAULT_BATCH = 16
 
-# Where the prose lives. README and CONTRIBUTING are in here too, because a
-# broken example on the front page is the worst place to have one.
-SOURCES = sorted((ROOT / "docs").glob("*.md")) + [
-    ROOT / "README.md",
-    ROOT / "CONTRIBUTING.md",
-]
+# The generated API reference. Left out because every example in it was copied
+# out of a docstring that is checked here already, and `pixi run docs-check`
+# fails when the page and the source have come apart, so including it would only
+# compile the same programs a second time.
+GENERATED = ROOT / "docs" / "api.md"
 
-BLOCK = re.compile(r"^```mojo\n(.*?)^```$", re.M | re.S)
+# Where the prose lives. README and CONTRIBUTING are in here too, because a
+# broken example on the front page is the worst place to have one. The package
+# itself is in the list because a docstring example is documentation as much as
+# a page is, and the API reference is nothing but docstrings.
+SOURCES = (
+    sorted(p for p in (ROOT / "docs").glob("*.md") if p != GENERATED)
+    + [ROOT / "README.md", ROOT / "CONTRIBUTING.md"]
+    + sorted((ROOT / "httpx").rglob("*.mojo"))
+)
+
+# Indented because a block inside a docstring is indented with the docstring.
+# The closing fence has to carry the same indent as the opening one, which keeps
+# this from running past the end of one block and into the next.
+BLOCK = re.compile(
+    r"^(?P<indent>[ \t]*)```mojo\n(?P<body>.*?)^(?P=indent)```[ \t]*$", re.M | re.S
+)
 
 # A block with no `main` is a signature, a trait declaration or a couple of
 # lines showing a call, and there is nothing to build. Those are deliberate:
@@ -71,13 +86,27 @@ DEFINES_RE = re.compile(
 
 
 def blocks(path):
-    """Every Mojo block in one file, with the line each one starts on."""
+    """Every Mojo block in one file, with the line each one starts on.
+
+    Undented on the way out, because a block in a docstring carries the
+    docstring's indentation and the compiler would read that as a program that
+    starts halfway in.
+    """
     text = path.read_text()
     found = []
     for match in BLOCK.finditer(text):
         line = text[: match.start()].count("\n") + 1
-        found.append((line, match.group(1)))
+        found.append((line, _undent(match.group("body"), match.group("indent"))))
     return found
+
+
+def _undent(body, indent):
+    if not indent:
+        return body
+    return "\n".join(
+        line[len(indent) :] if line.startswith(indent) else line
+        for line in body.split("\n")
+    )
 
 
 def batches(jobs, size):
@@ -161,7 +190,7 @@ def main():
     parser.add_argument(
         "paths",
         nargs="*",
-        help="markdown files to check, defaulting to all of the docs",
+        help="files to check, defaulting to the docs and the package",
     )
     parser.add_argument(
         "--batch",

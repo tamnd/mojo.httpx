@@ -30,7 +30,21 @@ from httpx._transport.base import Transport
 
 
 struct MockTransport(AsyncTransport, Transport):
-    """Answers every request by calling `handler`."""
+    """Answers every request by calling `handler`.
+
+    ```mojo
+    from httpx import Client, MockTransport, Request, Response, erase_transport
+
+
+    def answer(var request: Request) raises -> Response:
+        return Response(200, content=List[UInt8](String("ok").as_bytes()))
+
+
+    def main() raises:
+        with Client(transport=erase_transport(MockTransport(answer))) as client:
+            print(client.get("https://example.com/").text())
+    ```
+    """
 
     var handler: def(var Request) raises thin -> Response
 
@@ -153,6 +167,18 @@ struct Route(Movable):
     Anything left unset matches anything. A route made from a path matches that
     path on any host, which is what a test with one server wants, and a route
     made from an absolute URL pins the scheme, host and port as well.
+
+    ```mojo
+    from httpx import Client, MockRouter, Route, erase_transport
+
+
+    def main() raises:
+        var route = Route.get("https://example.com/users").respond_json(200, "[]")
+        var router = MockRouter()
+        router.add(route^)
+        with Client(transport=erase_transport(router^)) as client:
+            print(client.get("https://example.com/users").status_code)
+    ```
     """
 
     var method: String
@@ -378,6 +404,19 @@ struct MockRouter(AsyncTransport, Transport):
     last. A request that matches nothing raises rather than answering, because a
     mock that quietly returned 404 for a URL the test never meant to hit would
     turn a typo into a plausible looking test failure somewhere else.
+
+    ```mojo
+    from httpx import Client, MockRouter, Route, erase_transport
+
+
+    def main() raises:
+        var router = MockRouter()
+        router.add(Route.get("https://example.com/users").respond_json(200, "[]"))
+        router.add(Route.post("https://example.com/users").respond(201))
+        with Client(transport=erase_transport(router^)) as client:
+            print(client.get("https://example.com/users").text())
+            print(client.post("https://example.com/users").status_code)
+    ```
     """
 
     var routes: List[Route]

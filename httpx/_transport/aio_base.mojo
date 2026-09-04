@@ -49,6 +49,42 @@ trait AsyncTransport(Movable):
 
     The deadlines are an argument for the reason they are one on `Transport`: a
     transport that cannot see the deadline cannot honour it.
+
+    ```mojo
+    from httpx import AsyncClient, AsyncTransport, Deadlines, Request, Response
+    from httpx import erase_async_transport
+
+
+    struct Canned(AsyncTransport, Movable):
+        def __init__(out self):
+            pass
+
+        def handle_request(
+            mut self, var request: Request, deadlines: Deadlines
+        ) raises -> Response:
+            return Response(200)
+
+        def handle_stream(
+            mut self, var request: Request, deadlines: Deadlines
+        ) raises -> Response:
+            return Response(200)
+
+        def handle_many(
+            mut self, var requests: List[Request], deadlines: Deadlines
+        ) raises -> List[Response]:
+            var out = List[Response]()
+            for _ in range(len(requests)):
+                out.append(Response(200))
+            return out^
+
+        def close(mut self):
+            pass
+
+
+    def main() raises:
+        with AsyncClient(transport=erase_async_transport(Canned())) as client:
+            print(client.get("https://example.com/").status_code)
+    ```
     """
 
     def handle_request(
@@ -88,7 +124,22 @@ trait AsyncTransport(Movable):
 
 
 struct AnyAsyncTransport(TransportHandle):
-    """An async transport whose type has been forgotten, ready to be stored."""
+    """An async transport whose type has been forgotten, ready to be stored.
+
+    ```mojo
+    from httpx import AnyAsyncTransport, AsyncClient, AsyncHTTPTransport
+    from httpx import async_blocked, erase_async_transport
+
+
+    def main() raises:
+        var offline = False
+        var transport = erase_async_transport(AsyncHTTPTransport())
+        if offline:
+            transport = async_blocked("no network in this run")
+        with AsyncClient(transport=transport^) as client:
+            print(client.get("https://example.com/").status_code)
+    ```
+    """
 
     var _state: ErasedBox
     var _handle_request: def(

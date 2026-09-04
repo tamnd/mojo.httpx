@@ -118,9 +118,17 @@ comptime Mounts = MountTable[AnyTransport]
 """The routing table a `Client` takes, built up a mount at a time.
 
 ```mojo
-var routes = Mounts()
-routes.mount("all://internal.example.com", erase_transport(HTTPTransport()))
-routes.mount("http://", blocked())
+from httpx import Client, Mounts, HTTPTransport, blocked, erase_transport
+
+
+def main() raises:
+    var routes = Mounts()
+    routes.mount(
+        "all://internal.example.com", erase_transport(HTTPTransport())
+    )
+    routes.mount("http://", blocked())
+    with Client(mounts=routes^) as client:
+        print(client.get("https://example.com/").status_code)
 ```
 
 A named type rather than a dictionary literal because Mojo has no literal that
@@ -130,7 +138,19 @@ than at the first request.
 """
 
 comptime AsyncMounts = MountTable[AnyAsyncTransport]
-"""The same for an `AsyncClient`, holding async transports."""
+"""The same for an `AsyncClient`, holding async transports.
+
+```mojo
+from httpx import AsyncClient, AsyncMounts, async_blocked
+
+
+def main() raises:
+    var routes = AsyncMounts()
+    routes.mount("http://", async_blocked("plaintext is not allowed here"))
+    with AsyncClient(mounts=routes^) as client:
+        print(client.get("https://example.com/").status_code)
+```
+"""
 
 comptime __version__ = _VERSION
 """The library version, under the name httpx2 uses so that a version check
