@@ -39,14 +39,6 @@ import wire  # noqa: E402
 ACCEPTED = [
     (
         "*",
-        "header:accept-encoding",
-        "We ask for `gzip, deflate` and httpx2 also asks for `zstd`, which we"
-        " cannot yet undo. Asking for a coding the client cannot decode would"
-        " mean handing the caller compressed bytes and calling them the body."
-        " This entry goes away with brotli and zstd.",
-    ),
-    (
-        "*",
         "header-order",
         "Both orders are legal and neither carries meaning. We put the headers"
         " the caller set right after `Host` so they are visible at the top of a"

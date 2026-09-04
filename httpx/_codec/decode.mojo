@@ -4,13 +4,21 @@ A `Content-Encoding` is the server compressing a body the client asked it to
 compress. Undoing it is the only reason `iter_bytes` and `iter_raw` are two
 calls rather than one.
 
+Four codings are undone here: gzip and deflate through zlib, `br` through
+libbrotlidec and `zstd` through libzstd. All three libraries are opened at run
+time, so which of the four are available is a property of the machine rather
+than of the build, and `accept_encoding` below asks for exactly the ones that
+loaded. That is the whole of the degradation story: a machine without brotli
+asks for less and gets larger responses, rather than failing on one.
+
 The thing that makes this security code rather than plumbing is that the size
 of the answer is chosen by whoever wrote the compressed bytes. Deflate reaches
 1032 to 1 at its theoretical best, so forty kilobytes on the wire can become
 forty megabytes in memory, and a few megabytes can become several gigabytes.
-That is a memory exhaustion attack with no exploit in it, just a file, and the
-only defence against it is a limit. `DecodeLimits` below is that limit, it is
-on by default, and every decoder in this package is built with one.
+zstd and brotli go an order of magnitude further. That is a memory exhaustion
+attack with no exploit in it, just a file, and the only defence against it is a
+limit. `DecodeLimits` below is that limit, it is on by default, and every
+decoder in this package is built with one whichever coding it is for.
 
 The decoder is a push interface rather than an iterator: bytes go in as they
 arrive off the connection and plain bytes come back. That is the shape the
@@ -20,6 +28,15 @@ has already been allocated, which is the only check worth having.
 """
 
 from httpx._exceptions import ErrorKind, new_error
+from httpx._ffi.brotli import (
+    BROTLI_RESULT_ERROR,
+    BROTLI_RESULT_NEEDS_MORE_INPUT,
+    BROTLI_RESULT_SUCCESS,
+    BrotliDecoder,
+    result_text,
+)
+from httpx._ffi.brotli import is_available as brotli_available
+from httpx._ffi.brotli import unavailable_reason as brotli_problem
 from httpx._ffi.zlib import (
     Inflater,
     WINDOW_AUTO,
@@ -31,6 +48,10 @@ from httpx._ffi.zlib import (
     code_text,
     is_available,
 )
+from httpx._ffi.zlib import unavailable_reason as zlib_problem
+from httpx._ffi.zstd import ZstdDecoder
+from httpx._ffi.zstd import is_available as zstd_available
+from httpx._ffi.zstd import unavailable_reason as zstd_problem
 
 comptime DEFAULT_MAX_OUTPUT = 256 * 1024 * 1024
 """How large one decoded body may become, in bytes.
@@ -51,9 +72,21 @@ comptime DEFAULT_MAX_RATIO = 1032
 
 1032 to 1 is deflate's own ceiling, so for gzip and deflate this bound cannot
 fire on data that a real encoder produced and it sits behind the output bound
-rather than in front of it. It is here because brotli and zstd have no such
-ceiling, they reach into the thousands and the tens of thousands, and when they
-land they need a real number rather than a new field.
+rather than in front of it.
+
+brotli and zstd have no such ceiling, and for them this is a real bound. A zstd
+frame built out of RLE blocks turns four bytes into a hundred and twenty eight
+kilobytes and can keep that up for as long as the input lasts, which is about
+thirty two thousand to one sustained, and brotli's static dictionary does
+better still. The number is the same 1032 for all four codings because it is
+already far above anything a document compresses to: text and JSON land between
+five and fifty to one, and the bodies that go past a thousand are runs of one
+byte repeated, which is what a bomb is made of and what a real response is not.
+
+Both bounds are on, so for an ordinary client the output bound is the one that
+fires first and this one never gets a chance. It matters for the caller who
+raised `max_output` because they genuinely download large things, which is
+exactly the caller who has just turned off the other half of the defence.
 """
 
 comptime RATIO_FLOOR = 64 * 1024
@@ -90,6 +123,10 @@ struct Coding(Equatable, ImplicitlyCopyable, Movable, Writable):
     """RFC 1952, which is deflate with a header and a CRC-32 around it."""
     comptime DEFLATE = Self(2)
     """RFC 1950 in theory and RFC 1951 in practice. See `_deflate_window`."""
+    comptime BROTLI = Self(3)
+    """RFC 7932, spelled `br` in a header. Needs libbrotlidec on the machine."""
+    comptime ZSTD = Self(4)
+    """RFC 8878. Needs libzstd on the machine."""
     comptime UNKNOWN = Self(-1)
     """A name we do not implement. Never produced by a decoder, only by
     `coding_for`, so that a caller can say something specific about it."""
@@ -106,6 +143,10 @@ struct Coding(Equatable, ImplicitlyCopyable, Movable, Writable):
             return String("gzip")
         if self == Self.DEFLATE:
             return String("deflate")
+        if self == Self.BROTLI:
+            return String("br")
+        if self == Self.ZSTD:
+            return String("zstd")
         if self == Self.IDENTITY:
             return String("identity")
         return String("unknown")
@@ -134,7 +175,29 @@ def coding_for(name: StringSpan) -> Coding:
         return Coding.GZIP
     if lowered == "deflate":
         return Coding.DEFLATE
+    if lowered == "br":
+        return Coding.BROTLI
+    if lowered == "zstd":
+        return Coding.ZSTD
     return Coding.UNKNOWN
+
+
+def missing_library(coding: Coding) -> String:
+    """Why this coding cannot be undone here, or the empty string if it can.
+
+    Three of the four codings come from a library loaded at run time, so
+    whether one is supported is a property of the machine rather than of the
+    build. Everything that has to decide anything about a coding asks this,
+    which is what keeps `Accept-Encoding` and the decoder from disagreeing
+    about what this process can do.
+    """
+    if coding == Coding.GZIP or coding == Coding.DEFLATE:
+        return zlib_problem()
+    if coding == Coding.BROTLI:
+        return brotli_problem()
+    if coding == Coding.ZSTD:
+        return zstd_problem()
+    return String()
 
 
 def accept_encoding() -> String:
@@ -144,12 +207,28 @@ def accept_encoding() -> String:
     back that it has to hand over compressed, or fail on, and both of those are
     worse than the slightly larger response that comes of not asking. So the
     header is built from what actually loaded rather than from what was
-    compiled in, and a machine without zlib sends `identity` and gets plain
-    bodies.
+    compiled in, and a machine with none of the three libraries sends
+    `identity` and gets plain bodies.
+
+    The order is the one httpx2 sends, which is also roughly worst to best, and
+    no `q` values. A server picks whichever of these it likes and the order in
+    the header is not how it is told to prefer one, so writing preferences here
+    would be decoration.
     """
+    var out = String()
     if is_available():
-        return String("gzip, deflate")
-    return String("identity")
+        out += "gzip, deflate"
+    if brotli_available():
+        if out != "":
+            out += ", "
+        out += "br"
+    if zstd_available():
+        if out != "":
+            out += ", "
+        out += "zstd"
+    if out == "":
+        return String("identity")
+    return out^
 
 
 def _trimmed(piece: StringSpan) raises -> String:
@@ -182,6 +261,10 @@ def codings_for(value: StringSpan) raises -> List[Coding]:
     with `text` and `json` both quietly wrong. We only ever ask for what we can
     decode, so a server sending something else has ignored `Accept-Encoding`,
     and that is worth saying out loud.
+
+    A coding we know the name of but have no library for raises too, and says
+    which library is missing. That is a different problem from a name nobody
+    recognises, and it is the one somebody can fix.
     """
     var out = List[Coding]()
     for piece in value.split(","):
@@ -196,6 +279,17 @@ def codings_for(value: StringSpan) raises -> List[Coding]:
                     "the server answered with Content-Encoding: ",
                     name,
                     ", which this client cannot decode and did not ask for",
+                ),
+            )
+        var problem = missing_library(coding)
+        if problem != "":
+            raise new_error(
+                ErrorKind.PROTOCOL_ERROR,
+                String(
+                    "the server answered with Content-Encoding: ",
+                    name,
+                    ", which was not asked for on this machine. ",
+                    problem,
                 ),
             )
         out.append(coding)
@@ -274,18 +368,67 @@ def _looks_like_zlib[o: ImmOrigin](head: Span[UInt8, o]) -> Bool:
     return (cmf * 256 + flg) % 31 == 0
 
 
+def _invalid(coding: Coding, reason: String, detail: String) -> Error:
+    """The error for a body that its own library would not read.
+
+    Two halves because they answer different questions. `reason` is the
+    library's classification, which is what a reader looks up, and `detail` is
+    its sentence about this particular body, which is what says whether the
+    problem is the header, the checksum or the middle.
+    """
+    var message = String("this ", coding.name(), " body is not valid: ", reason)
+    if detail != "":
+        message += String(" (", detail, ")")
+    return new_error(ErrorKind.PROTOCOL_ERROR, message)
+
+
+struct _Step(ImplicitlyCopyable, Movable):
+    """What one pass over one of the three libraries did, in shared terms.
+
+    The libraries report themselves differently. zlib returns a code, brotli
+    returns one of four results, and zstd returns a byte count that is
+    sometimes an error. Reducing all three to these four numbers is what lets
+    `_run` below be one loop rather than three, and the loop is the part with
+    the bounds check and the member handling in it, which is the part worth
+    having once.
+    """
+
+    var consumed: Int
+    """How many input bytes were taken."""
+    var produced: Int
+    """How many output bytes were written."""
+    var ended: Bool
+    """Whether a whole member or frame came to an end on this pass."""
+    var stalled: Bool
+    """Whether nothing more can happen until more input arrives."""
+
+    def __init__(
+        out self, consumed: Int, produced: Int, ended: Bool, stalled: Bool
+    ):
+        self.consumed = consumed
+        self.produced = produced
+        self.ended = ended
+        self.stalled = stalled
+
+
 struct Decoder(Movable):
     """One body being decoded, with its bounds and its running totals.
 
-    Not copyable, because it owns the state zlib allocated for it. One decoder
-    belongs to one response body and dies with it, including when the body is
-    dropped half read, which is the case the destructor in `Inflater` exists
-    for.
+    Not copyable, because it owns the state a compression library allocated for
+    it. One decoder belongs to one response body and dies with it, including
+    when the body is dropped half read, which is the case the destructors in
+    the `_ffi` modules exist for.
+
+    Exactly one of the three backend fields is ever set, chosen by `_coding`.
+    Three fields rather than one behind a trait, because a trait object would
+    have to be boxed and the alternative is three lines.
     """
 
     var _coding: Coding
     var _limits: DecodeLimits
     var _inflater: Optional[Inflater]
+    var _brotli: Optional[BrotliDecoder]
+    var _zstd: Optional[ZstdDecoder]
     var _window: Int
     var _pending: List[UInt8]
     var _consumed: Int
@@ -296,21 +439,31 @@ struct Decoder(Movable):
     def __init__(
         out self, coding: Coding, limits: DecodeLimits = DecodeLimits()
     ) raises:
-        """A decoder for `coding`, which must be one this package implements.
+        """A decoder for `coding`, which must be one this machine can undo.
 
-        The zlib state is not built here. For `deflate` it cannot be, since
+        The library state is not built here. For `deflate` it cannot be, since
         which of two formats to ask for is a question the first two bytes
-        answer, and for `gzip` it is left until the first bytes arrive so that
-        an empty body costs nothing.
+        answer, and for the rest it is left until the first bytes arrive so
+        that an empty body costs nothing.
+
+        A coding whose library is not on the machine raises, naming the
+        library. Reaching this with one of those means something asked for a
+        decoder directly, because a response never can: `Accept-Encoding` does
+        not name it and `codings_for` refuses it first.
         """
         if coding == Coding.UNKNOWN:
             raise new_error(
                 ErrorKind.PROTOCOL_ERROR,
                 String("no decoder for this content coding"),
             )
+        var problem = missing_library(coding)
+        if problem != "":
+            raise new_error(ErrorKind.UNSUPPORTED_PROTOCOL, problem)
         self._coding = coding
         self._limits = limits.copy()
         self._inflater = None
+        self._brotli = None
+        self._zstd = None
         self._window = WINDOW_AUTO
         self._pending = List[UInt8]()
         self._consumed = 0
@@ -350,13 +503,13 @@ struct Decoder(Movable):
         self._started = True
 
         if self._ended:
-            # A gzip body may be several members one after another, and this is
-            # the start of the next one. Anything that is not a member makes
-            # the new decoder fail on its own header, which is the right
-            # answer for trailing rubbish.
+            # A gzip body may be several members one after another, and a zstd
+            # body several frames, and this is the start of the next one.
+            # Anything that is not one makes the restarted decoder fail on its
+            # own header, which is the right answer for trailing rubbish.
             self._restart()
 
-        if not self._inflater:
+        if not self._ready():
             if self._coding == Coding.DEFLATE:
                 self._pending.extend(chunk)
                 if len(self._pending) < _SNIFF:
@@ -369,8 +522,7 @@ struct Decoder(Movable):
                 self._pending = List[UInt8]()
                 self._run(Span(held), out)
                 return out^
-            self._window = WINDOW_AUTO
-            self._inflater = Inflater(self._window)
+            self._begin()
 
         self._run(chunk, out)
         return out^
@@ -380,7 +532,8 @@ struct Decoder(Movable):
 
         A body that stops in the middle is refused rather than accepted for as
         far as it got. The end of a gzip member carries a CRC-32 and a length,
-        so a truncated one is a body nobody checked, and handing that back as
+        a zstd frame carries an XXH64, and brotli carries a last block flag, so
+        a truncated one is a body nobody checked, and handing that back as
         content would make a dropped connection look like a short document.
 
         A body with nothing in it at all is fine. An empty response with a
@@ -405,59 +558,118 @@ struct Decoder(Movable):
                 ),
             )
 
-    def _restart(mut self) raises:
-        """Begin a second member of the same stream, in the same format."""
+    def _ready(self) -> Bool:
+        """Whether the backend for this coding has been made yet."""
+        if self._coding == Coding.BROTLI:
+            return Bool(self._brotli)
+        if self._coding == Coding.ZSTD:
+            return Bool(self._zstd)
+        return Bool(self._inflater)
+
+    def _begin(mut self) raises:
+        """Make the backend for this coding, positioned at the start.
+
+        Not reached for `deflate`, which cannot be started until the first two
+        bytes have said which of the two formats it is in.
+        """
+        if self._coding == Coding.BROTLI:
+            self._brotli = BrotliDecoder()
+            return
+        if self._coding == Coding.ZSTD:
+            self._zstd = ZstdDecoder()
+            return
+        self._window = WINDOW_AUTO
         self._inflater = Inflater(self._window)
+
+    def _restart(mut self) raises:
+        """Begin a second member or frame of the same stream, same format."""
+        if self._coding == Coding.BROTLI:
+            self._brotli = BrotliDecoder()
+        elif self._coding == Coding.ZSTD:
+            # Reset rather than remade. zstd concatenates frames by design, so
+            # the library has a call for exactly this and the allocation it
+            # already made is worth keeping across it.
+            ref decoder = self._zstd.value()
+            decoder.reset()
+        else:
+            self._inflater = Inflater(self._window)
         self._ended = False
+
+    def _step[
+        o: ImmOrigin
+    ](
+        mut self, data: Span[UInt8, o], at: Int, mut sink: List[UInt8]
+    ) raises -> _Step:
+        """One pass over whichever of the three libraries this coding uses.
+
+        Corruption raises here rather than coming back as a number, because no
+        caller has anything to do with it other than fail, and the message
+        wants the library's own words in it.
+        """
+        var coding = self._coding
+        if coding == Coding.BROTLI:
+            ref decoder = self._brotli.value()
+            var got = decoder.step(data, at, sink)
+            if got.code == BROTLI_RESULT_ERROR:
+                raise _invalid(coding, result_text(got.code), decoder.message())
+            return _Step(
+                got.consumed,
+                got.produced,
+                got.code == BROTLI_RESULT_SUCCESS,
+                got.code == BROTLI_RESULT_NEEDS_MORE_INPUT,
+            )
+        if coding == Coding.ZSTD:
+            ref decoder = self._zstd.value()
+            var got = decoder.step(data, at, sink)
+            # zstd reports a bad frame by raising from inside `step`, so
+            # anything that comes back here is progress. Nothing having moved
+            # is how it says it wants more input.
+            return _Step(
+                got.consumed,
+                got.produced,
+                got.ended,
+                got.consumed == 0 and got.produced == 0,
+            )
+        ref decoder = self._inflater.value()
+        var got = decoder.step(data, at, sink)
+        if got.code == Z_STREAM_END:
+            return _Step(got.consumed, got.produced, True, False)
+        if got.code == Z_BUF_ERROR:
+            # zlib could not move. That is what it says when the input ran out
+            # on a boundary, so it is the normal way a chunk ends.
+            return _Step(got.consumed, got.produced, False, True)
+        if got.code != Z_OK:
+            raise _invalid(coding, code_text(got.code), decoder.message())
+        return _Step(got.consumed, got.produced, False, False)
 
     def _run[
         o: ImmOrigin
     ](mut self, data: Span[UInt8, o], mut out: List[UInt8]) raises:
-        """Push `data` through zlib until it stops giving anything back."""
+        """Push `data` through the library until it gives nothing back."""
         var sink = List[UInt8](length=_SINK, fill=0)
         var at = 0
         while True:
-            ref inflater = self._inflater.value()
-            var step = inflater.step(data, at, sink)
+            var step = self._step(data, at, sink)
             at += step.consumed
             for i in range(step.produced):
                 out.append(sink[i])
             self._produced += step.produced
             self._check_bounds()
 
-            if step.code == Z_STREAM_END:
+            if step.ended:
                 self._ended = True
                 if at >= len(data):
                     return
                 self._restart()
                 continue
-            if step.code == Z_BUF_ERROR:
-                # zlib could not move. That is what it says when the input ran
-                # out on a boundary, so it is the normal way a chunk ends.
+            if step.stalled:
                 return
-            if step.code != Z_OK:
-                raise self._corrupt(step.code)
             if step.consumed == 0 and step.produced == 0:
                 return
             if at >= len(data) and step.produced < len(sink):
                 # Everything given has been taken and the last pass did not
-                # fill the buffer, so there is nothing left inside zlib.
+                # fill the buffer, so there is nothing left inside the library.
                 return
-
-    def _corrupt(mut self, code: Int) -> Error:
-        var detail = String()
-        if self._inflater:
-            ref inflater = self._inflater.value()
-            detail = inflater.message()
-        var message = String(
-            "this ",
-            self._coding.name(),
-            " body is not valid: ",
-            code_text(code),
-        )
-        if detail != "":
-            message += String(" (", detail, ")")
-        return new_error(ErrorKind.PROTOCOL_ERROR, message)
 
     def _check_bounds(mut self) raises:
         """Refuse a body that has grown past what it was allowed to.

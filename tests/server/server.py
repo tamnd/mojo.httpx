@@ -37,6 +37,26 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+# The two codings that are not in every Python. brotli comes from the
+# brotli-python package and zstd from either the standard library, which has it
+# from 3.14 on, or the zstandard package for a Python older than that. pixi
+# installs both packages, so which Python the environment solved to does not
+# decide whether these two routes work. They are still imported softly, so that
+# a Python without them runs every other route and the two that need them answer
+# 501 rather than killing the server on an import at the top of the file.
+try:
+    import brotli
+except ImportError:
+    brotli = None
+
+try:
+    from compression import zstd
+except ImportError:
+    try:
+        import zstandard as zstd
+    except ImportError:
+        zstd = None
+
 
 DIGEST_REALM = "testserver"
 DIGEST_NONCE = "dcd98b7102dd2f0e8b11d0f600bfb0c093"
@@ -176,6 +196,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._compressed("gzip", query)
         if path == "/deflate":
             return self._compressed("deflate", query)
+        if path == "/brotli":
+            return self._compressed("br", query)
+        if path == "/zstd":
+            return self._compressed("zstd", query)
         if path == "/unknown-encoding":
             return self._unknown_encoding()
         if path == "/chunked":
@@ -496,6 +520,14 @@ class Handler(BaseHTTPRequestHandler):
             content_type = "application/json"
         if encoding == "gzip":
             payload = gzip.compress(raw)
+        elif encoding == "br":
+            if brotli is None:
+                return self._no_compressor("br", "the brotli package")
+            payload = brotli.compress(raw)
+        elif encoding == "zstd":
+            if zstd is None:
+                return self._no_compressor("zstd", "a zstd module")
+            payload = zstd.compress(raw)
         else:
             payload = zlib.compress(raw)
         self.send_response(200)
@@ -506,17 +538,35 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(payload)
 
+    def _no_compressor(self, encoding, package):
+        """This Python cannot make that coding, said in the status line.
+
+        501 rather than a traceback, so the test that wanted it fails saying
+        what is missing rather than failing as a dropped connection.
+        """
+        self._read_body()
+        body = ("no %s here, %s is not installed" % (encoding, package)).encode()
+        self.send_response(501)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
     def _unknown_encoding(self):
         """A coding no client asked for, which every client should refuse.
 
-        The bytes are not brotli, and that is the point: a client that reads
-        the header will never get as far as looking at them.
+        `exi` is a real registered content coding for a binary XML format, and
+        no HTTP client implements it, so it stands for the general case: a name
+        that is in the registry and is not something we can undo. The bytes are
+        not exi either, and that is the point: a client that reads the header
+        never gets as far as looking at them.
         """
         self._read_body()
-        payload = b"this was never brotli"
+        payload = b"this was never exi"
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
-        self.send_header("Content-Encoding", "br")
+        self.send_header("Content-Encoding", "exi")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         if self.command != "HEAD":

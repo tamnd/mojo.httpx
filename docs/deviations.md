@@ -2,7 +2,7 @@
 
 The goal is that code written against httpx2 reads the same here, and that a request going out over the wire has the same bytes in it. Where that is not possible, the difference is deliberate and it is written down on this page rather than left for somebody to find at three in the morning.
 
-This page is about behaving differently while doing the same job. Things that are simply not here yet, such as the brotli and zstd codecs and the async TLS handshake, are on [limitations.md](limitations.md) instead.
+This page is about behaving differently while doing the same job. Things that are simply not here yet, such as the async TLS handshake, are on [limitations.md](limitations.md) instead.
 
 Two kinds of difference show up. The first kind is forced by the language: Mojo has no dynamic `Any`, no exception subclassing, no generators and no keyword argument packing, so anything built on those has to be spelled differently. The second kind is a judgement call, where copying httpx2 exactly was possible and we chose not to. The second kind is much shorter and each entry says what the alternative was.
 
@@ -74,19 +74,17 @@ That costs one connection on a call that was already the slow path, since a one 
 
 ## Judgement calls
 
-### `Accept-Encoding` asks for less, and is decided at run time
+### `Accept-Encoding` is decided at run time, and can be shorter
 
-httpx2 sends `Accept-Encoding: gzip, deflate, zstd`. This client sends `gzip, deflate`, because those are the two it can undo today. brotli and zstd are still to come.
+Both clients send `Accept-Encoding: gzip, deflate, br, zstd` on an ordinary machine, so the header usually matches byte for byte. What differs is where the list comes from. httpx2 decides it from which Python packages are installed at import time. Here it is built from which shared libraries `dlopen` actually found: zlib for gzip and deflate, libbrotlidec for `br`, libzstd for `zstd`, each opened by name the first time a response needs it.
 
-The list is built from what actually loaded rather than from what was compiled in. zlib is opened by name when the first response needs it, so a machine without one sends `identity` and gets plain bodies instead of failing on every compressed response. Asking for a coding you cannot undo is worse than not asking: the server compresses, the client cannot decompress, and `response.text()` hands back a string built out of the compressed bytes and calls it the body.
-
-This is one of the two differences the parity suite is allowed to see. See [testing](testing.md).
+So the header is shorter on a machine that is missing one of them, and `identity` on a machine missing all three, and in both cases the client gets larger responses instead of failing on every compressed one. Asking for a coding you cannot undo is worse than not asking: the server compresses, the client cannot decompress, and `response.text()` hands back a string built out of the compressed bytes and calls it the body.
 
 ### A decoded body has a size limit and httpx2's does not
 
 A compressed body is one where the sender chooses how much memory the receiver spends. Deflate reaches 1032 to 1, so forty kilobytes on the wire can become forty megabytes in memory, and a few megabytes can become several gigabytes. httpx2 has no bound on this at all: the body is trusted about its own size, and the failure mode is the process rather than an exception.
 
-Here every decoder is built with a `DecodeLimits`, which stops a body at 256 MiB of output and at 1032 times its compressed size, measured once 64 KiB has arrived. The ratio bound cannot fire on gzip or deflate data that a real encoder produced, because 1032 is deflate's own ceiling; it is there for brotli and zstd, which have no such ceiling.
+Here every decoder is built with a `DecodeLimits`, which stops a body at 256 MiB of output and at 1032 times its compressed size, measured once 64 KiB has arrived. The ratio bound cannot fire on gzip or deflate data that a real encoder produced, because 1032 is deflate's own ceiling, so for those two it sits behind the output bound. brotli and zstd have no such ceiling: a zstd frame built out of RLE blocks sustains about thirty two thousand to one and brotli's static dictionary does better still, so for those two the ratio is a bound that can actually fire. The same 1032 covers all four because real documents land between five and fifty to one, and it is the bound that still protects a caller who raised `max_output` because they genuinely download large things.
 
 A caller who really is downloading something larger has `iter_raw`, which hands over the compressed bytes untouched and lets them decide what to do with them.
 
