@@ -16,8 +16,11 @@ from std.testing import assert_equal, assert_false, assert_raises, assert_true
 
 from httpx._client import Client
 from httpx._exceptions import ErrorKind, kind_of
+from httpx._io.deadline import now_ns
 from httpx._models.headers import Headers
+from httpx._models.request import Request
 from httpx._models.response import Response
+from httpx._models.url import URL
 from httpx._transport.base import AnyTransport, erase_transport
 from httpx._transport.mock import MockRouter, Route
 from tests.support.testserver import TestServer
@@ -279,3 +282,104 @@ def test_a_response_with_no_link_header_has_no_links() raises:
     var r = client.get("http://x/")
     assert_equal(len(r.links()), 0)
     assert_false(Bool(r.link_url("next")))
+
+
+# The status classes.
+
+
+def _status(
+    status_code: Int, var headers: Headers = Headers()
+) raises -> Response:
+    return Response(status_code, String(), String("HTTP/1.1"), headers^)
+
+
+def test_the_status_classes_split_at_the_hundreds() raises:
+    assert_true(_status(100).is_informational())
+    assert_true(_status(204).is_success())
+    assert_true(_status(302).has_redirect_status())
+    assert_true(_status(404).is_client_error())
+    assert_true(_status(503).is_server_error())
+    assert_false(_status(200).is_informational())
+    assert_false(_status(199).is_success())
+    assert_false(_status(400).has_redirect_status())
+    assert_false(_status(500).is_client_error())
+    assert_false(_status(499).is_server_error())
+
+
+def test_is_error_covers_both_error_classes() raises:
+    assert_true(_status(400).is_error())
+    assert_true(_status(599).is_error())
+    assert_false(_status(399).is_error())
+    assert_false(_status(600).is_error())
+
+
+def test_a_redirect_needs_a_location_to_be_one() raises:
+    # The difference between the two predicates, and the reason both are here: a
+    # 3xx with nowhere to go cannot be followed, so calling it a redirect would
+    # promise the caller something they cannot act on.
+    var located = Headers()
+    located.append("location", "/elsewhere")
+    var followable = _status(302, located^)
+    assert_true(followable.is_redirect())
+    assert_true(followable.has_redirect_status())
+
+    var bare = _status(302)
+    assert_false(bare.is_redirect())
+    assert_true(bare.has_redirect_status())
+
+
+def test_a_success_with_a_location_is_not_a_redirect() raises:
+    # 201 carries a Location naming what was created, which is not somewhere to
+    # go next.
+    var located = Headers()
+    located.append("location", "/things/7")
+    assert_false(_status(201, located^).is_redirect())
+
+
+# The plumbing the client uses on the way past.
+
+
+def test_a_response_built_by_hand_has_no_request() raises:
+    assert_false(Response(200).has_request())
+    with assert_raises(contains="did not come from sending a request"):
+        _ = Response(200).request()
+
+
+def test_a_response_from_a_client_has_the_request_that_got_it() raises:
+    var client = _answering(200)
+    var r = client.get("http://x/thing")
+    assert_true(r.has_request())
+    assert_equal(String(r.request().url), "http://x/thing")
+
+
+def test_a_response_inherits_the_chain_that_led_to_it() raises:
+    # What the client does at each hop of a redirect: the newest response is
+    # handed the one before it, so the caller ends up holding the whole chain
+    # without the client keeping a list of its own.
+    var first = _status(302)
+    var second = _status(302)
+    second.inherit_history(first^)
+    var third = _status(200)
+    third.inherit_history(second^)
+    assert_equal(third.history_count(), 2)
+    assert_equal(third.history()[0].status_code, 302)
+    assert_equal(third.history()[1].status_code, 302)
+
+
+def test_a_next_request_is_taken_rather_than_borrowed() raises:
+    var r = _status(302)
+    assert_false(r.has_next_request())
+    r.set_next_request(Request("GET", URL("http://x/elsewhere")))
+    assert_true(r.has_next_request())
+    assert_equal(String(r.next_request().url), "http://x/elsewhere")
+    assert_false(r.has_next_request())
+
+
+def test_timing_a_response_that_is_already_read_stops_the_clock() raises:
+    # A response the transport buffered has no body still arriving, so the
+    # exchange is over the moment the clock is handed to it.
+    var r = _status(200)
+    with assert_raises(contains="only available once"):
+        _ = r.elapsed()
+    r.begin_timing(now_ns() - 1_000_000)
+    assert_true(r.elapsed().nanoseconds > 0)

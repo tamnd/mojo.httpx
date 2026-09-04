@@ -209,6 +209,17 @@ def test_aio_client_resolves_a_relative_url_against_the_base_url() raises:
     client.close()
 
 
+def test_aio_client_keeps_the_base_url_it_was_given() raises:
+    # The field is public on both clients and holds what was passed rather than
+    # a normalised form of it, so a caller can read it back and print it in a log
+    # line without wondering which one they are looking at.
+    var client = AsyncClient(base_url=URL("http://api.example/v1/"))
+    assert_equal(String(client.base_url), "http://api.example/v1/")
+    var built = client.build_request("GET", "things")
+    assert_equal(String(built.url), "http://api.example/v1/things")
+    client.close()
+
+
 def test_aio_client_merges_client_params_into_every_request() raises:
     var client = AsyncClient(params=QueryParams("token=abc"))
     var built = client.build_request("GET", "https://example.com/search")

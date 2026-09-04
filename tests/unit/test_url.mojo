@@ -459,3 +459,60 @@ def test_an_empty_url_is_relative_and_serializes_empty() raises:
     var u = URL("")
     assert_equal(String(u), "")
     assert_true(u.is_relative_url())
+
+
+def test_the_raw_parts_are_the_bytes_as_stored() raises:
+    # The accessors above answer with decoded text. These answer with what is in
+    # the buffer, which is what goes back out on the wire.
+    var u = URL("https://user:secret@example.com:8443/a/b?x=1&y=2#frag")
+    assert_equal(String(StringSpan(from_utf8=u.raw_scheme())), "https")
+    assert_equal(String(StringSpan(from_utf8=u.userinfo())), "user:secret")
+    assert_equal(String(StringSpan(from_utf8=u.raw_query())), "x=1&y=2")
+
+
+def test_a_raw_part_that_is_not_there_is_empty_rather_than_absent() raises:
+    var u = URL("https://example.com/a")
+    assert_equal(String(StringSpan(from_utf8=u.userinfo())), "")
+    assert_equal(String(StringSpan(from_utf8=u.raw_query())), "")
+
+
+def test_adding_a_param_keeps_the_value_already_under_that_key() raises:
+    # The difference between add and set, and the reason both exist: a repeated
+    # key is two values, which some servers read as a list.
+    var u = URL("https://example.com/s?tag=a")
+    assert_equal(
+        String(u.copy_add_param("tag", "b")),
+        "https://example.com/s?tag=a&tag=b",
+    )
+    assert_equal(String(u), "https://example.com/s?tag=a")
+
+
+def test_removing_a_param_takes_every_value_of_it() raises:
+    var u = URL("https://example.com/s?tag=a&page=2&tag=b")
+    assert_equal(
+        String(u.copy_remove_param("tag")), "https://example.com/s?page=2"
+    )
+
+
+def test_removing_a_key_that_is_not_there_changes_nothing() raises:
+    var u = URL("https://example.com/s?page=2")
+    assert_equal(String(u.copy_remove_param("tag")), String(u))
+
+
+def test_merging_params_replaces_the_keys_it_names() raises:
+    var u = URL("https://example.com/s?q=mojo&page=2")
+    var merged = u.copy_merge_params(QueryParams("page=3&sort=new"))
+    assert_equal(merged.params()["q"], "mojo")
+    assert_equal(merged.params()["page"], "3")
+    assert_equal(merged.params()["sort"], "new")
+    assert_equal(String(u), "https://example.com/s?q=mojo&page=2")
+
+
+def test_merging_the_same_params_twice_gives_what_once_gave() raises:
+    # Set rather than add, which is what makes a merge safe to repeat. A client
+    # that merges its default parameters on every retry depends on this.
+    var u = URL("https://example.com/s?page=2")
+    var once = u.copy_merge_params(QueryParams("page=3"))
+    assert_equal(
+        String(once.copy_merge_params(QueryParams("page=3"))), String(once)
+    )

@@ -11,7 +11,7 @@ put on the wire rather than what a server made of it.
 
 from std.testing import assert_equal, assert_false, assert_true
 
-from httpx._auth import basic_auth, no_auth
+from httpx._auth import AnyAuth, NoAuth, basic_auth, erase_auth, no_auth
 from httpx._client import Client
 from httpx._models.headers import Headers
 from httpx._models.url import QueryParams, URL
@@ -77,6 +77,49 @@ def test_a_client_over_a_mock_still_reports_itself_closed() raises:
     assert_false(client.is_closed())
     client.close()
     assert_true(client.is_closed())
+
+
+# The base URL.
+
+
+def test_the_base_url_is_kept_as_given_and_every_call_resolves_on_it() raises:
+    var router = MockRouter()
+    router.add(Route.any().respond(200))
+    var transport = erase_transport(router^)
+    var handle = transport.copy()
+    var client = Client(
+        transport=transport^, base_url=URL("http://api.example/v1/")
+    )
+    assert_equal(String(client.base_url), "http://api.example/v1/")
+    _ = client.get("things")
+    assert_equal(
+        String(handle.state[MockRouter]().calls[0].url),
+        "http://api.example/v1/things",
+    )
+
+
+def test_a_client_with_no_base_url_has_an_empty_one() raises:
+    # Empty rather than absent. An `Optional[URL]` would put a step in front of
+    # the one caller that has a base URL to pay for a state that reads the same
+    # either way, and an empty URL already resolves to whatever it is joined to.
+    var client = Client()
+    assert_equal(String(client.base_url), "")
+
+
+def test_the_base_url_can_be_changed_after_construction() raises:
+    # The field is public because a client built once and pointed at staging or
+    # at production by a later line is an ordinary thing to want.
+    var router = MockRouter()
+    router.add(Route.any().respond(200))
+    var transport = erase_transport(router^)
+    var handle = transport.copy()
+    var client = Client(transport^)
+    client.base_url = URL("http://later.example/api/")
+    _ = client.get("things")
+    assert_equal(
+        String(handle.state[MockRouter]().calls[0].url),
+        "http://later.example/api/things",
+    )
 
 
 # The default encoding.
@@ -188,6 +231,23 @@ def test_no_auth_turns_the_client_scheme_off_for_one_call() raises:
     ref sent = handle.state[MockRouter]().calls
     assert_false("authorization" in sent[0].headers)
     assert_true("authorization" in sent[1].headers)
+
+
+def test_the_no_auth_factory_is_the_struct_with_the_type_erased() raises:
+    # `no_auth()` is a convenience and nothing more, so a caller who wants the
+    # struct, to put it in a list of schemes or to write their own factory, gets
+    # the same behaviour out of it.
+    var scheme: AnyAuth = erase_auth(NoAuth())
+    var router = MockRouter()
+    router.add(Route.any().respond(200))
+    var transport = erase_transport(router^)
+    var handle = transport.copy()
+    var client = Client(
+        transport=transport^,
+        auth=basic_auth("alice", "hunter2"),
+    )
+    _ = client.get("http://x/", auth=scheme^)
+    assert_false("authorization" in handle.state[MockRouter]().calls[0].headers)
 
 
 def test_a_per_call_scheme_wins_over_the_client_scheme() raises:

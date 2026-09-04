@@ -20,6 +20,7 @@ from httpx._client import Client
 from httpx._exceptions import (
     ErrorKind,
     is_remote_protocol_error,
+    is_too_many_redirects,
     kind_of,
     message_of,
 )
@@ -335,6 +336,23 @@ def test_a_streamed_body_cannot_be_sent_to_the_new_place() raises:
     assert_true(raised)
 
 
+def test_a_request_says_whether_its_body_has_already_gone() raises:
+    # What the redirect handler asks before it tries to replay a body, and the
+    # reason it can ask at all: a copy of a request whose stream has been taken
+    # remembers that the body is missing rather than looking like a request that
+    # never had one.
+    var request = Request.streaming(
+        "POST", URL("http://example.com/a"), erase_source(_body("one"))
+    )
+    assert_false(request.body_was_taken())
+    _ = request.take_stream()
+    assert_true(request.body_was_taken())
+    assert_true(request.copy().body_was_taken())
+
+    var in_memory = Request("GET", URL("http://example.com/a"))
+    assert_false(in_memory.body_was_taken())
+
+
 def test_a_streamed_body_is_fine_when_the_method_is_rewritten() raises:
     # A 303 drops the body, so there is nothing to replay and nothing to refuse.
     var request = Request.streaming(
@@ -488,6 +506,10 @@ def test_a_chain_that_never_ends_is_given_up_on() raises:
     except e:
         raised = True
         assert_true(kind_of(e) == ErrorKind.TOO_MANY_REDIRECTS)
+        # The predicate rather than the kind is what a caller who ported a
+        # `try` block over from httpx will reach for, so both spellings are
+        # checked on the one error that raises this.
+        assert_true(is_too_many_redirects(e))
         assert_equal(message_of(e), "Exceeded maximum allowed redirects.")
     assert_true(raised)
     client.close()

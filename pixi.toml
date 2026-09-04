@@ -117,6 +117,13 @@ golden = { cmd = "python tools/golden/run.py", depends-on = ["cli"] }
 docs = "python tools/docgen/run.py"
 docs-check = "python tools/docgen/run.py --check"
 
+# Every public name, checked for a mention somewhere under tests/. A floor
+# rather than a coverage measure: it catches the method added to a public type
+# and exercised only from inside the library, and the name exported and then
+# forgotten, neither of which the compiler or the suite can see. `--all` prints
+# the whole surface rather than only the gaps. See docs/testing.md.
+census = "python tools/census/run.py"
+
 # Every ```mojo block in the documentation, handed to the compiler. The
 # examples are whole programs for this reason, and this is what stops a renamed
 # argument from living on in the docs after the code moved.
@@ -188,6 +195,7 @@ check = { depends-on = [
   "vendor-check",
   "generated-check",
   "docs-check",
+  "census",
   "baseline",
   "test",
   "golden",

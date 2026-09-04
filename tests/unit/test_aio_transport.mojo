@@ -28,7 +28,11 @@ from httpx._models.response import Response
 from httpx._models.url import URL
 from httpx._pool.limits import Limits
 from httpx._stream.config import TlsConfig
-from httpx._transport.aio_base import AnyAsyncTransport, erase_async_transport
+from httpx._transport.aio_base import (
+    AnyAsyncTransport,
+    AsyncTransport,
+    erase_async_transport,
+)
 from httpx._transport.aio_http import AsyncHTTPTransport
 from httpx._transport.mock import MockRouter, MockTransport, Route
 
@@ -91,6 +95,58 @@ def _send_one_erased(
     mut transport: AnyAsyncTransport, server: TestServer, var request: Request
 ) raises -> Response:
     return transport.handle_request(request^, _deadlines())
+
+
+struct _Batched(AsyncTransport, Movable):
+    """An async transport written the way somebody outside the library writes
+    one, recording the size of every batch it was handed."""
+
+    var batches: List[Int]
+
+    def __init__(out self):
+        self.batches = List[Int]()
+
+    def handle_request(
+        mut self, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        self.batches.append(1)
+        return Response(200)
+
+    def handle_stream(
+        mut self, var request: Request, deadlines: Deadlines
+    ) raises -> Response:
+        return self.handle_request(request^, deadlines)
+
+    def handle_many(
+        mut self, var requests: List[Request], deadlines: Deadlines
+    ) raises -> List[Response]:
+        self.batches.append(len(requests))
+        var out = List[Response]()
+        for _ in range(len(requests)):
+            out.append(Response(204))
+        return out^
+
+    def close(mut self):
+        pass
+
+
+def test_aio_transport_a_transport_of_ones_own_is_handed_the_whole_batch() raises:
+    # `handle_many` is the one method the async trait has that the synchronous
+    # one does not, and it is the whole reason for the trait. A transport that
+    # got the batch one request at a time would still answer correctly and would
+    # have quietly turned a round of requests back into a queue.
+    var erased = erase_async_transport(_Batched())
+    var requests = List[Request]()
+    requests.append(Request("GET", URL("http://example.com/one")))
+    requests.append(Request("GET", URL("http://example.com/two")))
+    requests.append(Request("GET", URL("http://example.com/three")))
+    var responses = erased.handle_many(requests^, _deadlines())
+
+    assert_equal(len(responses), 3)
+    assert_equal(responses[0].status_code, 204)
+    ref seen = erased.state[_Batched]().batches
+    assert_equal(seen.__len__(), 1)
+    assert_equal(seen[0], 3)
 
 
 def test_aio_transport_a_single_request_gets_its_answer() raises:

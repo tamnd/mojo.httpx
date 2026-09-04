@@ -258,3 +258,43 @@ def test_a_bundle_with_no_limits_at_all_never_expires() raises:
     assert_false(bundle.read.expired())
     assert_false(bundle.write.expired())
     assert_false(bundle.pool.expired())
+
+
+def test_a_deadline_in_milliseconds_is_the_same_deadline() raises:
+    # The two constructors exist because half the callers here think in seconds
+    # and the transport layer thinks in milliseconds. Coarse comparison, since
+    # the two readings of the clock are not the same reading.
+    var seconds = Deadline.after(0.5)
+    var millis = Deadline.after_ms(500)
+    assert_true(millis.limited)
+    assert_false(millis.expired())
+    # In nanoseconds, because `remaining_ms` is the length of the next wait and
+    # is capped at MAX_SLICE_MS, so it cannot tell a half second from an hour.
+    assert_true(millis.remaining_ns() > UInt64(400_000_000))
+    assert_true(millis.remaining_ns() <= UInt64(500_000_000))
+    assert_true(seconds.remaining_ns() > UInt64(400_000_000))
+
+
+def test_zero_milliseconds_has_already_passed() raises:
+    # `timeout=0` is how a caller asks for one non blocking attempt, so it makes
+    # a deadline rather than an error.
+    assert_true(Deadline.after_ms(0).expired())
+    assert_true(Deadline.after_ms(-5).expired())
+    assert_equal(Deadline.after_ms(0).remaining_ns(), UInt64(0))
+
+
+def test_the_nanoseconds_left_run_down_to_zero_and_stop() raises:
+    var live = Deadline.after_ms(500)
+    assert_true(live.remaining_ns() > UInt64(0))
+    assert_true(live.remaining_ns() <= UInt64(500_000_000))
+    var passed = Deadline.after_ms(0)
+    assert_equal(passed.remaining_ns(), UInt64(0))
+
+
+def test_an_unlimited_deadline_reports_no_nanoseconds_left() raises:
+    # Zero here does not mean expired, it means the question does not apply,
+    # which is why `remaining_ms` checks `limited` before asking.
+    var forever = Deadline.never()
+    assert_equal(forever.remaining_ns(), UInt64(0))
+    assert_false(forever.expired())
+    assert_equal(forever.remaining_ms(), MAX_SLICE_MS)

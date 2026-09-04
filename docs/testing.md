@@ -356,10 +356,19 @@ The parity layer is the direct defence of the project's goal. Each scenario runs
 
 ## Coverage
 
-Mojo has no coverage tooling. Two things substitute for it.
+Mojo has no coverage tooling. Two things substitute for it. The API census says the whole public surface is mentioned somewhere in the tests, and mutation testing says the mentions mean something. Together they are a stronger claim than a coverage percentage, because one guarantees the surface is covered and the other guarantees the assertions bite. The first of them exists and the second is not written yet.
 
-Mutation testing perturbs operators, boundaries and constants and asserts the suite notices. A mutant that survives marks behaviour that is executed but not actually tested, which is the thing line coverage cannot tell you.
+```bash
+pixi run census         # the public names no test mentions
+pixi run census --all   # the whole surface rather than only the gaps
+```
 
-The public API census diffs the symbol list from `mojo doc` against the symbols the tests touch. A public symbol with no test fails the build.
+The public API is everything `httpx/__init__.mojo` re-exports, plus the fields, methods and constants of the types it re-exports. The census walks that surface, taken from the same code that renders the API reference, and fails when a name appears nowhere under `tests/`. It runs as part of `pixi run check` and in the CI lint job, beside `docs-check`, which reads the same export list. A public name nobody mentions in a test is a name whose behaviour is whatever the implementation happens to do, and the semver promise this is here to defend is a promise about all of it rather than about the parts somebody remembered to check.
 
-Together those are a stronger claim than a coverage percentage, because one guarantees the surface is covered and the other guarantees the assertions mean something.
+What it proves is a floor, and it is worth saying where the floor is. The match is textual, so a method called `close` gets credit from any type with a method of that name, and a name appearing in a test is not the same as that name being tested well. What it does catch is the case that actually happens, which is a method added to a public type and exercised only from inside the library, or a name exported and then forgotten. Neither of those is visible to the compiler or to a passing suite.
+
+Members with no name at a call site are counted apart rather than probed with something weaker. `__eq__` is spelled `==`, `__len__` is `len(x)` and `write_to` is what `String(x)` calls, so a probe for those is a probe for punctuation that matches any file long enough. Counting them would raise the number the census reports without raising what it knows, which is the wrong direction for a gate. They are listed under `--all` so the surface can still be read whole.
+
+`SKIPPED` in `tools/census/run.py` holds the names allowed to be missing, each with the reason, and an entry that stops being missing fails the run the same way a missing name does. That is the rule the parity suite uses for its accepted differences, for the same reason: an allowance nobody ever has to justify again is how a gate quietly stops gating.
+
+Mutation testing is the other half and is not built. It would perturb operators, boundaries and constants and assert the suite notices. A mutant that survives marks behaviour that is executed but not actually tested, which is the thing line coverage cannot tell you, and it is what would turn the census from a claim about names into a claim about assertions.
