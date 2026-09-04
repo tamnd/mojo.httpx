@@ -134,13 +134,23 @@ while IFS="$(printf '\t')" read -r name shell roles <&3; do
     continue
   fi
 
+  # The body is a brace group with its input taken from /dev/null, for the same
+  # reason the host loop above reads from fd 3. This whole script arrives on the
+  # far end's stdin, so any command in it that reads stdin swallows the lines
+  # after itself and they are never run. That is not theoretical: a `pixi run
+  # docex` on gamingpc printed the task banner and then nothing, no output, no
+  # error and no exit status, because everything after it had been eaten. Bash
+  # parses the entire brace group before running any of it, so redirecting the
+  # group is enough, and there is nothing after the closing brace left to lose.
   remote_script="set -e
+{
 export PATH=\$HOME/.pixi/bin:\$PATH
 command -v pixi >/dev/null || curl -fsSL https://pixi.sh/install.sh | bash
 export PATH=\$HOME/.pixi/bin:\$PATH
 cd $remote_dir
 pixi install --locked
-$cmd"
+$cmd
+} </dev/null"
 
   if printf '%s\n' "$remote_script" | ssh "$name" "$remote_sh"; then
     echo "    ok"
