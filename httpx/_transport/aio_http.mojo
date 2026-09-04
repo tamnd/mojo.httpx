@@ -23,6 +23,7 @@ from httpx._pool.aio_pool import (
     stream_request,
 )
 from httpx._pool.limits import Limits
+from httpx._pool.proxy import Proxy
 from httpx._transport.aio_base import AsyncTransport
 
 
@@ -45,8 +46,16 @@ struct AsyncHTTPTransport(AsyncTransport):
         """
         self.pool = SharedAsyncPool(AsyncConnectionPool(Limits()))
 
-    def __init__(out self, var limits: Limits) raises:
-        self.pool = SharedAsyncPool(AsyncConnectionPool(limits^))
+    def __init__(
+        out self, var limits: Limits, var proxy: Optional[Proxy] = None
+    ) raises:
+        """Limits, and a proxy to send everything through.
+
+        The proxy belongs to the pool rather than to a request, so a transport
+        built with one sends every request through it, the same as the
+        synchronous transport does.
+        """
+        self.pool = SharedAsyncPool(AsyncConnectionPool(limits^, proxy=proxy^))
 
     def handle_request(
         mut self, var request: Request, deadlines: Deadlines

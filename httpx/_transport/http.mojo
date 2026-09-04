@@ -20,6 +20,7 @@ from httpx._models.request import Request
 from httpx._models.response import Response
 from httpx._pool.limits import Limits
 from httpx._pool.pool import ConnectionPool, SharedPool, stream_request
+from httpx._pool.proxy import Proxy
 from httpx._stream.config import TlsConfig
 from httpx._transport.base import Transport
 
@@ -39,9 +40,19 @@ struct HTTPTransport(Transport):
         self.pool = SharedPool(ConnectionPool(Limits()))
 
     def __init__(
-        out self, var limits: Limits, var tls: TlsConfig = TlsConfig()
+        out self,
+        var limits: Limits,
+        var tls: TlsConfig = TlsConfig(),
+        var proxy: Optional[Proxy] = None,
     ) raises:
-        self.pool = SharedPool(ConnectionPool(limits^, tls=tls^))
+        """Limits, certificates, and a proxy to send everything through.
+
+        The proxy belongs to the pool rather than to a request, so a transport
+        built with one sends every request through it. A caller who wants some
+        hosts direct and some proxied builds two transports and picks between
+        them with `mounts=`.
+        """
+        self.pool = SharedPool(ConnectionPool(limits^, tls=tls^, proxy=proxy^))
 
     def handle_request(
         mut self, var request: Request, deadlines: Deadlines

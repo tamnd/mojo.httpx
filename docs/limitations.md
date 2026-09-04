@@ -37,7 +37,11 @@ Everything here is either tracked on the [roadmap](roadmap.md) or written up in 
 
 ## Proxies
 
-There are none. No HTTP proxy, no `CONNECT` tunnelling, no SOCKS5, and no per pattern mounts. `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` in the environment are ignored, and `trust_env` reaches the TLS trust store and nothing else. All of it is M7, and the exit criterion for that milestone is interop against Squid, tinyproxy and Dante.
+- Forward proxying works for `http://` targets. `Client(proxy=Proxy("http://localhost:3128"))` sends every request through it, in absolute form, with `Proxy-Authorization` built from any credentials in the proxy URL. The async client does the same.
+- An `https://` target through a proxy raises. It needs a `CONNECT` tunnel with the TLS handshake on top of it, which is the next piece of M7, and until it lands the error names it rather than the request going out some other way.
+- No SOCKS5, and no per pattern mounts. Both are M7.
+- `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` in the environment are ignored, so a proxy has to be passed in code. `trust_env` reaches the TLS trust store and nothing else. Also M7.
+- The exit criterion for the milestone is interop against Squid, tinyproxy and Dante.
 
 ## Tooling
 

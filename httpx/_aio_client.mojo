@@ -48,6 +48,7 @@ from httpx._models.cookies import Cookies
 from httpx._models.request import Request
 from httpx._models.response import Response
 from httpx._pool.limits import Limits
+from httpx._pool.proxy import Proxy
 from httpx._redirects import build_redirect_request
 from httpx._stream.config import TlsConfig
 from httpx._transport.aio_base import AnyAsyncTransport, erase_async_transport
@@ -55,7 +56,7 @@ from httpx._transport.aio_http import AsyncHTTPTransport
 
 
 def _default_async_transport(
-    var limits: Limits, var tls: TlsConfig
+    var limits: Limits, var tls: TlsConfig, var proxy: Optional[Proxy]
 ) raises -> AnyAsyncTransport:
     """The pool an async client gets when the caller named no transport.
 
@@ -64,8 +65,13 @@ def _default_async_transport(
     nothing here for it to configure yet. It stays in the signature because the
     signature is shared with the synchronous client, and because this is where
     it starts being used the day the handshake exists.
+
+    `proxy` is not dropped. Forward proxying is `http://` only either way, so
+    the async pool can do all of it that the synchronous one can, and a proxy
+    quietly ignored would be a client sending traffic straight out of a network
+    that expects it to go through the proxy.
     """
-    return erase_async_transport(AsyncHTTPTransport(limits^))
+    return erase_async_transport(AsyncHTTPTransport(limits^, proxy^))
 
 
 comptime AsyncClient = BaseClient[AnyAsyncTransport, _default_async_transport]

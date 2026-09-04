@@ -62,6 +62,7 @@ from httpx._models.response import Response
 from httpx._models.stream import ByteSource, ByteStream, erase_source
 from httpx._models.url import URL, QueryParams
 from httpx._pool.limits import Limits
+from httpx._pool.proxy import Proxy, proxy_basic_auth
 from httpx._stream.config import ClientCert, SSLVerify
 from httpx._transport.aio_base import (
     AnyAsyncTransport,
