@@ -42,8 +42,8 @@ Everything here is either tracked on the [roadmap](roadmap.md) or written up in 
 - A tunnel through an `https://` proxy raises. That would be TLS inside TLS, and the stream layer wraps a socket rather than another stream. Forwarding a plain `http://` request over an `https://` proxy does work.
 - SOCKS5 works, with both the no auth and the username and password methods, and the target's name is sent to the proxy rather than resolved locally. `socks5://` and `socks5h://` mean the same thing here, and the port defaults to 1080. Everything through a SOCKS proxy is a tunnel, `http://` targets included, so two requests to different servers cannot share a connection through one.
 - The async client cannot tunnel, of either kind. It opens its sockets inside a coroutine and has nowhere to put a handshake that has to finish first, so a `CONNECT` or a SOCKS proxy raises there rather than being ignored. Forwarding an `http://` request through an HTTP proxy is the one proxy shape it does.
-- No per pattern mounts. That is M7.
-- `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` in the environment are ignored, so a proxy has to be passed in code. `trust_env` reaches the TLS trust store and nothing else. Also M7.
+- A mount cannot be added to a client after it has been built. `mounts=` is a constructor argument and `client._mounts` is private, where httpx leaves `client._mounts` reachable and mutable in practice. Routing that changes while requests are in flight is not a thing this client will do.
+- `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` in the environment are ignored, so a proxy has to be passed in code. `trust_env` reaches the TLS trust store and nothing else. That is M7.
 - The exit criterion for the milestone is interop against Squid, tinyproxy and Dante.
 
 ## Tooling

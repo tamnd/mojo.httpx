@@ -43,7 +43,7 @@ from httpx._client import BaseClient
 from httpx._config import Timeout
 from httpx._exceptions import ErrorKind, new_error
 from httpx._ffi.clock import unix_now
-from httpx._io.deadline import now_ns
+from httpx._io.deadline import Deadlines, now_ns
 from httpx._models.cookies import Cookies
 from httpx._models.request import Request
 from httpx._models.response import Response
@@ -182,7 +182,8 @@ def gather(
 
     while True:
         var indices = List[Int]()
-        var outgoing = List[Request]()
+        var outgoing = List[Optional[Request]]()
+        var routes = List[Int]()
         for i in range(len(slots)):
             if not slots[i].pending:
                 continue
@@ -192,8 +193,12 @@ def gather(
             for h in range(len(client.event_hooks.request)):
                 var passed = client.event_hooks.request[h].call(going^)
                 going = passed^
+            # Routed after the hooks, since a hook can rewrite the URL, and
+            # before the move, since the request is about to be given away.
+            var route = client._mounts.route_for(going.url)
             indices.append(i)
-            outgoing.append(going^)
+            routes.append(route)
+            outgoing.append(Optional[Request](going^))
         if len(indices) == 0:
             break
 
@@ -201,13 +206,35 @@ def gather(
         # together. Each response still reports its own round rather than the
         # whole batch, so a redirect chain shows up as several timings.
         var started = now_ns()
-        var answers = client._transport.handle_many(
-            outgoing^, budget.deadlines()
-        )
+        var answers = List[Optional[Response]]()
+        for _ in range(len(indices)):
+            answers.append(None)
+
+        # A batch is one call into one transport, so a round that spans mounts
+        # is sent as one batch per transport rather than as one batch. Almost
+        # always there is a single group and this is the loop it goes round once.
+        # When there is more than one, the groups do not overlap each other,
+        # which is a cost of routing by URL and is the reason a client that wants
+        # everything overlapping should not be mounting several transports.
+        var at = 0
+        while at < len(outgoing):
+            if not outgoing[at]:
+                at += 1
+                continue
+            var which = routes[at]
+            var group = List[Request]()
+            var places = List[Int]()
+            for k in range(at, len(outgoing)):
+                if outgoing[k] and routes[k] == which:
+                    places.append(k)
+                    group.append(outgoing[k].take())
+            var got = _send_batch(client, which, group^, budget.deadlines())
+            for g in range(len(places)):
+                answers[places[g]] = Optional[Response](got.pop(0))
 
         for k in range(len(indices)):
             var i = indices[k]
-            var response = answers.pop(0)
+            var response = answers[k].take()
             response.begin_timing(started)
             # Before anything reads the body, so a hook calling `text()` on a
             # response with no charset gets the client's answer.
@@ -227,6 +254,25 @@ def gather(
         var slot = slots.pop(0)
         out.append(slot.answer.take())
     return out^
+
+
+def _send_batch(
+    mut client: AsyncClient,
+    route: Int,
+    var requests: List[Request],
+    deadlines: Deadlines,
+) raises -> List[Response]:
+    """One round of a batch, through the transport `route` names.
+
+    `handle_many` is not on `TransportHandle`, so this cannot live on
+    `BaseClient` next to `_dispatch`. It does not need to: a batch only means
+    anything for the async transport, which is the one type this file is written
+    against.
+    """
+    if route < 0:
+        return client._transport.handle_many(requests^, deadlines)
+    ref mounted = client._mounts.entries[route].transport.value()
+    return mounted.handle_many(requests^, deadlines)
 
 
 def _advance(

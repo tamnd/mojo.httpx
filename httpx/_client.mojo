@@ -49,7 +49,7 @@ from httpx._content.encode import encode_request_body
 from httpx._content.multipart import MultipartData
 from httpx._exceptions import ErrorKind, new_error
 from httpx._ffi.clock import unix_now
-from httpx._io.deadline import now_ns
+from httpx._io.deadline import Deadlines, now_ns
 from httpx._hooks import EventHooks
 from httpx._models.cookies import Cookies
 from httpx._models.headers import Headers
@@ -65,6 +65,7 @@ from httpx._stream.config import ClientCert, SSLVerify, TlsConfig
 from httpx._transport.base import AnyTransport, erase_transport
 from httpx._transport.handle import TransportHandle
 from httpx._transport.http import HTTPTransport
+from httpx._transport.mounts import Mounts
 from httpx._util.charset import DefaultEncoding
 
 comptime USER_AGENT = "mojo-httpx/0.0.1"
@@ -148,6 +149,14 @@ struct BaseClient[
     """
 
     var _transport: Self.H
+    """Where a request goes when no mount claims it, and never a proxied one.
+
+    A `proxy=` becomes a mount on `all://` rather than settings on this pool.
+    `httpx._transport.mounts` explains why that is the only arrangement in which
+    an entry saying "not through the proxy" has anywhere to send the request.
+    """
+
+    var _mounts: Mounts[Self.H]
     var _closed: Bool
 
     def __init__(out self) raises:
@@ -179,6 +188,7 @@ struct BaseClient[
         var event_hooks: EventHooks = EventHooks(),
         var default_encoding: DefaultEncoding = DefaultEncoding(),
         var transport: Optional[Self.H] = None,
+        var mounts: Mounts[Self.H] = Mounts[Self.H](),
     ) raises:
         """Every option, all of them keyword only.
 
@@ -189,13 +199,18 @@ struct BaseClient[
         mock goes under a client that still has its base URL, its headers and
         its redirect policy. Giving one makes `limits`, `verify`, `cert`,
         `trust_env`, `http2` and `proxy` dead letters, since those describe a
-        connection pool that no longer exists, and that is httpx's behaviour too.
+        connection pool that no longer exists.
 
         `proxy` sends every request through a forward proxy. It is a `Proxy`
         rather than a string because building one parses a URL and so can raise,
         and `Proxy("http://localhost:3128")` is the one extra call that buys.
-        Only `http://` targets can go through it today: an `https://` one needs a
-        CONNECT tunnel and raises a message saying so.
+
+        `mounts` routes by URL, and is how one client sends some traffic through
+        a proxy and the rest direct, answers one domain from a mock, or refuses a
+        scheme outright. Entries are tried most specific first and the first one
+        that matches wins, so a `mounts` entry overrides `proxy`, which is itself
+        a mount on `all://`. `httpx._transport.mounts` has the pattern language
+        and the ordering rule.
 
         `http2` offers HTTP/2 in the TLS handshake rather than demanding it. A
         server that does not want it says so and gets HTTP/1.1, and a plain
@@ -214,6 +229,7 @@ struct BaseClient[
         self.event_hooks = event_hooks^
         self.auth = auth^
         self.default_encoding = default_encoding^
+        self._mounts = Mounts[Self.H]()
         if transport:
             self._transport = transport.take()
         else:
@@ -222,9 +238,16 @@ struct BaseClient[
             tls.cert = cert.copy()
             tls.trust_env = trust_env
             tls.http2 = http2
-            self._transport = Self.make_default(
-                limits.value() if limits else Limits(), tls^, proxy^
-            )
+            var bounds = limits.value() if limits else Limits()
+            self._transport = Self.make_default(bounds, tls, None)
+            if proxy:
+                self._mounts.mount(
+                    "all://", Self.make_default(bounds, tls, proxy^)
+                )
+        # After the proxy, so that a caller who mounts `all://` themselves gets
+        # theirs rather than the proxy, and so that a bypass they wrote lands on
+        # a table where the proxy is already the thing being bypassed.
+        self._mounts.extend(mounts^)
         self._closed = False
 
     def __init__(out self, var transport: Self.H) raises:
@@ -259,6 +282,7 @@ struct BaseClient[
             return
         self._closed = True
         self._transport.close()
+        self._mounts.close()
 
     def aclose(mut self):
         """The same as `close`, spelled the way httpx spells it.
@@ -275,6 +299,32 @@ struct BaseClient[
 
     def is_closed(self) -> Bool:
         return self._closed
+
+    def _dispatch(
+        mut self, var request: Request, deadlines: Deadlines, stream: Bool
+    ) raises -> Response:
+        """Hand the request to whichever transport its URL routes to.
+
+        Every send goes through here, redirect hops and auth retries included,
+        and each one is routed on its own URL rather than on the URL the caller
+        started from. A redirect that leaves a mounted domain leaves its
+        transport with it, which is the only reading that does not send a
+        request somewhere the routing table says it should not go.
+
+        The branch on `stream` is here rather than at the two call sites so that
+        the routing is written once. The mounted case reaches through the
+        `Optional` on the entry, which `route_for` has already established is
+        occupied.
+        """
+        var at = self._mounts.route_for(request.url)
+        if at < 0:
+            if stream:
+                return self._transport.handle_stream(request^, deadlines)
+            return self._transport.handle_request(request^, deadlines)
+        ref mounted = self._mounts.entries[at].transport.value()
+        if stream:
+            return mounted.handle_stream(request^, deadlines)
+        return mounted.handle_request(request^, deadlines)
 
     def build_request(
         self,
@@ -491,14 +541,7 @@ struct BaseClient[
             # the total adds them up; one who wants to know which hop was slow
             # cannot recover that from a single number.
             var started = now_ns()
-            if stream:
-                response = self._transport.handle_stream(
-                    current^, budget.deadlines()
-                )
-            else:
-                response = self._transport.handle_request(
-                    current^, budget.deadlines()
-                )
+            response = self._dispatch(current^, budget.deadlines(), stream)
             response.begin_timing(started)
             # Before anything reads the body, since a hook calling `text()` on
             # a response with no charset on it should get the client's answer
