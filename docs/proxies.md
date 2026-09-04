@@ -2,7 +2,7 @@
 
 A forward proxy is the oldest thing in HTTP that is still in daily use, and on a corporate network it is not optional. The client opens a connection to the proxy instead of to the server, writes the whole URL in the request line rather than just the path, and the proxy makes the real request and hands the answer back.
 
-An `https://` request cannot work that way, because there is no URL for the proxy to read, so it asks for a tunnel instead. Both are here.
+An `https://` request cannot work that way, because there is no URL for the proxy to read, so it asks for a tunnel instead. SOCKS5 is a third shape that is not HTTP at all. All three are here.
 
 This page describes what works now. [limitations.md](limitations.md) has the list of what does not, and [roadmap.md](roadmap.md) says when the rest lands.
 
@@ -109,6 +109,41 @@ There is nowhere for that to arrive as a `Response` the way a refused forwarded 
 
 Almost nobody needs it. All an `https://` proxy adds to a tunnel is encryption on the hop between the client and the proxy, and the only thing that hop carries in the clear is the host and port in the CONNECT, which the proxy has to be told anyway. Everything after the 200 is already encrypted end to end.
 
+## SOCKS5
+
+Same `proxy=`, different scheme:
+
+```mojo
+var through = Proxy("socks5://localhost:1080")
+with Client(proxy=Optional[Proxy](through^)) as client:
+    var r = client.get("https://example.com/")
+```
+
+`socks5h://` is accepted too and means the same thing here. In curl the `h` asks for the name to be resolved at the proxy, and this client does that either way, so the letter is accepted and not acted on. The port defaults to 1080 when the URL leaves it out.
+
+A SOCKS5 proxy is not an HTTP proxy and almost everything above stops applying. It never reads the request. It is told a host and a port in a short binary handshake, RFC 1928, and after that it copies bytes. So there is no absolute request line, no `Proxy-Authorization`, and no difference between an `http://` target and an `https://` one: both tunnel, and what the server receives is byte for byte the request that would have gone to it directly.
+
+The target's name goes over as a name, always, and this is the part worth being deliberate about. Resolving the host locally and sending the four bytes of the answer would work against every SOCKS proxy in existence, and it would also hand the destination to whoever is watching the local resolver, which is one of the main reasons people run a SOCKS proxy in the first place. An address is only sent when the caller typed an address, because then there was no name to leak.
+
+Credentials work the way they do everywhere else, in the URL:
+
+```mojo
+var through = Proxy("socks5://tam:hunter2@localhost:1080")
+```
+
+They come out of the URL the same as for an HTTP proxy, but they do not become a header, because SOCKS has no headers. RFC 1929 carries them as length prefixed bytes in the handshake, so they are kept as themselves on the `Proxy` and used there. Two consequences are worth knowing. They are limited to 255 bytes each, which is what a single length byte can describe. And they go to the proxy in the clear, on that hop, which is what the method is: the alternative in the specification is GSSAPI, almost nothing implements it, and a client that refused the method every SOCKS proxy actually deploys would not be usable.
+
+A proxy that says no raises, with a message for the particular no it said. RFC 1928 has eight refusal codes and the difference between them is the difference between fixing a rule and fixing a network:
+
+```
+the SOCKS5 proxy would not reach example.com:443: its rules do not allow that
+destination
+```
+
+Pooling is worth one note. Everything through SOCKS is a tunnel, and a tunnel is filed under the server on the far end of it, so two requests to the same server reuse a connection and two requests to different servers cannot. A forwarding HTTP proxy is the opposite: every `http://` request through it goes to the same address, so they all share. That is not a setting, it is what the two protocols are.
+
+The async client cannot do SOCKS yet, and says so rather than quietly connecting straight to the target. It opens its sockets inside a coroutine and has nowhere to put a handshake that has to finish first. The same is true of `CONNECT` tunnels, for the same reason.
+
 ## Environment variables
 
 `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` are ignored. A proxy has to be passed in code. `trust_env` reaches the TLS trust store and nothing else so far. Reading the environment is M7 and comes with the `NO_PROXY` matching rules and with the httpoxy check, which is the one where a CGI process reads `HTTP_PROXY` out of a request header called `Proxy` and sends its traffic wherever the attacker said.
@@ -120,5 +155,7 @@ Almost nobody needs it. All an `https://` proxy adds to a tunnel is encryption o
 It also answers with three headers that no real proxy sends. `X-Proxy-Target` is the absolute URL that arrived in the request line, `X-Proxy-Auth` is the `Proxy-Authorization` that came with it, and `X-Proxy-Conn` is an id for the client connection, which is how the reuse test can see that two requests shared one.
 
 The tunnel tests run against `tests/server/server.py --tls`, which is the same server behind the self signed certificate in `tests/fixtures/tls`. None of them turns verification off. A test that did would pass just as happily against a client that never checked anything, which is the one property the tunnel tests exist to establish. The absence of `X-Proxy-Target` on a tunnelled response is what says it was tunnelled: the proxy adds that header to everything it forwards and to nothing it relays blind.
+
+`tests/server/socks5.py` is a SOCKS5 proxy written from the RFC, because Python has no SOCKS server anywhere in its standard library. Its `--resolve NAME=ADDRESS` switch is what the important test is built on: the test asks for a name that resolves nowhere, the proxy answers it from the table, and a response at all is proof the name travelled as a name rather than through the local resolver. Its `--bound` switch chooses the form of the bound address on a successful reply, which is the only variable length field in the exchange and so the only place a client can miscount and leave bytes on the socket.
 
 Squid, tinyproxy, Dante and mitmproxy on the local fleet are the interop checks for the milestone. [testing.md](testing.md) covers the fleet.

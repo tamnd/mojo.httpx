@@ -20,7 +20,11 @@ struct Origin(Equatable, ImplicitlyCopyable, Movable, Writable):
     """A scheme, a host and a port that a connection can be pooled under."""
 
     var scheme: String
-    """Lowercased, and only ever `http` or `https` on a pooled connection."""
+    """Lowercased, and only ever `http` or `https` on a pooled connection.
+
+    A proxy address is the one exception and it is never a pool key: a hop
+    through SOCKS carries `socks5` or `socks5h` here, and what the pool files
+    the resulting connection under is the target on the far end of it."""
 
     var host: String
     """The host exactly as it will be handed to the resolver.
@@ -57,6 +61,16 @@ struct Origin(Equatable, ImplicitlyCopyable, Movable, Writable):
 
     def is_secure(self) -> Bool:
         return self.scheme == "https"
+
+    def is_socks(self) -> Bool:
+        """Whether reaching this address means a SOCKS5 handshake.
+
+        Both spellings, and they mean the same thing here. `socks5h` is the curl
+        convention for resolving at the proxy, and this client does that either
+        way, so the `h` is accepted rather than acted on. See
+        `httpx._proto.socks5` for why there is no version that resolves locally.
+        """
+        return self.scheme == "socks5" or self.scheme == "socks5h"
 
     def is_ipv6_literal(self) -> Bool:
         # A name cannot contain a colon and an IPv6 address always does, so one
@@ -113,17 +127,7 @@ def origin_for(url: URL) raises -> Origin:
             ),
         )
 
-    # The A-label form, not the display form. The docstring on `host` says why.
-    var host = String(StringSpan(from_utf8=url.raw_host()))
-    if host.startswith("[") and host.endswith("]"):
-        var inner = String(host[byte = 1 : host.byte_length() - 1])
-        host = inner^
-    if host == "":
-        raise new_error(
-            ErrorKind.INVALID_URL,
-            String("the URL '", url, "' has no host to connect to"),
-        )
-
+    var host = _host_of(url)
     var port = url.effective_port()
     if not port:
         # Only reachable if the scheme table and the check above disagree, which
@@ -137,3 +141,49 @@ def origin_for(url: URL) raises -> Origin:
         port = default
 
     return Origin(scheme^, host^, port.value())
+
+
+comptime SOCKS5_PORT = UInt16(1080)
+"""The port a SOCKS proxy listens on when the URL does not say.
+
+Not in `default_port_for` with the others, because that table is about URLs the
+library speaks and `socks5://` is not one: it is an address to get somewhere
+through rather than an address a request can be for. Putting it there would make
+`URL("socks5://host:1080")` and `URL("socks5://host")` print the same, which is a
+change to a parser to serve a proxy setting.
+"""
+
+
+def proxy_origin_for(url: URL) raises -> Origin:
+    """The origin of a proxy, which may be a scheme no request can name.
+
+    Split from `origin_for` rather than folded into it. The set of schemes a
+    proxy can have and the set a target can have overlap without being the same,
+    and the narrow function is what makes a request to `socks5://example.com/`
+    the error it should be instead of a connection to something.
+    """
+    var scheme = url.scheme()
+    if scheme != "socks5" and scheme != "socks5h":
+        return origin_for(url)
+
+    var host = _host_of(url)
+    var port = SOCKS5_PORT
+    var given = url.effective_port()
+    if given:
+        port = given.value()
+    return Origin(scheme^, host^, port)
+
+
+def _host_of(url: URL) raises -> String:
+    """The host to connect to, in the form the resolver wants."""
+    # The A-label form, not the display form. The docstring on `host` says why.
+    var host = String(StringSpan(from_utf8=url.raw_host()))
+    if host.startswith("[") and host.endswith("]"):
+        var inner = String(host[byte = 1 : host.byte_length() - 1])
+        host = inner^
+    if host == "":
+        raise new_error(
+            ErrorKind.INVALID_URL,
+            String("the URL '", url, "' has no host to connect to"),
+        )
+    return host^

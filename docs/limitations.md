@@ -40,8 +40,9 @@ Everything here is either tracked on the [roadmap](roadmap.md) or written up in 
 - Forward proxying works for `http://` targets. `Client(proxy=Proxy("http://localhost:3128"))` sends every request through it, in absolute form, with `Proxy-Authorization` built from any credentials in the proxy URL. The async client does the same.
 - `https://` targets work too, through a `CONNECT` tunnel, with the TLS handshake running inside the tunnel to the real server and the real certificate. The tunnel is pooled under the server rather than under the proxy, so two requests to one server share it and two requests to different servers do not.
 - A tunnel through an `https://` proxy raises. That would be TLS inside TLS, and the stream layer wraps a socket rather than another stream. Forwarding a plain `http://` request over an `https://` proxy does work.
-- The async client cannot tunnel, because it cannot speak `https://` at all yet. That is the async TLS handshake rather than anything about proxies.
-- No SOCKS5, and no per pattern mounts. Both are M7.
+- SOCKS5 works, with both the no auth and the username and password methods, and the target's name is sent to the proxy rather than resolved locally. `socks5://` and `socks5h://` mean the same thing here, and the port defaults to 1080. Everything through a SOCKS proxy is a tunnel, `http://` targets included, so two requests to different servers cannot share a connection through one.
+- The async client cannot tunnel, of either kind. It opens its sockets inside a coroutine and has nowhere to put a handshake that has to finish first, so a `CONNECT` or a SOCKS proxy raises there rather than being ignored. Forwarding an `http://` request through an HTTP proxy is the one proxy shape it does.
+- No per pattern mounts. That is M7.
 - `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` in the environment are ignored, so a proxy has to be passed in code. `trust_env` reaches the TLS trust store and nothing else. Also M7.
 - The exit criterion for the milestone is interop against Squid, tinyproxy and Dante.
 

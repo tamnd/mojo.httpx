@@ -12,6 +12,12 @@ after the 200 the socket is a pipe the proxy relays without looking at. The TLS
 handshake then runs inside it, to the real server, with the real certificate. See
 `httpx._proto.h1.tunnel`.
 
+A SOCKS5 proxy is the third shape and the simplest of the three, because it is
+not an HTTP proxy at all. It is told a host and a port in a short binary
+handshake and then relays bytes, so there is no request line to rewrite and no
+distinction between an `http://` target and an `https://` one: both tunnel. See
+`httpx._proto.socks5`.
+
 Two details are load bearing and both are about credentials. `Proxy-Authorization`
 is not `Authorization`: it authenticates the client to the proxy and is consumed
 by the proxy, whereas `Authorization` is for the server at the far end and must
@@ -26,7 +32,7 @@ from httpx._exceptions import ErrorKind, new_error
 from httpx._models.headers import Headers
 from httpx._models.request import Request
 from httpx._models.url import URL
-from httpx._pool.origin import Origin, origin_for
+from httpx._pool.origin import Origin, origin_for, proxy_origin_for
 from httpx._proto.h1.writer import TargetForm
 from httpx._util.base64 import base64_encode
 
@@ -72,6 +78,20 @@ struct Proxy(Movable, Writable):
     httpx2's `Proxy(headers=...)` is for.
     """
 
+    var username: String
+    """The SOCKS5 username, and empty for every other kind of proxy.
+
+    SOCKS5 carries credentials as length prefixed bytes in its own handshake
+    rather than as a header, so there is nowhere for `headers` to hold them and
+    they have to survive as themselves. An HTTP proxy's credentials do not end
+    up here: they become a `Proxy-Authorization` in the constructor and the
+    plaintext is not kept, because a field that holds a password is one more
+    place a password can be printed from.
+    """
+
+    var password: String
+    """The SOCKS5 password. See `username`."""
+
     def __init__(
         out self, var url: URL, var headers: Headers = Headers()
     ) raises:
@@ -83,7 +103,8 @@ struct Proxy(Movable, Writable):
         put them there.
         """
         var scheme = url.scheme()
-        if scheme != "http" and scheme != "https":
+        var socks = scheme == "socks5" or scheme == "socks5h"
+        if not socks and scheme != "http" and scheme != "https":
             raise new_error(
                 ErrorKind.UNSUPPORTED_PROTOCOL,
                 String(
@@ -91,16 +112,21 @@ struct Proxy(Movable, Writable):
                     scheme,
                     (
                         "' is not a proxy scheme this client speaks, expected"
-                        " http or https"
+                        " http, https, socks5 or socks5h"
                     ),
                 ),
             )
 
         self.headers = headers^
+        self.username = String()
+        self.password = String()
         var username = url.username()
         var password = url.password()
         if username != "" or password != "":
-            if PROXY_AUTHORIZATION not in self.headers:
+            if socks:
+                self.username = username^
+                self.password = password^
+            elif PROXY_AUTHORIZATION not in self.headers:
                 self.headers[PROXY_AUTHORIZATION] = proxy_basic_auth(
                     username, password
                 )
@@ -121,16 +147,26 @@ struct Proxy(Movable, Writable):
         var out = Self()
         out.url = self.url.copy()
         out.headers = self.headers.copy()
+        out.username = self.username.copy()
+        out.password = self.password.copy()
         return out^
 
     def __init__(out self):
         """An empty proxy, for `copy` to fill in. Not useful on its own."""
         self.url = URL()
         self.headers = Headers()
+        self.username = String()
+        self.password = String()
 
     def origin(self) raises -> Origin:
-        """What the pool keys the connection to the proxy under."""
-        return origin_for(self.url)
+        """Where the connection to the proxy goes.
+
+        `proxy_origin_for` rather than `origin_for` because a proxy may be a
+        scheme no request could name. This is not always what the pool keys the
+        connection under: for a tunnel of either kind the key is the target,
+        since that is what is on the far end.
+        """
+        return proxy_origin_for(self.url)
 
     def apply(self, mut request: Request) raises:
         """Add the headers that belong to the hop rather than to the request.
@@ -174,12 +210,16 @@ struct Hop(ImplicitlyCopyable, Movable):
     """The request target shape to write."""
 
     var connect_via: Optional[Origin]
-    """The proxy to open a CONNECT tunnel through, when there is one.
+    """The proxy to open a tunnel through, when there is one.
 
     Nothing on a direct request and nothing on a plain http request being
     forwarded, because neither of those tunnels. When it is set the socket goes
-    to this address, the CONNECT names `origin`, and everything after the 200
-    is between us and `origin` with the proxy relaying bytes it cannot read.
+    to this address, the handshake on it names `origin`, and everything after
+    that is between us and `origin` with the proxy relaying bytes it cannot read.
+
+    Which handshake is read off the scheme here. An `http` proxy means a
+    `CONNECT`, a `socks5` one means the RFC 1928 exchange, and the difference
+    stops at the pool: everything above it sees a socket that reaches the target.
     """
 
     def __init__(
@@ -198,13 +238,15 @@ def route_through(
 ) raises -> Hop:
     """Decide the hop for one request, and put on it whatever the hop needs.
 
-    Three outcomes. Without a proxy this is the identity: connect to the server
+    Four outcomes. Without a proxy this is the identity: connect to the server
     named in the URL and write the path. With a proxy and an `http://` target the
     connection goes to the proxy, the request line carries the whole URL so the
     proxy knows what to fetch, and the proxy's own headers go on. With a proxy and
     an `https://` target neither of those would work, because the request is about
     to be encrypted and the proxy could not read the URL if it wanted to, so the
-    hop says to open a tunnel and the request is left exactly as it was.
+    hop says to open a tunnel and the request is left exactly as it was. And with
+    a SOCKS proxy the target's scheme does not come into it, because a SOCKS proxy
+    relays bytes rather than reading requests, so everything tunnels.
 
     `Proxy-Authorization` is added here, below the event hooks and the auth flow,
     because it belongs to this hop rather than to the request the caller wrote,
@@ -223,8 +265,16 @@ def route_through(
         return Hop(target, form)
 
     ref via = proxy.value()
+    var hop_origin = via.origin()
+
+    if hop_origin.is_socks():
+        # No `via.apply` and no rewritten request line. A SOCKS proxy is finished
+        # with before the first byte of HTTP goes out, so the request that
+        # travels is the one the caller wrote, addressed to the server exactly as
+        # it would be without a proxy at all.
+        return Hop(target, form, Optional(hop_origin))
+
     if target.is_secure():
-        var hop_origin = via.origin()
         if hop_origin.is_secure():
             # Refused here rather than when the socket is opened, so that
             # nothing has been evicted from a pool for a connection that was
@@ -254,4 +304,4 @@ def route_through(
     var wire = form
     if wire == TargetForm.ORIGIN:
         wire = TargetForm.ABSOLUTE
-    return Hop(via.origin(), wire)
+    return Hop(hop_origin, wire)

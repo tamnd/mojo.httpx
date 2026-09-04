@@ -45,7 +45,10 @@ also going through it.
 A tunnel is the exception that proves it. A `CONNECT` to an https server is filed
 under the server rather than under the proxy, because that is what is on the far
 end of it: the pipe reaches one host and nothing else, so a request for a
-different host cannot use it even though it went through the same proxy.
+different host cannot use it even though it went through the same proxy. A SOCKS
+connection is filed the same way and for the same reason, which is also why a
+SOCKS proxy gets less reuse out of a pool than an HTTP one: everything through it
+is a tunnel, so two servers are always two connections.
 """
 
 from std.memory import ArcPointer
@@ -70,6 +73,7 @@ from httpx._pool.origin import Origin, origin_for
 from httpx._pool.proxy import Hop, Proxy, route_through
 from httpx._proto.h1.head import ResponseHead
 from httpx._proto.h1.tunnel import open_tunnel
+from httpx._proto.socks5 import open_socks5
 from httpx._proto.h1.writer import TargetForm
 from httpx._stream.config import TlsConfig
 from httpx._stream.stream import Stream
@@ -312,7 +316,11 @@ struct ConnectionPool(Movable):
     def _tunnel_to(
         mut self, target: Origin, via: Origin, deadlines: Deadlines
     ) raises -> TcpStream:
-        """Open a socket to `via` and CONNECT it through to `target`.
+        """Open a socket to `via` and get it joined through to `target`.
+
+        Two handshakes for the one job, chosen by the proxy's scheme. A SOCKS
+        proxy takes the RFC 1928 exchange and an HTTP one takes a `CONNECT`, and
+        what comes back either way is a socket that reaches the target.
 
         Comes back before TLS, on purpose. What this returns is a bare TCP
         stream that happens to reach the server rather than the proxy, and
@@ -320,12 +328,34 @@ struct ConnectionPool(Movable):
         so the certificate is checked against the host the caller asked for and
         the proxy is not in a position to present one of its own.
 
-        `via` is an `http://` proxy, which `route_through` has already made sure
-        of, so there is no TLS on this socket until `_acquire` puts it there.
+        `via` is never an `https://` proxy, which `route_through` has already
+        made sure of, so there is no TLS on this socket until `_acquire` puts it
+        there.
         """
         var tcp = connect_to_host(
             self.resolver, via.host, via.port, deadlines.connect
         )
+
+        if via.is_socks():
+            # Read off the pool's own proxy rather than carried on the hop.
+            # `Hop` is a routing decision and gets copied around; a credential
+            # on it would be copied with it, and there is exactly one proxy per
+            # pool so there is nothing the hop could say that this does not know.
+            var username = String()
+            var password = String()
+            if self.proxy:
+                username = self.proxy.value().username.copy()
+                password = self.proxy.value().password.copy()
+            open_socks5(
+                tcp,
+                target.host,
+                target.port,
+                username,
+                password,
+                deadlines.connect,
+            )
+            return tcp^
+
         var headers = Headers()
         if self.proxy:
             headers = self.proxy.value().headers.copy()
