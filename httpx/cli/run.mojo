@@ -45,14 +45,28 @@ from httpx._bytes import Bytes
 from httpx._exceptions import message_of
 from httpx._io.files import FileWriter, read_bytes
 from httpx._io.stdio import STDERR, STDOUT, is_terminal, write_all, write_text
-from httpx._proto.h1.writer import (
-    TargetForm,
-    host_header_value,
-    request_target,
-)
 from httpx.cli.args import Args, parse
 from httpx.cli.exits import EXIT_OK, EXIT_STATUS, EXIT_USAGE, code_for
 from httpx.cli.help import HELP, version_line
+from httpx.cli.progress import Progress
+from httpx.cli.render import (
+    add_request,
+    add_response_head,
+    format_json,
+    is_json,
+)
+from httpx.cli.style import Style, style_for
+
+
+comptime MAX_HELD = 4 * 1024 * 1024
+"""How much of a body may be held in memory in order to lay it out.
+
+Only a JSON body on a terminal is ever held, and four megabytes of JSON is
+already far more than anybody is going to read off a screen. Past that the
+layout is abandoned and the body is streamed as it arrives, because a client
+that runs a machine out of memory to indent something is worse than one that
+prints a long line.
+"""
 
 
 def _warn(imm e: Error):
@@ -183,74 +197,6 @@ def _request_for(client: Client, args: Args) raises -> Request:
     )
 
 
-def _add[o: ImmOrigin](mut buf: List[UInt8], data: Span[UInt8, o]):
-    buf.extend(data)
-
-
-def _add_text(mut buf: List[UInt8], text: StringSpan):
-    buf.extend(text.as_bytes())
-
-
-def _add_headers(mut buf: List[UInt8], headers: Headers):
-    """Field lines as they were supplied, one per line, then a blank one."""
-    for i in range(len(headers)):
-        _add(buf, headers.raw_name(i))
-        _add_text(buf, ": ")
-        _add(buf, headers.raw_value(i))
-        _add_text(buf, "\r\n")
-    _add_text(buf, "\r\n")
-
-
-def _add_request(
-    mut buf: List[UInt8], mut response: Response, args: Args
-) raises:
-    """The request that went out, in wire form.
-
-    The version comes off the response, because it is the exchange that decides
-    whether this was HTTP/1.1 or HTTP/2 and the request does not know until it
-    has been sent. An HTTP/2 exchange is shown in this shape too, with its
-    pseudo-headers written out as an ordinary request line, which is what every
-    other tool does and is the only form most people can read. That shape shows
-    the hop-by-hop headers an HTTP/2 connection does not actually carry, which
-    is the one place this is a rendering of the request rather than a copy of
-    the bytes.
-
-    `Host` is not in the request's own headers, because it is written from the
-    URL as the message goes out. It is put back here from the same function the
-    writer uses, so that what is printed is what was sent rather than what was
-    left in the struct.
-    """
-    if not response.has_request():
-        return
-    ref request = response.request()
-    if args.shows_request_headers():
-        _add_text(buf, request.method)
-        _add_text(buf, " ")
-        _add_text(buf, request_target(request.url, TargetForm.ORIGIN))
-        _add_text(buf, " ")
-        _add_text(buf, response.http_version)
-        _add_text(buf, "\r\n")
-        if "host" not in request.headers:
-            _add_text(buf, "Host: ")
-            _add_text(buf, host_header_value(request.url))
-            _add_text(buf, "\r\n")
-        _add_headers(buf, request.headers)
-    if args.shows_request_body():
-        _add(buf, Span(request.content))
-        _add_text(buf, "\r\n")
-
-
-def _add_response_head(mut buf: List[UInt8], response: Response):
-    """The status line and the response headers, in wire form."""
-    _add_text(buf, response.http_version)
-    _add_text(buf, " ")
-    _add_text(buf, String(response.status_code))
-    _add_text(buf, " ")
-    _add_text(buf, response.reason_phrase)
-    _add_text(buf, "\r\n")
-    _add_headers(buf, response.headers)
-
-
 def _looks_binary(response: Response) raises -> Bool:
     """Whether the body would make a mess of a terminal.
 
@@ -280,14 +226,39 @@ def _looks_binary(response: Response) raises -> Bool:
     return True
 
 
-def _to_stdout(mut response: Response, forced: Bool) -> Int:
+def _push[o: ImmOrigin](data: Span[UInt8, o], mut stopped: Bool) -> Int:
+    """Write to stdout, and say separately whether the reader is still there.
+
+    A closed pipe is not a failure, so it comes back as `stopped` rather than
+    as an exit code. That is how `httpx URL | head -1` ends and answering it
+    with a message would be wrong in the same way a stack trace would be.
+    """
+    try:
+        if not write_all(STDOUT, data):
+            stopped = True
+        return EXIT_OK
+    except e:
+        _warn(e)
+        return EXIT_USAGE
+
+
+def _to_stdout(mut response: Response, forced: Bool, style: Style) -> Int:
     """Write the body to stdout, a chunk at a time.
 
     `forced` is `--download -`, which is somebody saying they want the bytes on
-    stdout whatever they are, so the terminal check is skipped.
+    stdout whatever they are, so both the terminal check and the layout are
+    skipped and the bytes go out as they arrived.
+
+    A JSON body on a terminal is held and laid out. Nowhere else is anything
+    held: down a pipe or into a file the chunks go straight out, so a body
+    larger than memory is still a body this can print and the bytes on the
+    other side are the server's own.
     """
+    var terminal: Bool
+    var holding: Bool
     try:
-        if not forced and is_terminal(STDOUT) and _looks_binary(response):
+        terminal = is_terminal(STDOUT)
+        if not forced and terminal and _looks_binary(response):
             _note(
                 String(
                     "the body is ",
@@ -299,6 +270,7 @@ def _to_stdout(mut response: Response, forced: Bool) -> Int:
                 )
             )
             return EXIT_OK
+        holding = terminal and not forced and is_json(response)
     except e:
         _warn(e)
         return EXIT_USAGE
@@ -310,22 +282,47 @@ def _to_stdout(mut response: Response, forced: Bool) -> Int:
         _warn(e)
         return code_for(e)
 
-    while chunks.has_next():
+    var held = List[UInt8]()
+    var stopped = False
+    while chunks.has_next() and not stopped:
         var chunk: List[UInt8]
         try:
             chunk = chunks.next()
         except e:
             _warn(e)
             return code_for(e)
-        try:
-            if not write_all(STDOUT, Span(chunk)):
-                # The reader went away. That is how `httpx URL | head -1`
-                # ends and it is not a failure of this program.
+        if holding and len(held) + len(chunk) <= MAX_HELD:
+            held.extend(chunk.copy())
+            continue
+        if holding:
+            # Bigger than the bound, so give up on laying it out and become an
+            # ordinary stream from here on. What has been held goes out first,
+            # in order, and nothing has been changed on the way.
+            holding = False
+            var flushed = _push(Span(held), stopped)
+            if flushed != EXIT_OK:
+                return flushed
+            held.clear()
+            if stopped:
                 return EXIT_OK
-        except e:
-            _warn(e)
-            return EXIT_USAGE
-    return EXIT_OK
+        var wrote = _push(Span(chunk), stopped)
+        if wrote != EXIT_OK:
+            return wrote
+    if not holding:
+        return EXIT_OK
+
+    var shaped = List[UInt8]()
+    var laid_out = False
+    try:
+        shaped = format_json(Span(held), style)
+        laid_out = True
+    except:
+        # It said JSON and it is not. Print what arrived: it is usually an
+        # error page from something in the middle, and that page is the answer.
+        pass
+    if laid_out:
+        return _push(Span(shaped), stopped)
+    return _push(Span(held), stopped)
 
 
 def _shut(mut writer: FileWriter) -> Bool:
@@ -342,16 +339,40 @@ def _shut(mut writer: FileWriter) -> Bool:
         return False
 
 
+def _expected_size(response: Response) -> Int:
+    """How many bytes the body should come to, or a negative number.
+
+    `Content-Length` counts the bytes on the wire, so a compressed response is
+    a different number from the one that ends up in the file and the bar would
+    run past its own end. Rather than guess a ratio, a response with a
+    `Content-Encoding` is treated as one of unknown size, which is what a
+    chunked response without a length is anyway.
+    """
+    try:
+        if "content-encoding" in response.headers:
+            return -1
+        var stated = response.headers.get("content-length", "")
+        if stated.byte_length() == 0:
+            return -1
+        return Int(stated)
+    except:
+        return -1
+
+
 def _to_file(
     mut response: Response, mut writer: FileWriter, path: String
 ) -> Int:
-    """Write the body to a file, a chunk at a time.
+    """Write the body to a file, a chunk at a time, with a bar on stderr.
 
     The file was opened before the request went out, so a path that cannot be
     written is a usage error reported without a request being made at all. The
     cost is that the file is truncated before anything has arrived, which is
     what curl does with `-o` and for the same reason: there is no way to find
     out whether a path can be written except by writing to it.
+
+    The bar draws itself only when stderr is a terminal, so `httpx --download
+    f URL 2>log` writes a log with nothing in it rather than one full of
+    carriage returns.
     """
     var chunks: ByteChunks
     try:
@@ -361,26 +382,32 @@ def _to_file(
         _ = _shut(writer)
         return code_for(e)
 
-    var written = 0
+    var bar = Progress(path, _expected_size(response))
+    bar.start()
     while chunks.has_next():
         var chunk: List[UInt8]
         try:
             chunk = chunks.next()
         except e:
+            # The bar is ended before the message is written, so that the
+            # message lands on a line of its own rather than on top of a bar
+            # that stopped halfway.
+            bar.finish()
             _warn(e)
             _ = _shut(writer)
             return code_for(e)
         try:
             writer.write(Span(chunk))
-            written += len(chunk)
+            bar.advance(len(chunk))
         except e:
+            bar.finish()
             _warn(e)
             _ = _shut(writer)
             return EXIT_USAGE
 
+    bar.finish()
     if not _shut(writer):
         return EXIT_USAGE
-    _note(String("wrote ", written, " bytes to ", path))
     return EXIT_OK
 
 
@@ -394,12 +421,16 @@ def _deliver(
     path that cannot be written should be found out before a request is made
     and not after a body has arrived.
     """
+    # One decision about colour for the whole run, taken before anything is
+    # written, so that the heads and the body cannot disagree about it.
+    var style = style_for(STDOUT)
+
     var head = List[UInt8]()
     try:
         if args.shows_request_headers() or args.shows_request_body():
-            _add_request(head, response, args)
+            add_request(head, response, args, style)
         if args.shows_response_headers():
-            _add_response_head(head, response)
+            add_response_head(head, response, style)
     except e:
         _warn(e)
         return EXIT_USAGE
@@ -434,11 +465,11 @@ def _deliver(
     # `--download -` has no file, and is somebody asking for the bytes on
     # stdout whatever they are, so it skips the terminal check.
     if args.has_download:
-        return _to_stdout(response, True)
+        return _to_stdout(response, True, style)
 
     if not args.shows_response_body():
         return EXIT_OK
-    return _to_stdout(response, False)
+    return _to_stdout(response, False, style)
 
 
 def _exchange(args: Args) -> Int:

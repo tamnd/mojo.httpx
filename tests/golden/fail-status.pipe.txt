@@ -1,0 +1,6 @@
+exit 6
+[stdout]
+
+[stderr]
+httpx: the server answered 404 Not Found
+

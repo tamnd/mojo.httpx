@@ -1,0 +1,32 @@
+exit 0
+[stdout]
+\e[1mGET /json HTTP/1.1\e[0m\r
+\e[36mHost\e[0m: 127.0.0.1:PORT\r
+\e[36mAccept\e[0m: */*\r
+\e[36mAccept-Encoding\e[0m: gzip, deflate, br, zstd\r
+\e[36mConnection\e[0m: keep-alive\r
+\e[36mUser-Agent\e[0m: mojo-httpx/0.0.1\r
+\r
+\e[1mHTTP/1.1 200 OK\e[0m\r
+\e[36mDate\e[0m: Thu, 01 Jan 2026 00:00:00 GMT\r
+\e[36mServer\e[0m: golden/1\r
+\e[36mContent-Type\e[0m: application/json\r
+\e[36mContent-Length\e[0m: 122\r
+\e[36mConnection\e[0m: close\r
+\r
+{
+  \e[36m"name"\e[0m: \e[32m"mojo"\e[0m,
+  \e[36m"tags"\e[0m: [
+    \e[32m"fast"\e[0m,
+    \e[32m"typed"\e[0m
+  ],
+  \e[36m"n"\e[0m: \e[33m42\e[0m,
+  \e[36m"ok"\e[0m: \e[35mtrue\e[0m,
+  \e[36m"nothing"\e[0m: \e[35mnull\e[0m,
+  \e[36m"empty"\e[0m: {},
+  \e[36m"list"\e[0m: [],
+  \e[36m"escaped"\e[0m: \e[32m"a \\"quoted\\" word"\e[0m
+}
+
+[stderr]
+

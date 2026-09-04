@@ -1,0 +1,20 @@
+exit 0
+[stdout]
+GET /text HTTP/1.1\r
+Host: 127.0.0.1:PORT\r
+Accept: */*\r
+Accept-Encoding: gzip, deflate, br, zstd\r
+Connection: keep-alive\r
+User-Agent: mojo-httpx/0.0.1\r
+\r
+HTTP/1.1 200 OK\r
+Date: Thu, 01 Jan 2026 00:00:00 GMT\r
+Server: golden/1\r
+Content-Type: text/plain; charset=utf-8\r
+Content-Length: 27\r
+Connection: close\r
+\r
+hello from the test server
+
+[stderr]
+

@@ -1,0 +1,5 @@
+exit 0
+[stdout]
+{"name":"mojo","tags":["fast","typed"],"n":42,"ok":true,"nothing":null,"empty":{},"list":[],"escaped":"a \\"quoted\\" word"}
+[stderr]
+
