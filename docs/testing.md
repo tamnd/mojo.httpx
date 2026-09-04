@@ -34,6 +34,25 @@ The rest of the matrix joins as the code that needs it lands: h1 and h2 from M5,
 
 Anything that needs the network stays out of CI. That covers the badssl suite below, because a job that goes red when somebody else's certificate expires trains people to ignore red jobs.
 
+## The golden suite
+
+Every byte the command line client writes, pinned.
+
+```bash
+pixi run golden
+python tools/golden/run.py --update
+```
+
+The unit tests drive the CLI through `run(argv)`, which covers the exit codes and the request it builds, and cannot see the two things this suite is for. What actually lands on stdout and on stderr, and whether that changes when the descriptor is a terminal. Both of those are properties of a process, so this one builds `build/httpx` and runs it against a server that answers with fixed bytes, once through pipes and once through a pty, and compares everything to a file under `tests/golden/`.
+
+The server is a socket that writes canned responses rather than `http.server`, which would put its own `Date`, its own `Server` and its own reason phrases into every golden file. The pty has its newline translation turned off, so a file records what the program wrote and not what the kernel did on the way out. The one thing normalized before comparing is the port, since it is different every run.
+
+The files are escaped rather than raw: a carriage return is `\r` and an escape is `\e`, so a stray one of either is something a reviewer can see in a diff instead of something they have to take on trust.
+
+Two rules are checked rather than only recorded. Nothing but the body reaches stdout unless it was asked for, which is what makes `httpx URL | jq` work and is the rule CLI HTTP clients most often break. And a terminal differs from a pipe in decoration and never in content: the escape sequences are stripped from the terminal run and what is left has to be what went down the pipe. A JSON body is the one place the bytes themselves differ, because a terminal gets it laid out, so there the two are compared as parsed values, which is a stronger check than comparing whitespace. The binary guard is the one deliberate difference in content, and it is checked as an all or nothing: a pipe gets the whole body and a terminal gets none of it.
+
+It runs in `pixi run check` and in CI on all three platforms, because it needs nothing but a loopback socket and the binary.
+
 ## The badssl suite
 
 Every way of getting TLS wrong, one host per way.

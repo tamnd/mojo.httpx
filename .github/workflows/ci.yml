@@ -91,6 +91,10 @@ jobs:
       # be checked against the platform that will use it.
       - run: pixi run baseline
       - run: pixi run test
+      # The CLI's own output, through a pipe and through a pty. It runs here
+      # rather than in a job of its own because it needs the same toolchain and
+      # takes under a minute next to the suite's twenty.
+      - run: pixi run golden
 
   # The rest of the matrix in docs/roadmap.md joins as the code that needs it
   # lands: h1 and h2 from M5, OpenSSL 3.0 and 3.6 from M3, debug and release

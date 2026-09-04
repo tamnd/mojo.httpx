@@ -1,0 +1,12 @@
+exit 0
+[stdout]
+\e[1mHTTP/1.1 200 OK\e[0m\r
+\e[36mDate\e[0m: Thu, 01 Jan 2026 00:00:00 GMT\r
+\e[36mServer\e[0m: golden/1\r
+\e[36mContent-Type\e[0m: application/json\r
+\e[36mContent-Length\e[0m: 122\r
+\e[36mConnection\e[0m: close\r
+\r
+
+[stderr]
+

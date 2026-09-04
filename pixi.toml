@@ -103,6 +103,13 @@ lint-selftest = "python tools/lint/run.py --selftest"
 # httpx and the linker will not write over it.
 cli = "mkdir -p build && mojo build -I . -o build/httpx httpx/cli/main.mojo"
 
+# What the CLI writes, byte for byte, through a pipe and through a pty. This
+# needs a process rather than a function call, which is why it is a script and
+# not a test module: whether a descriptor is a terminal is not something a test
+# running inside the suite can arrange for itself. It builds the binary first.
+# `python tools/golden/run.py --update` rewrites the files.
+golden = { cmd = "python tools/golden/run.py", depends-on = ["cli"] }
+
 # The badssl.com matrix, one host per way of getting TLS wrong. Needs the
 # network and depends on certificates somebody else renews, so it is not part
 # of `check` and not in CI either. It runs on the fleet. See docs/testing.md.
@@ -163,6 +170,7 @@ check = { depends-on = [
   "generated-check",
   "baseline",
   "test",
+  "golden",
 ] }
 
 # Tasks below land with the milestone that needs them. See docs/roadmap.md.

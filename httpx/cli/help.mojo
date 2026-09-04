@@ -61,6 +61,10 @@ exit codes:
   Note that -h is --headers and not help, which is what it is in the Python
   httpx it follows. Everything after -- is taken as the URL rather than as a
   flag.
+
+  Colour, the progress bar and the layout of a JSON body only happen when the
+  output is a terminal, so a pipe and a file get the bytes the server sent.
+  Colour is off as well when NO_COLOR is set or TERM is dumb.
 """
 """What `--help` prints.
 

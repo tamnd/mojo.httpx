@@ -1,0 +1,6 @@
+exit 0
+[stdout]
+
+[stderr]
+httpx: the body is application/octet-stream and is not being written to a terminal. Redirect it, or use --download to save it.
+
