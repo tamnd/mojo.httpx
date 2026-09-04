@@ -187,6 +187,12 @@ def head(
     cert: Optional[ClientCert] = None,
     trust_env: Bool = True,
 ) raises -> Response:
+    """One `HEAD`. The same as `get` with the body left off by the server.
+
+    Worth reaching for when all you want is the status, the length or the
+    caching headers, since the server sends none of the body and the response
+    still carries everything else.
+    """
     return request(
         "HEAD",
         url,
@@ -215,6 +221,10 @@ def options(
     cert: Optional[ClientCert] = None,
     trust_env: Bool = True,
 ) raises -> Response:
+    """One `OPTIONS`, for asking a server what it will accept.
+
+    No body argument, for the same reason `get` has none.
+    """
     return request(
         "OPTIONS",
         url,
@@ -243,6 +253,12 @@ def delete(
     cert: Optional[ClientCert] = None,
     trust_env: Bool = True,
 ) raises -> Response:
+    """One `DELETE`.
+
+    No body argument, because a body on a `DELETE` has no defined meaning and
+    httpx2 leaves it out of the signature too. `request("DELETE", ...)` is there
+    for a server that wants one anyway.
+    """
     return request(
         "DELETE",
         url,
@@ -318,6 +334,7 @@ def put(
     cert: Optional[ClientCert] = None,
     trust_env: Bool = True,
 ) raises -> Response:
+    """One `PUT`. The six body arguments are the ones `Client.put` takes."""
     return request(
         "PUT",
         url,
@@ -358,6 +375,7 @@ def patch(
     cert: Optional[ClientCert] = None,
     trust_env: Bool = True,
 ) raises -> Response:
+    """One `PATCH`. The six body arguments are the ones `Client.patch` takes."""
     return request(
         "PATCH",
         url,

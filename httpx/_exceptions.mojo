@@ -337,26 +337,60 @@ def message_of(imm e: Error) -> String:
 
 
 def is_http_error(imm e: Error) -> Bool:
+    """Whether this is anything the library raised for a request.
+
+    The widest net there is, and the same set `except httpx.HTTPError` catches.
+    Everything below it is included, so this is the one to ask last.
+    """
     return kind_of(e).matches(ErrorKind.HTTP_ERROR)
 
 
 def is_request_error(imm e: Error) -> Bool:
+    """Whether the request failed before a usable response came back.
+
+    `except httpx.RequestError`. It covers every transport failure and the
+    decoding ones, and it deliberately excludes a status error, which is a
+    response that arrived intact and was then refused.
+    """
     return kind_of(e).matches(ErrorKind.REQUEST_ERROR)
 
 
 def is_transport_error(imm e: Error) -> Bool:
+    """Whether the failure happened at or below the connection.
+
+    `except httpx.TransportError`. Timeouts, network errors, protocol errors,
+    proxy errors and an unsupported scheme are all in here.
+    """
     return kind_of(e).matches(ErrorKind.TRANSPORT_ERROR)
 
 
 def is_timeout(imm e: Error) -> Bool:
+    """Whether some phase of the request ran out of time.
+
+    `except httpx.TimeoutException`, so it is true for all four of connect,
+    read, write and pool. Ask the specific one first when the four call for
+    different reactions, since a pool timeout is your own limit and the other
+    three are the network.
+    """
     return kind_of(e).matches(ErrorKind.TIMEOUT)
 
 
 def is_network_error(imm e: Error) -> Bool:
+    """Whether the connection itself failed.
+
+    `except httpx.NetworkError`, covering the connect, read, write and close
+    cases.
+    """
     return kind_of(e).matches(ErrorKind.NETWORK_ERROR)
 
 
 def is_protocol_error(imm e: Error) -> Bool:
+    """Whether the bytes on the wire broke the protocol.
+
+    `except httpx.ProtocolError`, true for both the local and the remote case.
+    The two need different reactions, so `is_local_protocol_error` and
+    `is_remote_protocol_error` are usually the more useful questions.
+    """
     return kind_of(e).matches(ErrorKind.PROTOCOL_ERROR)
 
 
@@ -380,6 +414,11 @@ def is_remote_protocol_error(imm e: Error) -> Bool:
 
 
 def is_proxy_error(imm e: Error) -> Bool:
+    """Whether the proxy in front refused or misbehaved.
+
+    `except httpx.ProxyError`. The request never reached the server, so nothing
+    was sent that could have taken effect at the far end.
+    """
     return kind_of(e).matches(ErrorKind.PROXY_ERROR)
 
 
@@ -395,46 +434,103 @@ def is_unsupported_protocol(imm e: Error) -> Bool:
 
 
 def is_decoding_error(imm e: Error) -> Bool:
+    """Whether a content coding could not be undone.
+
+    `except httpx.DecodingError`. The response arrived intact and the body
+    inside it did not, so the status and the headers are still worth reading.
+    """
     return kind_of(e).matches(ErrorKind.DECODING_ERROR)
 
 
 def is_status_error(imm e: Error) -> Bool:
+    """Whether `raise_for_status` refused the status.
+
+    `except httpx.HTTPStatusError`. The only member of the family raised because
+    the caller asked a question rather than because something went wrong, so a
+    program that never calls `raise_for_status` never sees one.
+    """
     return kind_of(e).matches(ErrorKind.HTTP_STATUS_ERROR)
 
 
 def is_stream_error(imm e: Error) -> Bool:
+    """Whether a body was read in a way the stream does not allow.
+
+    `except httpx.StreamError`. Reading twice, reading after close, and sending
+    a streamed request body a second time. Always a bug in the calling code
+    rather than something that went wrong on the wire.
+    """
     return kind_of(e).matches(ErrorKind.STREAM_ERROR)
 
 
 def is_connect_timeout(imm e: Error) -> Bool:
+    """Whether the connection could not be established in time.
+
+    `except httpx.ConnectTimeout`. Usually the host or the network rather than
+    the server, since nothing has been asked of it yet.
+    """
     return kind_of(e) == ErrorKind.CONNECT_TIMEOUT
 
 
 def is_read_timeout(imm e: Error) -> Bool:
+    """Whether the server went quiet part way through answering.
+
+    `except httpx.ReadTimeout`. The deadline is on each read rather than on the
+    body as a whole, so a slow but steady download does not trip it.
+    """
     return kind_of(e) == ErrorKind.READ_TIMEOUT
 
 
 def is_write_timeout(imm e: Error) -> Bool:
+    """Whether the request body could not be pushed out in time.
+
+    `except httpx.WriteTimeout`.
+    """
     return kind_of(e) == ErrorKind.WRITE_TIMEOUT
 
 
 def is_pool_timeout(imm e: Error) -> Bool:
+    """Whether the wait for a free connection ran out.
+
+    `except httpx.PoolTimeout`. This one is about your own limits rather than
+    the network, so raising `max_connections` or holding responses for less time
+    is the fix rather than a longer timeout.
+    """
     return kind_of(e) == ErrorKind.POOL_TIMEOUT
 
 
 def is_connect_error(imm e: Error) -> Bool:
+    """Whether the connection could not be made at all.
+
+    `except httpx.ConnectError`. Refused, unreachable, or a name that did not
+    resolve.
+    """
     return kind_of(e) == ErrorKind.CONNECT_ERROR
 
 
 def is_too_many_redirects(imm e: Error) -> Bool:
+    """Whether the redirect chain ran past `max_redirects`.
+
+    `except httpx.TooManyRedirects`. The response that would have been followed
+    next is on the error's history, so a loop can be told from a long chain.
+    """
     return kind_of(e) == ErrorKind.TOO_MANY_REDIRECTS
 
 
 def is_invalid_url(imm e: Error) -> Bool:
+    """Whether a URL could not be parsed, or was not one a request can be sent to.
+
+    `except httpx.InvalidURL`.
+    """
     return kind_of(e) == ErrorKind.INVALID_URL
 
 
 def is_invalid_header(imm e: Error) -> Bool:
+    """Whether a header name or value was not one that can be sent.
+
+    httpx2 raises `LocalProtocolError` here. It is separate in this library so
+    that a caller validating user supplied headers can tell that case apart from
+    a protocol bug of its own, which needs a different fix.
+    """
     return kind_of(e) == ErrorKind.INVALID_HEADER
 
 
@@ -449,4 +545,8 @@ def is_invalid_argument(imm e: Error) -> Bool:
 
 
 def is_cookie_conflict(imm e: Error) -> Bool:
+    """Whether more than one cookie matched a lookup.
+
+    `except httpx.CookieConflict`. Narrow the search with a domain or a path.
+    """
     return kind_of(e) == ErrorKind.COOKIE_CONFLICT

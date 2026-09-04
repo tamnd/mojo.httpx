@@ -35,7 +35,7 @@ These come out of the design and most of them are enforced by a lint. They look 
 2. **No I/O call without a deadline.** Every `recv`, `send` and `connect` takes a `Deadline`. This is what makes the timeout guarantee mechanical instead of aspirational, and a lint rejects any call site that skips it.
 3. **No `unsafe_` outside `_ffi/` and `_io/`.** Where it is used, the call site carries a comment stating the invariant that makes it safe.
 4. **Respect the layer table.** If a change needs an import that goes the wrong way, the layering is wrong or the code is in the wrong module. Moving the entry in the lint table to make a build pass is not the fix.
-5. **New public API needs a docstring with a runnable example.** The example is a whole program, so that `pixi run docex` can hand it to the compiler.
+5. **New public API needs a docstring.** A lint checks it, measured against what `httpx/__init__.mojo` re-exports, because that list is the API and `docs/api.md` is generated from those docstrings. Put an example in it where an example helps, as a whole program so `pixi run docex` can hand it to the compiler.
 6. **Any behaviour that differs from httpx2 goes in [docs/deviations.md](docs/deviations.md).** If it is not in the table it is a bug, not a design decision.
 
 ## Tests

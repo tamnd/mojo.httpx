@@ -108,6 +108,12 @@ def head(
 ) raises -> Response
 ```
 
+One `HEAD`. The same as `get` with the body left off by the server.
+
+Worth reaching for when all you want is the status, the length or the
+caching headers, since the server sends none of the body and the response
+still carries everything else.
+
 ### `options`
 
 ```mojo
@@ -125,6 +131,10 @@ def options(
     trust_env: Bool = True,
 ) raises -> Response
 ```
+
+One `OPTIONS`, for asking a server what it will accept.
+
+No body argument, for the same reason `get` has none.
 
 ### `post`
 
@@ -176,6 +186,8 @@ def put(
 ) raises -> Response
 ```
 
+One `PUT`. The six body arguments are the ones `Client.put` takes.
+
 ### `patch`
 
 ```mojo
@@ -200,6 +212,8 @@ def patch(
 ) raises -> Response
 ```
 
+One `PATCH`. The six body arguments are the ones `Client.patch` takes.
+
 ### `delete`
 
 ```mojo
@@ -217,6 +231,12 @@ def delete(
     trust_env: Bool = True,
 ) raises -> Response
 ```
+
+One `DELETE`.
+
+No body argument, because a body on a `DELETE` has no defined meaning and
+httpx2 leaves it out of the signature too. `request("DELETE", ...)` is there
+for a server that wants one anyway.
 
 ### `stream`
 
@@ -1889,6 +1909,18 @@ def write_to[W: Writer](self, mut writer: W)
 ```mojo
 struct Headers
 ```
+
+The header fields of a request or a response.
+
+A list rather than a dictionary, because HTTP allows a name to appear more
+than once and the order it appears in is part of the message. Lookups are
+case insensitive both ways, `__getitem__` and `get` answer with the first
+value for a name, and `get_list` answers with all of them, which is what the
+handful of headers that are allowed to repeat need.
+
+Writing one out redacts `Authorization`, `Proxy-Authorization`, `Cookie` and
+`Set-Cookie`, so a debug print cannot put a credential in a log. Asking for
+the value by name still gives the value.
 
 #### `Headers.__init__`
 
@@ -5882,11 +5914,22 @@ answer. Without the conformance it does not compile.
 def is_http_error(e: Error) -> Bool
 ```
 
+Whether this is anything the library raised for a request.
+
+The widest net there is, and the same set `except httpx.HTTPError` catches.
+Everything below it is included, so this is the one to ask last.
+
 ### `is_request_error`
 
 ```mojo
 def is_request_error(e: Error) -> Bool
 ```
+
+Whether the request failed before a usable response came back.
+
+`except httpx.RequestError`. It covers every transport failure and the
+decoding ones, and it deliberately excludes a status error, which is a
+response that arrived intact and was then refused.
 
 ### `is_transport_error`
 
@@ -5894,11 +5937,23 @@ def is_request_error(e: Error) -> Bool
 def is_transport_error(e: Error) -> Bool
 ```
 
+Whether the failure happened at or below the connection.
+
+`except httpx.TransportError`. Timeouts, network errors, protocol errors,
+proxy errors and an unsupported scheme are all in here.
+
 ### `is_timeout`
 
 ```mojo
 def is_timeout(e: Error) -> Bool
 ```
+
+Whether some phase of the request ran out of time.
+
+`except httpx.TimeoutException`, so it is true for all four of connect,
+read, write and pool. Ask the specific one first when the four call for
+different reactions, since a pool timeout is your own limit and the other
+three are the network.
 
 ### `is_connect_timeout`
 
@@ -5906,11 +5961,21 @@ def is_timeout(e: Error) -> Bool
 def is_connect_timeout(e: Error) -> Bool
 ```
 
+Whether the connection could not be established in time.
+
+`except httpx.ConnectTimeout`. Usually the host or the network rather than
+the server, since nothing has been asked of it yet.
+
 ### `is_read_timeout`
 
 ```mojo
 def is_read_timeout(e: Error) -> Bool
 ```
+
+Whether the server went quiet part way through answering.
+
+`except httpx.ReadTimeout`. The deadline is on each read rather than on the
+body as a whole, so a slow but steady download does not trip it.
 
 ### `is_write_timeout`
 
@@ -5918,11 +5983,21 @@ def is_read_timeout(e: Error) -> Bool
 def is_write_timeout(e: Error) -> Bool
 ```
 
+Whether the request body could not be pushed out in time.
+
+`except httpx.WriteTimeout`.
+
 ### `is_pool_timeout`
 
 ```mojo
 def is_pool_timeout(e: Error) -> Bool
 ```
+
+Whether the wait for a free connection ran out.
+
+`except httpx.PoolTimeout`. This one is about your own limits rather than
+the network, so raising `max_connections` or holding responses for less time
+is the fix rather than a longer timeout.
 
 ### `is_network_error`
 
@@ -5930,17 +6005,33 @@ def is_pool_timeout(e: Error) -> Bool
 def is_network_error(e: Error) -> Bool
 ```
 
+Whether the connection itself failed.
+
+`except httpx.NetworkError`, covering the connect, read, write and close
+cases.
+
 ### `is_connect_error`
 
 ```mojo
 def is_connect_error(e: Error) -> Bool
 ```
 
+Whether the connection could not be made at all.
+
+`except httpx.ConnectError`. Refused, unreachable, or a name that did not
+resolve.
+
 ### `is_protocol_error`
 
 ```mojo
 def is_protocol_error(e: Error) -> Bool
 ```
+
+Whether the bytes on the wire broke the protocol.
+
+`except httpx.ProtocolError`, true for both the local and the remote case.
+The two need different reactions, so `is_local_protocol_error` and
+`is_remote_protocol_error` are usually the more useful questions.
 
 ### `is_local_protocol_error`
 
@@ -5971,6 +6062,11 @@ where the message ended means not knowing where the next one starts.
 def is_proxy_error(e: Error) -> Bool
 ```
 
+Whether the proxy in front refused or misbehaved.
+
+`except httpx.ProxyError`. The request never reached the server, so nothing
+was sent that could have taken effect at the far end.
+
 ### `is_unsupported_protocol`
 
 ```mojo
@@ -5990,11 +6086,21 @@ supplied URLs wants.
 def is_decoding_error(e: Error) -> Bool
 ```
 
+Whether a content coding could not be undone.
+
+`except httpx.DecodingError`. The response arrived intact and the body
+inside it did not, so the status and the headers are still worth reading.
+
 ### `is_too_many_redirects`
 
 ```mojo
 def is_too_many_redirects(e: Error) -> Bool
 ```
+
+Whether the redirect chain ran past `max_redirects`.
+
+`except httpx.TooManyRedirects`. The response that would have been followed
+next is on the error's history, so a loop can be told from a long chain.
 
 ### `is_invalid_url`
 
@@ -6002,11 +6108,21 @@ def is_too_many_redirects(e: Error) -> Bool
 def is_invalid_url(e: Error) -> Bool
 ```
 
+Whether a URL could not be parsed, or was not one a request can be sent to.
+
+`except httpx.InvalidURL`.
+
 ### `is_status_error`
 
 ```mojo
 def is_status_error(e: Error) -> Bool
 ```
+
+Whether `raise_for_status` refused the status.
+
+`except httpx.HTTPStatusError`. The only member of the family raised because
+the caller asked a question rather than because something went wrong, so a
+program that never calls `raise_for_status` never sees one.
 
 ### `is_stream_error`
 
@@ -6014,11 +6130,23 @@ def is_status_error(e: Error) -> Bool
 def is_stream_error(e: Error) -> Bool
 ```
 
+Whether a body was read in a way the stream does not allow.
+
+`except httpx.StreamError`. Reading twice, reading after close, and sending
+a streamed request body a second time. Always a bug in the calling code
+rather than something that went wrong on the wire.
+
 ### `is_invalid_header`
 
 ```mojo
 def is_invalid_header(e: Error) -> Bool
 ```
+
+Whether a header name or value was not one that can be sent.
+
+httpx2 raises `LocalProtocolError` here. It is separate in this library so
+that a caller validating user supplied headers can tell that case apart from
+a protocol bug of its own, which needs a different fix.
 
 ### `is_invalid_argument`
 
@@ -6037,6 +6165,10 @@ because the two need entirely different fixes.
 ```mojo
 def is_cookie_conflict(e: Error) -> Bool
 ```
+
+Whether more than one cookie matched a lookup.
+
+`except httpx.CookieConflict`. Narrow the search with a domain or a path.
 
 ### `new_error`
 
@@ -6148,8 +6280,10 @@ stray comma inside a parameter as it is to be a link somebody meant.
 ### `__version__`
 
 ```mojo
-comptime __version__ = "0.0.1"
+comptime __version__ = _VERSION
 ```
+
+The library version, under the name httpx2 uses so that a version check ported from Python keeps working. `_util/version.mojo` is where it is set, and the default `User-Agent` is built from the same string.
 
 ### `MOJO_MIN_VERSION`
 

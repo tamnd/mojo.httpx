@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Project specific lints for the httpx package.
 
-Three rules, each of which exists because breaking it produces a bug that no
+Four rules, each of which exists because breaking it produces a bug that no
 test would reliably catch.
 
 Layering. The package is a stack, and a module may only import from its own
@@ -19,6 +19,11 @@ deadline is a client that hangs forever on a server that stops talking, and
 there is no timeout anywhere else in the stack that will rescue it, because a
 blocked thread is blocked. This is the rule most likely to be broken by
 accident, because leaving the argument off always compiles.
+
+Docstrings on the public surface. Every name `import httpx` hands out has to
+carry a docstring, because the API reference is generated from those and a name
+without one shows up in docs/api.md as a bare signature. Nothing about that
+fails, which is the problem: the page still builds and still looks complete.
 
     pixi run lint
 """
@@ -385,6 +390,141 @@ def check_deadlines(files: list[Path]) -> bool:
     return found.report("deadlines")
 
 
+# The public surface is exactly what `httpx/__init__.mojo` re-exports, so that
+# is what the docstring rule is measured against. Anything else in the package
+# is internal and documented for whoever is reading the source, which is a lower
+# bar and not one a lint can judge.
+INIT = "__init__.mojo"
+
+# `from httpx._models.url import URL, QueryParams`, with the name list possibly
+# parenthesised and running over several lines. The body is chopped up
+# afterwards rather than matched precisely, because a regex that tried to spell
+# the whole thing would be longer than the function that reads it.
+EXPORT_RE = re.compile(
+    r"^from[ \t]+httpx[\w.]*[ \t]+import[ \t]+([^\n]*(?:\n[ \t]+[^\n]*)*)", re.M
+)
+ALIAS_RE = re.compile(r"^comptime\s+(\w+)\s*=", re.M)
+
+# `struct Mounts as MountTable` is not a thing, but `import Mounts as MountTable`
+# is, so an export can be a rename and the docstring lives on the original.
+RENAME_RE = re.compile(r"\b(\w+)\s+as\s+(\w+)\b")
+
+DEFINITION_RE = re.compile(r"^(?:struct|trait)\s+(\w+)|^def\s+(\w+)|^comptime\s+(\w+)\s*=")
+
+
+def _without_prose(text: str) -> str:
+    """The source with docstrings and comments removed.
+
+    The import list is read out of this rather than the raw file, because the
+    module docstring at the top of `__init__.mojo` is several hundred words of
+    English and plenty of them look like identifiers.
+    """
+    text = re.sub(r'"""(?:.|\n)*?"""', "", text)
+    return re.sub(r"(?m)#.*$", "", text)
+
+
+def _is_public(name: str) -> bool:
+    """Whether a re-exported name is part of the API.
+
+    Mojo re-exports everything a package `__init__` imports, with no way to keep
+    one out, so a name only needed to build something else is brought in under a
+    leading underscore. `__version__` and anything else with two is public,
+    because that is the spelling Python uses for exactly these.
+    """
+    return not name.startswith("_") or name.startswith("__")
+
+
+def exported_names(files: list[Path]) -> dict[str, str]:
+    """Every name `import httpx` hands out, mapped to the name it is defined as.
+
+    The two differ only for a rename, and there is one of those today. The value
+    is what to look for in the package, the key is what a caller writes.
+    """
+    out: dict[str, str] = {}
+    for path in files:
+        if path.name != INIT or path.parent != PACKAGE:
+            continue
+        source = _without_prose(path.read_text())
+        for match in EXPORT_RE.finditer(source):
+            body = match.group(1)
+            renamed = {new: old for old, new in RENAME_RE.findall(body)}
+            for word in re.split(r"[,\s()]+", body):
+                if not re.fullmatch(r"[A-Za-z_]\w*", word or "") or word == "as":
+                    continue
+                if word in renamed.values():
+                    continue
+                if not _is_public(word):
+                    continue
+                out[word] = renamed.get(word, word)
+        for match in ALIAS_RE.finditer(source):
+            out[match.group(1)] = match.group(1)
+    return out
+
+
+def _has_docstring(lines: list[str], index: int) -> bool:
+    """Whether the definition starting at `index` is followed by a docstring.
+
+    The header can run over many lines, so it is walked to the line that ends
+    it: a closing colon for a `def`, `struct` or `trait`, and the first line for
+    an alias, which has no body to open.
+    """
+    if lines[index].startswith("comptime"):
+        cursor = index
+    else:
+        cursor = index
+        while cursor < len(lines) and not lines[cursor].rstrip().endswith(":"):
+            cursor += 1
+        if cursor >= len(lines):
+            return False
+    cursor += 1
+    while cursor < len(lines) and not lines[cursor].strip():
+        cursor += 1
+    return cursor < len(lines) and lines[cursor].strip().startswith('"""')
+
+
+def check_docstrings(files: list[Path]) -> bool:
+    """Every exported name carries a docstring.
+
+    Measured against the re-export list rather than against every public looking
+    name in the package, because that list is the API and everything else is
+    somebody's implementation detail that happens not to start with an
+    underscore.
+    """
+    found = Findings()
+    wanted = exported_names(files)
+    if not wanted:
+        return found.report("docstrings")
+    seen: dict[str, tuple[Path, int, list[str]]] = {}
+    for path in files:
+        lines = path.read_text().splitlines()
+        for index, line in enumerate(lines):
+            match = DEFINITION_RE.match(line)
+            if not match:
+                continue
+            name = match.group(1) or match.group(2) or match.group(3)
+            seen.setdefault(name, (path, index, lines))
+    init = PACKAGE / INIT
+    for public, defined in sorted(wanted.items()):
+        if defined not in seen:
+            found.add(
+                init,
+                1,
+                f"{public} is exported but nothing in the package defines it. "
+                "A stale re-export compiles until somebody imports the name.",
+            )
+            continue
+        path, index, lines = seen[defined]
+        if not _has_docstring(lines, index):
+            found.add(
+                path,
+                index + 1,
+                f"{public} is part of the public API and has no docstring. "
+                "docs/api.md is generated from these, so it lands there as a "
+                "bare signature.",
+            )
+    return found.report("docstrings")
+
+
 def _functions(lines: list[str]) -> list[tuple[str, str, int, int]]:
     """Every top level `def`, as (name, signature, first body line, end)."""
     return _defs(lines, top_level_only=True)
@@ -486,6 +626,21 @@ SELFTEST_CASES = [
         '"""m."""\n',
         check_layering,
     ),
+    (
+        # An alias exported straight out of `__init__.mojo` with nothing under
+        # it. The whole file is the case, because the export list and the
+        # definition are both in it.
+        "__init__.mojo",
+        '"""m."""\n\ncomptime Undocumented = 1\n',
+        check_docstrings,
+    ),
+    (
+        # A re-export that no longer resolves. This compiles until somebody
+        # writes `httpx.Ghost`, and then fails in their code rather than ours.
+        "__init__.mojo",
+        '"""m."""\n\nfrom httpx._models.ghost import Ghost\n',
+        check_docstrings,
+    ),
 ]
 
 
@@ -530,6 +685,7 @@ def main() -> int:
         check_layering(files),
         check_unsafe(files),
         check_deadlines(files),
+        check_docstrings(files),
     ]
     print("")
     if all(results):

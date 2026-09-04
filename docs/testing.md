@@ -68,6 +68,8 @@ The order of the page is a table in the tool, grouped by what a reader is trying
 
 The page is committed so that reading the docs needs no toolchain, and `docs-check` runs in `pixi run check` and in the CI lint job. It is what catches a renamed argument that nobody re-rendered the page for.
 
+What the generator cannot do is notice that a docstring was never written. A name with none still renders, as a signature with nothing under it, and the page still looks complete. So `pixi run lint` has a fourth check that reads the same import list and fails when an exported name has no docstring. It also fails on a re-export that no longer resolves, which otherwise compiles right up until somebody writes `httpx.TheName` in their own code.
+
 ## The documentation examples
 
 Every ```mojo block in `docs/`, in the README and in CONTRIBUTING is a whole program, and all of them are compiled.
