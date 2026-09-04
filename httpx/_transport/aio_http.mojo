@@ -41,7 +41,7 @@ struct AsyncHTTPTransport(AsyncTransport):
     def main() raises:
         var transport = erase_async_transport(AsyncHTTPTransport())
         with AsyncClient(transport=transport^) as client:
-            print(client.get("https://example.com/").status_code)
+            print(client.get("http://example.com/").status_code)
     ```
     """
 

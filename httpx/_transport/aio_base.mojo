@@ -137,7 +137,7 @@ struct AnyAsyncTransport(TransportHandle):
         if offline:
             transport = async_blocked("no network in this run")
         with AsyncClient(transport=transport^) as client:
-            print(client.get("https://example.com/").status_code)
+            print(client.get("http://example.com/").status_code)
     ```
     """
 

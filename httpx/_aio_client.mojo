@@ -83,7 +83,7 @@ from httpx import AsyncClient
 
 def main() raises:
     with AsyncClient() as client:
-        var r = client.get("https://example.com/")
+        var r = client.get("http://example.com/")
         print(r.status_code, r.text())
 ```
 """

@@ -146,9 +146,9 @@ from httpx import AsyncClient, AsyncMounts, async_blocked
 
 def main() raises:
     var routes = AsyncMounts()
-    routes.mount("http://", async_blocked("plaintext is not allowed here"))
+    routes.mount("all://old.example.com", async_blocked("retired last year"))
     with AsyncClient(mounts=routes^) as client:
-        print(client.get("https://example.com/").status_code)
+        print(client.get("http://example.com/").status_code)
 ```
 """
 
