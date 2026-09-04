@@ -393,6 +393,7 @@ And the pages about one subject:
 - [Command line client](docs/cli.md) for the flags, what gets printed, and the exit code table
 - [Limitations](docs/limitations.md) for everything that is missing or does less than it should, in one list
 - [Testing](docs/testing.md) for the test layers, the CI matrix, and the local hardware fleet
+- [Benchmarks](docs/benchmarks.md) for the ten headline numbers, how each one is taken, and the five percent gate
 - [Roadmap](docs/roadmap.md) for milestones M0 through M9
 
 ## License

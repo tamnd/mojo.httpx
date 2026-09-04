@@ -69,6 +69,20 @@ what these tests are checking is that the client computes the right answer to a
 challenge, not that the server tracks replay.
 """
 
+PATTERN = bytes(range(256))
+"""One cycle of the bytes `/bytes/n` and `/stream-bytes/n` answer with.
+
+Deterministic rather than random, so a test can assert on the content and not
+only on the length. Built once and repeated rather than generated a byte at a
+time, because the benchmark suite asks this server for ten mebibytes and a
+generator expression per byte takes about a second to answer that, which would
+be most of what a download benchmark measured.
+"""
+
+
+def _pattern(count):
+    return (PATTERN * (count // len(PATTERN) + 1))[:count]
+
 
 class Handler(BaseHTTPRequestHandler):
     # Keep alive is the default in HTTP/1.1 and the connection pool needs a
@@ -302,14 +316,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _bytes(self, count):
         self._read_body()
-        # Deterministic rather than random, so a test can assert on the content
-        # and not only on the length.
-        payload = bytes((i % 256) for i in range(count))
+        payload = _pattern(count)
         self._send(200, payload, "application/octet-stream")
 
     def _stream_bytes(self, count):
         self._read_body()
-        payload = bytes((i % 256) for i in range(count))
+        payload = _pattern(count)
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Transfer-Encoding", "chunked")

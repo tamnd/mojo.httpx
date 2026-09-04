@@ -38,6 +38,7 @@ These go deeper than the tour does, one subject each. Advanced usage links into 
 | [Command line client](cli.md) | The flags, what gets printed, and the exit code table |
 | [Architecture](architecture.md) | The layer model and the design decisions behind it |
 | [Testing](testing.md) | The test layers, the CI matrix, and the local hardware fleet |
+| [Benchmarks](benchmarks.md) | The ten headline numbers, how each one is taken, and the five percent gate |
 | [Limitations](limitations.md) | Everything missing or worse than httpx2, in one list |
 | [Roadmap](roadmap.md) | Milestones M0 through M9 |
 

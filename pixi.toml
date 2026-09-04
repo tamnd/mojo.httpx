@@ -173,6 +173,13 @@ parity = "python tools/parity/run.py"
 # every run. See tests/unit/test_abi.mojo.
 baseline = "python tools/baseline/check_errno.py"
 
+# The headline numbers, against the baseline committed for this machine. Not
+# part of `check` and not in CI: a five percent gate is only meaningful on a
+# machine nobody else is sharing, which a hosted runner is not. It runs on the
+# fleet, where server3 has the bench role. `--update` records a baseline and
+# `--json` prints one for copying back from a remote host. See docs/benchmarks.md.
+bench = "python tools/bench/run.py"
+
 # Everything, in the order a failure is cheapest to read.
 check = { depends-on = [
   "format-check",
@@ -185,6 +192,3 @@ check = { depends-on = [
   "test",
   "golden",
 ] }
-
-# Tasks below land with the milestone that needs them. See docs/roadmap.md.
-#   bench         M2   the benchmark suite
