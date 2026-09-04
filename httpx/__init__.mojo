@@ -43,7 +43,35 @@ from httpx._auth import (
 from httpx._client import Client
 from httpx._config import Timeout
 from httpx._content.multipart import FileUpload, MultipartData
-from httpx._exceptions import ErrorKind
+from httpx._exceptions import (
+    ErrorKind,
+    is_connect_error,
+    is_connect_timeout,
+    is_cookie_conflict,
+    is_decoding_error,
+    is_http_error,
+    is_invalid_argument,
+    is_invalid_header,
+    is_invalid_url,
+    is_local_protocol_error,
+    is_network_error,
+    is_pool_timeout,
+    is_protocol_error,
+    is_proxy_error,
+    is_read_timeout,
+    is_remote_protocol_error,
+    is_request_error,
+    is_status_error,
+    is_stream_error,
+    is_timeout,
+    is_too_many_redirects,
+    is_transport_error,
+    is_unsupported_protocol,
+    is_write_timeout,
+    kind_of,
+    message_of,
+    new_error,
+)
 from httpx._hooks import (
     AnyRequestHook,
     AnyResponseHook,
@@ -53,6 +81,7 @@ from httpx._hooks import (
     erase_request_hook,
     erase_response_hook,
 )
+from httpx._io.deadline import Deadline, Deadlines
 from httpx._models.cookies import Cookie, CookieJar, Cookies, SameSite
 from httpx._models.headers import Headers
 from httpx._models.iterators import ByteChunks, LineChunks, TextChunks

@@ -22,13 +22,13 @@ A name that is not on this page is not public, whatever it is spelled like. The 
 
 [Authentication](#authentication): [`Auth`](#auth), [`AnyAuth`](#anyauth), [`erase_auth`](#erase_auth), [`BasicAuth`](#basicauth), [`basic_auth`](#basic_auth), [`DigestAuth`](#digestauth), [`digest_auth`](#digest_auth), [`NetRCAuth`](#netrcauth), [`netrc_auth`](#netrc_auth), [`NoAuth`](#noauth), [`no_auth`](#no_auth)
 
-[Configuration](#configuration): [`Timeout`](#timeout), [`Duration`](#duration), [`Limits`](#limits), [`SSLVerify`](#sslverify), [`ClientCert`](#clientcert), [`Proxy`](#proxy), [`proxy_basic_auth`](#proxy_basic_auth), [`DefaultEncoding`](#defaultencoding)
+[Configuration](#configuration): [`Timeout`](#timeout), [`Deadline`](#deadline), [`Deadlines`](#deadlines), [`Duration`](#duration), [`Limits`](#limits), [`SSLVerify`](#sslverify), [`ClientCert`](#clientcert), [`Proxy`](#proxy), [`proxy_basic_auth`](#proxy_basic_auth), [`DefaultEncoding`](#defaultencoding)
 
 [Transports](#transports): [`Transport`](#transport), [`AnyTransport`](#anytransport), [`erase_transport`](#erase_transport), [`HTTPTransport`](#httptransport), [`AsyncTransport`](#asynctransport), [`AnyAsyncTransport`](#anyasynctransport), [`erase_async_transport`](#erase_async_transport), [`AsyncHTTPTransport`](#asynchttptransport), [`MockTransport`](#mocktransport), [`MockRouter`](#mockrouter), [`Route`](#route), [`BlockedTransport`](#blockedtransport), [`blocked`](#blocked), [`async_blocked`](#async_blocked), [`MountTable`](#mounttable), [`Mounts`](#mounts), [`AsyncMounts`](#asyncmounts), [`URLPattern`](#urlpattern)
 
 [Event hooks](#event-hooks): [`EventHooks`](#eventhooks), [`RequestHook`](#requesthook), [`ResponseHook`](#responsehook), [`AnyRequestHook`](#anyrequesthook), [`AnyResponseHook`](#anyresponsehook), [`erase_request_hook`](#erase_request_hook), [`erase_response_hook`](#erase_response_hook)
 
-[Errors](#errors): [`ErrorKind`](#errorkind)
+[Errors](#errors): [`kind_of`](#kind_of), [`message_of`](#message_of), [`ErrorKind`](#errorkind), [`is_http_error`](#is_http_error), [`is_request_error`](#is_request_error), [`is_transport_error`](#is_transport_error), [`is_timeout`](#is_timeout), [`is_connect_timeout`](#is_connect_timeout), [`is_read_timeout`](#is_read_timeout), [`is_write_timeout`](#is_write_timeout), [`is_pool_timeout`](#is_pool_timeout), [`is_network_error`](#is_network_error), [`is_connect_error`](#is_connect_error), [`is_protocol_error`](#is_protocol_error), [`is_local_protocol_error`](#is_local_protocol_error), [`is_remote_protocol_error`](#is_remote_protocol_error), [`is_proxy_error`](#is_proxy_error), [`is_unsupported_protocol`](#is_unsupported_protocol), [`is_decoding_error`](#is_decoding_error), [`is_too_many_redirects`](#is_too_many_redirects), [`is_invalid_url`](#is_invalid_url), [`is_status_error`](#is_status_error), [`is_stream_error`](#is_stream_error), [`is_invalid_header`](#is_invalid_header), [`is_invalid_argument`](#is_invalid_argument), [`is_cookie_conflict`](#is_cookie_conflict), [`new_error`](#new_error)
 
 [Utilities](#utilities): [`Link`](#link), [`parse_links`](#parse_links), [`__version__`](#__version__), [`MOJO_MIN_VERSION`](#mojo_min_version)
 
@@ -3815,6 +3815,243 @@ a transport.
 def write_to[W: Writer](self, mut writer: W)
 ```
 
+### `Deadline`
+
+```mojo
+struct Deadline
+```
+
+A point in time to stop waiting at, and what to raise when it arrives.
+
+| Field | Type | What |
+| --- | --- | --- |
+| `at_ns` | `UInt64` | Ignored when `limited` is False. |
+| `limited` | `Bool` | False means no limit, which is a legitimate configuration and not a bug. |
+| `kind` | `ErrorKind` | What `check` raises. One of the four timeout kinds. |
+| `budget_ns` | `UInt64` | The duration this deadline was made from, or zero if it was made from an instant. |
+
+#### `Deadline.__init__`
+
+```mojo
+def __init__(
+    out self,
+    at_ns: UInt64,
+    limited: Bool,
+    kind: ErrorKind,
+    budget_ns: UInt64 = UInt64(0),
+)
+```
+
+#### `Deadline.never`
+
+```mojo
+@staticmethod
+def never(kind: ErrorKind = ErrorKind.TIMEOUT) -> Self
+```
+
+No limit. Waits still happen in slices, they just never give up.
+
+#### `Deadline.after`
+
+```mojo
+@staticmethod
+def after(seconds: Float64, kind: ErrorKind = ErrorKind.TIMEOUT) -> Self
+```
+
+A deadline `seconds` from now.
+
+A negative or zero value produces a deadline that has already passed
+rather than an error, because `timeout=0` is how a caller asks for a non
+blocking attempt and refusing it would mean a second way to say the same
+thing.
+
+#### `Deadline.after_ms`
+
+```mojo
+@staticmethod
+def after_ms(ms: Int, kind: ErrorKind = ErrorKind.TIMEOUT) -> Self
+```
+
+A deadline `ms` from now, for callers that already think in milliseconds.
+
+#### `Deadline.renewed`
+
+```mojo
+def renewed(self) -> Self
+```
+
+The same budget, starting now.
+
+What makes a read timeout mean one read rather than one response. Each
+read gets the whole budget again, so the thing being measured is how
+long the server went quiet for and not how long the body took.
+
+A deadline built from an instant rather than a duration comes back
+unchanged. There is nothing to restart it from, and inventing one would
+turn a hard limit somebody set on purpose into no limit at all.
+
+#### `Deadline.fixed`
+
+```mojo
+def fixed(self) -> Self
+```
+
+The same instant, and no restarting.
+
+For a wait that is one total budget rather than one budget per
+operation. Forgetting the duration is how that is said, because
+`renewed` has nothing to work from afterwards.
+
+#### `Deadline.with_kind`
+
+```mojo
+def with_kind(self, kind: ErrorKind) -> Self
+```
+
+The same instant, reported as a different phase.
+
+A connect deadline continues through the TLS handshake and through each
+address Happy Eyeballs tries, and each of those wants its own error
+name, so the instant travels and the label changes.
+
+#### `Deadline.earlier_of`
+
+```mojo
+def earlier_of(self, other: Self) -> Self
+```
+
+Whichever of the two runs out first, keeping that one's kind.
+
+Used where a per operation timeout sits inside a total budget. The one
+that fires is the one whose name the caller should see.
+
+#### `Deadline.expired`
+
+```mojo
+def expired(self) -> Bool
+```
+
+#### `Deadline.remaining_ns`
+
+```mojo
+def remaining_ns(self) -> UInt64
+```
+
+Nanoseconds left, or zero once passed.
+
+Meaningless when unlimited, which is why the only caller is
+`remaining_ms` and it checks first.
+
+#### `Deadline.remaining_ms`
+
+```mojo
+def remaining_ms(self) -> Int
+```
+
+How long the next single wait may last, in milliseconds.
+
+Never negative and never larger than `MAX_SLICE_MS`, so the value can go
+straight to `poll` without the caller having to remember that a negative
+timeout there means wait forever.
+
+Rounds up, so a deadline with half a millisecond left waits one
+millisecond rather than spinning. Sleeping fractionally too long is a
+timeout that fires fractionally late. Not sleeping at all is a busy loop
+that burns a core until the deadline passes.
+
+#### `Deadline.check`
+
+```mojo
+def check(self, what: StringSpan) raises
+```
+
+Raise if the deadline has passed, naming what was being waited for.
+
+`what` is the operation in the user's terms, like `connect to
+example.com:443`, because a timeout with no subject is the least useful
+error an HTTP client can produce.
+
+#### `Deadline.timeout_message`
+
+```mojo
+def timeout_message(self, what: StringSpan) -> String
+```
+
+The wording of a timeout on this deadline.
+
+#### `Deadline.write_to`
+
+```mojo
+def write_to[W: Writer](self, mut writer: W)
+```
+
+### `Deadlines`
+
+```mojo
+struct Deadlines
+```
+
+The four phase deadlines for one request, started together.
+
+They are made in one place because they have to start at the same instant.
+Four separate calls spread across the transport would each start their clock
+whenever that part of the code happened to run, so a request that spent a
+second in the pool would silently get a second longer to connect.
+
+Layered here rather than with the rest of the configuration because the pool
+and the transport need it and neither can see the configuration layer.
+
+| Field | Type |
+| --- | --- |
+| `connect` | `Deadline` |
+| `read` | `Deadline` |
+| `write` | `Deadline` |
+| `pool` | `Deadline` |
+
+#### `Deadlines.__init__`
+
+```mojo
+def __init__(
+    out self,
+    connect_at: Deadline,
+    read_at: Deadline,
+    write_at: Deadline,
+    pool_at: Deadline,
+)
+```
+
+#### `Deadlines.never`
+
+```mojo
+@staticmethod
+def never() -> Self
+```
+
+No limits at all, which is only ever right in a test.
+
+#### `Deadlines.after`
+
+```mojo
+@staticmethod
+def after(
+    connect_seconds: Optional[Float64],
+    read_seconds: Optional[Float64],
+    write_seconds: Optional[Float64],
+    pool_seconds: Optional[Float64],
+) -> Self
+```
+
+Start all four now, from a timeout given in seconds per phase.
+
+#### `Deadlines.uniform`
+
+```mojo
+@staticmethod
+def uniform(seconds: Optional[Float64]) -> Self
+```
+
+The same budget for every phase, which is what one number means.
+
 ### `Duration`
 
 ```mojo
@@ -5516,7 +5753,29 @@ Box `hook` and build the vtable that reaches back into it.
 
 ## Errors
 
-Mojo has one error type, so what would be a class hierarchy in Python is a kind on the error here. `ErrorKind` is how code tells a timeout from a refused connection without matching on a message.
+Mojo has one error type, so what would be a class hierarchy in Python is a kind on the error here. The predicates are httpx2's classes as questions you ask rather than types you catch, and they nest the same way: `is_timeout` is true for all four timeouts, `is_transport_error` for every network layer failure, `is_http_error` for anything raised for a request.
+
+### `kind_of`
+
+```mojo
+def kind_of(e: Error) -> ErrorKind
+```
+
+Recover the kind from an error.
+
+Returns `UNKNOWN` for an error this library did not raise, so predicates are
+safe to run over anything.
+
+### `message_of`
+
+```mojo
+def message_of(e: Error) -> String
+```
+
+The error text with the leading kind name stripped.
+
+Returns the whole string when there is no recognised name, so nothing is
+ever lost.
 
 ### `ErrorKind`
 
@@ -5616,6 +5875,179 @@ build an `Error` whose whole text is `InvalidURL`, find no colon to read
 a name from, and answer `False` for every kind. Every predicate below
 takes an `Error`, so that mistake is easy to make and returns a plausible
 answer. Without the conformance it does not compile.
+
+### `is_http_error`
+
+```mojo
+def is_http_error(e: Error) -> Bool
+```
+
+### `is_request_error`
+
+```mojo
+def is_request_error(e: Error) -> Bool
+```
+
+### `is_transport_error`
+
+```mojo
+def is_transport_error(e: Error) -> Bool
+```
+
+### `is_timeout`
+
+```mojo
+def is_timeout(e: Error) -> Bool
+```
+
+### `is_connect_timeout`
+
+```mojo
+def is_connect_timeout(e: Error) -> Bool
+```
+
+### `is_read_timeout`
+
+```mojo
+def is_read_timeout(e: Error) -> Bool
+```
+
+### `is_write_timeout`
+
+```mojo
+def is_write_timeout(e: Error) -> Bool
+```
+
+### `is_pool_timeout`
+
+```mojo
+def is_pool_timeout(e: Error) -> Bool
+```
+
+### `is_network_error`
+
+```mojo
+def is_network_error(e: Error) -> Bool
+```
+
+### `is_connect_error`
+
+```mojo
+def is_connect_error(e: Error) -> Bool
+```
+
+### `is_protocol_error`
+
+```mojo
+def is_protocol_error(e: Error) -> Bool
+```
+
+### `is_local_protocol_error`
+
+```mojo
+def is_local_protocol_error(e: Error) -> Bool
+```
+
+Whether we produced a message the protocol does not allow.
+
+Worth separating from the remote case because the two need different
+reactions. This one is a bug in the calling code and no amount of retrying
+will help.
+
+### `is_remote_protocol_error`
+
+```mojo
+def is_remote_protocol_error(e: Error) -> Bool
+```
+
+Whether the server sent something the protocol does not allow.
+
+The connection cannot be reused after one of these, because not knowing
+where the message ended means not knowing where the next one starts.
+
+### `is_proxy_error`
+
+```mojo
+def is_proxy_error(e: Error) -> Bool
+```
+
+### `is_unsupported_protocol`
+
+```mojo
+def is_unsupported_protocol(e: Error) -> Bool
+```
+
+Whether the URL asked for a scheme this library does not speak.
+
+A transport error rather than a URL error, because the URL is fine and it is
+the routing of it that cannot be done. That also means a caller catching
+transport failures catches this one, which is what someone passing user
+supplied URLs wants.
+
+### `is_decoding_error`
+
+```mojo
+def is_decoding_error(e: Error) -> Bool
+```
+
+### `is_too_many_redirects`
+
+```mojo
+def is_too_many_redirects(e: Error) -> Bool
+```
+
+### `is_invalid_url`
+
+```mojo
+def is_invalid_url(e: Error) -> Bool
+```
+
+### `is_status_error`
+
+```mojo
+def is_status_error(e: Error) -> Bool
+```
+
+### `is_stream_error`
+
+```mojo
+def is_stream_error(e: Error) -> Bool
+```
+
+### `is_invalid_header`
+
+```mojo
+def is_invalid_header(e: Error) -> Bool
+```
+
+### `is_invalid_argument`
+
+```mojo
+def is_invalid_argument(e: Error) -> Bool
+```
+
+Whether a value handed to this library was one it cannot work with.
+
+Outside `HTTPError` on purpose, alongside the other usage errors. A caller
+catching request failures should not also catch its own bad configuration,
+because the two need entirely different fixes.
+
+### `is_cookie_conflict`
+
+```mojo
+def is_cookie_conflict(e: Error) -> Bool
+```
+
+### `new_error`
+
+```mojo
+def new_error(kind: ErrorKind, message: StringSpan) -> Error
+```
+
+Build an error of `kind`.
+
+The result reads as `Name: message`, which is both what the user sees and
+what `kind_of` reads back.
 
 ## Utilities
 

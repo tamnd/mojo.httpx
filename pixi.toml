@@ -117,6 +117,11 @@ golden = { cmd = "python tools/golden/run.py", depends-on = ["cli"] }
 docs = "python tools/docgen/run.py"
 docs-check = "python tools/docgen/run.py --check"
 
+# Every ```mojo block in the documentation, handed to the compiler. The
+# examples are whole programs for this reason, and this is what stops a renamed
+# argument from living on in the docs after the code moved.
+docex = "python tools/docex/run.py"
+
 # The badssl.com matrix, one host per way of getting TLS wrong. Needs the
 # network and depends on certificates somebody else renews, so it is not part
 # of `check` and not in CI either. It runs on the fleet. See docs/testing.md.

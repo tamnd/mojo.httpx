@@ -47,8 +47,9 @@ Everything here is either tracked on the [roadmap](roadmap.md) or written up in 
 
 ## Tooling
 
-- No CLI. The `httpx` binary matching httpx2's flags is M8.
-- No documentation site and no generated API reference. Also M8, along with compiling every example in the docs in CI.
+- No published package. Distribution is a source tree checked out and put on the import path, because a `.mojopkg` is tied to the exact compiler that built it and would be wrong the day the toolchain moves. [install.md](install.md) has the whole of it.
+- No documentation site. The docs are markdown in this repository and the API reference is generated into `docs/api.md` and committed, so reading them needs no toolchain and no build step. A rendered site is worth having and is not a blocker for anything.
+- The example checker compiles rather than runs. `pixi run docex` hands every Mojo block in the docs to the compiler, which catches a renamed argument or a method that became a field. Whether an example produces the output it claims is still checked by a person.
 
 ## Platforms
 
