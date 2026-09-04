@@ -2,7 +2,7 @@
 
 The goal is that code written against httpx2 reads the same here, and that a request going out over the wire has the same bytes in it. Where that is not possible, the difference is deliberate and it is written down on this page rather than left for somebody to find at three in the morning.
 
-This page is about behaving differently while doing the same job. Things that are simply not here yet, such as the brotli and zstd codecs and reading a proxy out of the environment, are on [limitations.md](limitations.md) instead.
+This page is about behaving differently while doing the same job. Things that are simply not here yet, such as the brotli and zstd codecs and the async TLS handshake, are on [limitations.md](limitations.md) instead.
 
 Two kinds of difference show up. The first kind is forced by the language: Mojo has no dynamic `Any`, no exception subclassing, no generators and no keyword argument packing, so anything built on those has to be spelled differently. The second kind is a judgement call, where copying httpx2 exactly was possible and we chose not to. The second kind is much shorter and each entry says what the alternative was.
 
@@ -123,6 +123,18 @@ Two patterns that httpx2 accepts raise here.
 A path on a pattern, `all://example.com/api`, is an error. httpx2 parses it and then ignores the path, so the mount matches every request to that host and the author of the configuration believes they narrowed it. Routing looks at the scheme, the host and the port and there is no reading of a path that would work, so saying so is better than matching more than was asked for.
 
 An IPv6 address without brackets, `all://::1`, is an error rather than being taken as the host `:` on port 1. That is the reading a URL parser gives it and it matches nothing ever, which is the failure mode the whole parser is trying to avoid. `all://[::1]` is the way to write it.
+
+### The lower case proxy variable wins, rather than whichever was exported last
+
+httpx reads the environment through `urllib.request.getproxies`, which walks the environment block twice and lets the later entry win. With both `http_proxy` and `HTTP_PROXY` set, the answer depends on the order a shell happened to export them in, and nothing about that order is under anyone's control.
+
+Here the lower case name is looked up first and the upper case one is the fallback, which is curl's rule and is stable. An empty value counts as unset in both, so `HTTP_PROXY=` means not through a proxy rather than a proxy with no name.
+
+### `NO_PROXY` ranges are ranges
+
+`NO_PROXY=192.168.0.0/16` is a range in curl and in Go's proxy support, and it is a range here. httpx parses the entry, keeps `192.168.0.0` and drops the `/16`, so exactly one address out of the sixty five thousand is exempt and everything else on the network keeps going through the proxy.
+
+That is not a spelling difference, it is a rule that quietly does a thousandth of what it says, so it was not worth copying. The same machinery makes an address compare as a number rather than as text, which closes the other half of it: `all://127.0.0.1` matches a URL written `http://0177.0.0.1/`, and a rule written about an address cannot be walked around by writing the address in another base.
 
 ### The auth tuple shorthand is a function
 

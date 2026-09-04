@@ -36,6 +36,8 @@ The search stops at the first source that produces anything, so naming a bundle 
 4. Whatever paths OpenSSL itself was compiled to look at.
 5. The usual system locations, `/etc/ssl/cert.pem` on macOS and `/etc/ssl/certs/ca-certificates.crt` and friends on Linux.
 
+`trust_env` has a second job that has nothing to do with certificates: it is also the switch for the proxy variables in the environment. Turning it off to pin the trust store therefore turns off `HTTP_PROXY` as well. That is httpx's arrangement and it is worth knowing before reaching for it. [proxies.md](proxies.md) covers the other half.
+
 Running out of sources is an error raised when the client is built. It is deliberately not a silent fallback to an empty store, because a verifying context with no anchors rejects every certificate on earth and reports each one as untrusted, which sends whoever reads that message off to look at a server that was fine.
 
 ## Using your own CA

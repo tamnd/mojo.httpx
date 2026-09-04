@@ -172,8 +172,12 @@ A pattern is written as a URL and not as a bare scheme, so `http://` and not `ht
 | `all://*example.com` | `example.com` and its subdomains |
 | `all://*:8080` | anything on port 8080 |
 | `https://example.com:444` | all three at once |
+| `all://10.0.0.0/8` | every address in that range |
+| `all://[fd00::]/8` | the same for IPv6 |
 
 Hosts are compared case insensitively, a subdomain wildcard only matches at a label boundary so `all://*example.com` does not match `notexample.com`, and an IPv6 literal is written with brackets, `all://[::1]`.
+
+A host that is an address is compared as a number rather than as text, so `all://127.0.0.1` also matches a URL written `http://0177.0.0.1/`, which is the same address to every resolver on the machine. A prefix length is the only thing allowed after the authority, and two patterns that both name a range are ordered by prefix length, the tighter one first.
 
 A port that the scheme implies anyway is dropped when the pattern is parsed. `https://example.com:443` means every ordinary request to that host over TLS, not only the ones somebody spelled with a port on them, because a URL does not carry a default port once it has been parsed and a pattern that insisted on 443 would match nothing at all. That is httpx's reading of it too.
 
@@ -222,7 +226,51 @@ Closing the client closes every transport mounted on it, in the same call that c
 
 ## Environment variables
 
-`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` are ignored. A proxy has to be passed in code. `trust_env` reaches the TLS trust store and nothing else so far. Reading the environment is M7 and comes with the `NO_PROXY` matching rules and with the httpoxy check, which is the one where a CGI process reads `HTTP_PROXY` out of a request header called `Proxy` and sends its traffic wherever the attacker said.
+`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` are read, and a client built with nothing configured picks them up:
+
+```mojo
+# HTTP_PROXY=http://localhost:3128 NO_PROXY=localhost,10.0.0.0/8
+with Client() as client:
+    var outside = client.get("http://example.com/")     # through the proxy
+    var inside = client.get("http://10.1.2.3/health")   # straight out
+```
+
+Each one becomes a mount, which is the whole reason mounts exist: `HTTP_PROXY` is a proxy on `http://`, `HTTPS_PROXY` is one on `https://`, `ALL_PROXY` is one on `all://`, and every entry in `NO_PROXY` is a bypass. So everything in the previous section applies, and a mount written in code beats anything the environment asked for because it is added afterwards.
+
+The environment is only read when the client would otherwise have no proxy at all. Passing `proxy=` or `transport=` turns it off for that client, and so does `trust_env=False`, which is also the switch for the TLS trust store.
+
+### Which spelling wins
+
+Each variable is looked up in lower case first and then in upper case, and the first one with something in it is the answer. An empty value counts as unset, because `HTTP_PROXY=` is how a script says not through a proxy.
+
+Lower case first is curl's rule. Python's own `urllib.request.getproxies` instead lets whichever spelling appears later in the environment block win, which makes the answer depend on the order a shell happened to export things in.
+
+### The httpoxy check
+
+CGI puts every request header into the environment with an `HTTP_` prefix, so a request carrying a header called `Proxy` arrives in the process as `HTTP_PROXY`. A client that reads it is taking routing instructions from whoever sent the request, and what it then sends is the server's own outgoing traffic with the server's own credentials on it. That is CVE-2016-5385.
+
+The mitigation is the one everybody settled on: when `REQUEST_METHOD` is set, which is the marker that says this process is answering a CGI request, the upper case `HTTP_PROXY` is ignored. The lower case `http_proxy` still works, because no CGI server produces that name. Only `HTTP_PROXY` is affected, since there is no header that turns into `HTTPS_PROXY` or `ALL_PROXY`.
+
+### `NO_PROXY`
+
+A comma separated list, matched the way curl matches it rather than the way any one RFC says, because there is no RFC.
+
+| Entry | Means |
+| --- | --- |
+| `example.com` | that name and everything under it, so `www.example.com` as well |
+| `.example.com` | everything under it and not `example.com` itself |
+| `localhost` | that name alone |
+| `10.0.0.1` | that address, however it is spelled in the URL |
+| `10.0.0.0/8` | every address in that range |
+| `::1` | that address, brackets added on the way in |
+| `fd00::/8` | every address in that range |
+| `example.com:8080` | that name on that port |
+| `https://example.com` | already a mount pattern, used as written |
+| `*` | proxying off entirely, whatever the other variables said |
+
+A bare name covering its subdomains is worth knowing, because it is the one entry that does more than it looks like it does. A leading dot is how the list says the domain itself is not exempt.
+
+A range is a real range here. httpx keeps the network address and throws the prefix length away, so `NO_PROXY=192.168.0.0/16` exempts one address rather than sixty five thousand of them, and traffic to the rest of the network keeps going through the proxy. That is the sort of thing nobody notices until a request that should have stayed inside did not.
 
 ## Testing
 

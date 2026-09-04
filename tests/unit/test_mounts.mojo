@@ -182,6 +182,68 @@ def test_a_port_above_the_range_is_refused() raises:
         _ = URLPattern("http://example.com:70000")
 
 
+def test_an_address_matches_however_it_was_spelled() raises:
+    """`0177.0.0.1` and `127.0.0.1` reach the same machine, so a pattern about
+    one of them is a pattern about the other. Comparing hosts as text would let
+    a rule be walked around by writing the address in another base."""
+    assert_true(_matches("all://127.0.0.1", "http://0177.0.0.1/"))
+    assert_true(_matches("all://0x7f.1", "http://127.0.0.1/"))
+    assert_false(_matches("all://127.0.0.1", "http://127.0.0.2/"))
+
+
+def test_a_prefix_length_matches_a_whole_range() raises:
+    assert_true(_matches("all://10.0.0.0/8", "http://10.1.2.3/"))
+    assert_true(_matches("all://10.0.0.0/8", "http://10.255.255.255/"))
+    assert_false(_matches("all://10.0.0.0/8", "http://11.0.0.1/"))
+    assert_true(_matches("all://192.168.1.0/24", "http://192.168.1.7/"))
+    assert_false(_matches("all://192.168.1.0/24", "http://192.168.2.7/"))
+
+
+def test_a_prefix_length_of_zero_matches_every_address_of_that_family() raises:
+    assert_true(_matches("all://0.0.0.0/0", "http://8.8.8.8/"))
+    assert_false(_matches("all://0.0.0.0/0", "http://example.com/"))
+    assert_false(_matches("all://0.0.0.0/0", "http://[::1]/"))
+
+
+def test_an_ipv6_prefix_length_matches_a_whole_range() raises:
+    assert_true(_matches("all://[fd00::]/8", "http://[fd12:3456::1]/"))
+    assert_false(_matches("all://[fd00::]/8", "http://[fe80::1]/"))
+    assert_true(_matches("all://[fe80::]/64", "http://[fe80::dead:beef]/"))
+    assert_false(_matches("all://[fe80::]/64", "http://[fe80:1::1]/"))
+
+
+def test_a_name_never_falls_inside_a_range() raises:
+    assert_false(_matches("all://10.0.0.0/8", "http://example.com/"))
+
+
+def test_a_prefix_length_on_a_name_is_refused() raises:
+    with assert_raises(contains="not an IP address"):
+        _ = URLPattern("all://example.com/8")
+
+
+def test_a_prefix_length_longer_than_the_address_is_refused() raises:
+    with assert_raises(contains="above 32"):
+        _ = URLPattern("all://10.0.0.0/64")
+    with assert_raises(contains="above 128"):
+        _ = URLPattern("all://[fd00::]/200")
+
+
+def test_a_prefix_length_with_no_address_in_front_is_refused() raises:
+    with assert_raises(contains="prefix length on nothing"):
+        _ = URLPattern("all:///8")
+
+
+def test_a_tighter_range_is_tried_before_a_wider_one() raises:
+    # Host length would put these in whichever order the network addresses
+    # happen to be spelled, which is why ranges are ordered by prefix instead.
+    var routes = Mounts[AnyTransport]()
+    routes.mount("all://10.0.0.0/8", _answering(200))
+    routes.mount("all://10.1.0.0/16", _answering(201))
+    assert_equal(routes.entries[0].pattern.pattern, "all://10.1.0.0/16")
+    assert_equal(routes.route_for(URL("http://10.1.2.3/")), 0)
+    assert_equal(routes.route_for(URL("http://10.2.2.3/")), 1)
+
+
 def test_a_more_specific_host_is_tried_first() raises:
     var routes = Mounts[AnyTransport]()
     routes.mount("all://", _answering(200))

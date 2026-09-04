@@ -143,6 +143,32 @@ def getenv(name: StringSpan) raises -> Optional[String]:
     return cstr_to_string(CStringSlice(unsafe_from_ptr=found.value()))
 
 
+def setenv(name: StringSpan, value: StringSpan) raises:
+    """Set one environment variable for this process.
+
+    The library never calls this. It is here because the code that reads
+    `HTTP_PROXY` and `NO_PROXY` has to be tested against a real environment, and
+    a reader that is only exercised through an injected table is a reader whose
+    lookup rules are not tested at all. Since the tests set variables the
+    process really has, the calls belong in the same shim as `getenv` rather
+    than in a corner of the test suite reaching for libc on its own.
+
+    Overwrites, because a test that has to remember whether it is the first
+    caller is a test that will one day be second.
+    """
+    var key = c_string(name)
+    var held = c_string(value)
+    _ = external_call["setenv", c_int](
+        CStringSlice(key), CStringSlice(held), c_int(1)
+    )
+
+
+def unsetenv(name: StringSpan) raises:
+    """Remove one environment variable. See `setenv` for why this exists."""
+    var key = c_string(name)
+    _ = external_call["unsetenv", c_int](CStringSlice(key))
+
+
 def random_bytes(count: Int) raises -> List[UInt8]:
     """`count` bytes from the operating system's entropy pool.
 
