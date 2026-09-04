@@ -22,7 +22,11 @@ from httpx._codec.decode import (
     coding_for,
     decode_all,
 )
+from httpx._ffi.brotli import is_available as brotli_available
 from httpx._ffi.zlib import is_available, library_path, version_text
+from httpx._ffi.zstd import is_available as zstd_available
+
+from tests.support.hexdata import unhex
 
 # gzip.compress(b"hello world, " * 20, mtime=0)
 comptime HELLO_GZIP = (
@@ -42,30 +46,6 @@ comptime HELLO_TEXT = "hello world, "
 comptime HELLO_TIMES = 20
 
 
-def _hex_digit(byte: UInt8) raises -> Int:
-    if byte >= UInt8(ord("a")):
-        return Int(byte - UInt8(ord("a"))) + 10
-    if byte >= UInt8(ord("0")) and byte <= UInt8(ord("9")):
-        return Int(byte - UInt8(ord("0")))
-    raise Error(String("not a hex digit: ", byte))
-
-
-def _unhex(text: StringSpan) raises -> List[UInt8]:
-    var source = text.as_bytes()
-    var out = List[UInt8]()
-    var high = -1
-    for i in range(len(source)):
-        var nibble = _hex_digit(source[i])
-        if high < 0:
-            high = nibble
-        else:
-            out.append(UInt8(high * 16 + nibble))
-            high = -1
-    if high >= 0:
-        raise Error("odd number of hex digits in a fixture")
-    return out^
-
-
 def _zeros_gzip() raises -> List[UInt8]:
     """gzip.compress(b"\\0" * 100000, mtime=0).
 
@@ -73,7 +53,7 @@ def _zeros_gzip() raises -> List[UInt8]:
     attack, which would be measured in gigabytes, but the same shape, and small
     enough to read.
     """
-    return _unhex(
+    return unhex(
         String(
             "1f8b08000000000002ffedc13101000000c2a0f54f6d0d0fa0000000",
             "00000000000000000000000000000000000000000000000000000000",
@@ -96,12 +76,12 @@ def _hello() -> String:
 
 
 def test_a_gzip_body_comes_back_as_what_went_in() raises:
-    var out = decode_all(Coding.GZIP, Span(_unhex(HELLO_GZIP)))
+    var out = decode_all(Coding.GZIP, Span(unhex(HELLO_GZIP)))
     assert_equal(_text(out), _hello())
 
 
 def test_a_zlib_wrapped_body_is_what_deflate_is_supposed_to_mean() raises:
-    var out = decode_all(Coding.DEFLATE, Span(_unhex(HELLO_ZLIB)))
+    var out = decode_all(Coding.DEFLATE, Span(unhex(HELLO_ZLIB)))
     assert_equal(_text(out), _hello())
 
 
@@ -109,7 +89,7 @@ def test_a_raw_deflate_body_is_read_too_because_servers_send_them() raises:
     """RFC 7230 says `deflate` is the zlib wrapper. Plenty of servers send the
     bare compressed data instead, and every other client copes, so this one
     sniffs the first two bytes and copes as well."""
-    var out = decode_all(Coding.DEFLATE, Span(_unhex(HELLO_RAW)))
+    var out = decode_all(Coding.DEFLATE, Span(unhex(HELLO_RAW)))
     assert_equal(_text(out), _hello())
 
 
@@ -118,7 +98,7 @@ def test_a_body_pushed_one_byte_at_a_time_decodes_the_same() raises:
     else's. One byte at a time is the worst case: it lands inside the header,
     inside a match and inside the trailer, and none of those may lose a byte or
     produce one twice."""
-    var source = _unhex(HELLO_GZIP)
+    var source = unhex(HELLO_GZIP)
     var decoder = Decoder(Coding.GZIP)
     var out = List[UInt8]()
     for i in range(len(source)):
@@ -132,12 +112,12 @@ def test_a_body_pushed_one_byte_at_a_time_decodes_the_same() raises:
 def test_two_gzip_members_in_a_row_are_one_body() raises:
     """Concatenated members are a valid gzip stream and things in the wild do
     produce them, usually a pipeline that compressed each piece on its own."""
-    var out = decode_all(Coding.GZIP, Span(_unhex(TWO_MEMBERS)))
+    var out = decode_all(Coding.GZIP, Span(unhex(TWO_MEMBERS)))
     assert_equal(_text(out), "first half. second half.")
 
 
 def test_an_identity_decoder_hands_back_exactly_what_it_was_given() raises:
-    var source = _unhex(HELLO_GZIP)
+    var source = unhex(HELLO_GZIP)
     var out = decode_all(Coding.IDENTITY, Span(source))
     assert_equal(len(out), len(source))
     for i in range(len(source)):
@@ -156,7 +136,7 @@ def test_a_body_that_stops_in_the_middle_is_refused() raises:
     """The last six bytes of a gzip member are its CRC-32 and its length, so a
     truncated body is one nobody checked. Handing back as much as arrived would
     make a dropped connection look like a shorter document."""
-    var source = _unhex(HELLO_GZIP)
+    var source = unhex(HELLO_GZIP)
     var cut = List[UInt8]()
     for i in range(len(source) - 6):
         cut.append(source[i])
@@ -165,7 +145,7 @@ def test_a_body_that_stops_in_the_middle_is_refused() raises:
 
 
 def test_a_body_with_a_flipped_byte_is_refused() raises:
-    var source = _unhex(HELLO_GZIP)
+    var source = unhex(HELLO_GZIP)
     source[20] = source[20] ^ 0xFF
     with assert_raises(contains="not valid"):
         _ = decode_all(Coding.GZIP, Span(source))
@@ -174,7 +154,7 @@ def test_a_body_with_a_flipped_byte_is_refused() raises:
 def test_rubbish_after_the_last_member_is_refused() raises:
     """Trailing bytes are either another member or a mistake, and a decoder
     that ignored them would ignore a response somebody appended to."""
-    var source = _unhex(HELLO_GZIP)
+    var source = unhex(HELLO_GZIP)
     for byte in String("not a member").as_bytes():
         source.append(byte)
     with assert_raises():
@@ -209,7 +189,7 @@ def test_the_default_limits_accept_a_body_that_is_merely_compressible() raises:
 def test_a_decoder_says_how_much_it_has_produced() raises:
     var decoder = Decoder(Coding.GZIP)
     assert_equal(decoder.num_bytes_produced(), 0)
-    var out = decoder.push(Span(_unhex(HELLO_GZIP)))
+    var out = decoder.push(Span(unhex(HELLO_GZIP)))
     decoder.finish()
     assert_equal(decoder.num_bytes_produced(), len(out))
     assert_equal(decoder.coding(), Coding.GZIP)
@@ -220,13 +200,18 @@ def test_content_encoding_names_are_read_without_regard_to_case() raises:
     assert_equal(coding_for("GZIP"), Coding.GZIP)
     assert_equal(coding_for("x-gzip"), Coding.GZIP)
     assert_equal(coding_for("Deflate"), Coding.DEFLATE)
+    assert_equal(coding_for("BR"), Coding.BROTLI)
+    assert_equal(coding_for("Zstd"), Coding.ZSTD)
     assert_equal(coding_for("identity"), Coding.IDENTITY)
     assert_equal(coding_for(""), Coding.IDENTITY)
 
 
 def test_a_coding_we_do_not_implement_has_no_decoder() raises:
-    assert_equal(coding_for("br"), Coding.UNKNOWN)
-    assert_equal(coding_for("zstd"), Coding.UNKNOWN)
+    """`compress` is the one in the registry nobody sends, and `exi` is a real
+    coding for a format no HTTP client has any business with. Both stand for
+    the same thing here: a token we know is a coding and cannot undo."""
+    assert_equal(coding_for("compress"), Coding.UNKNOWN)
+    assert_equal(coding_for("exi"), Coding.UNKNOWN)
     with assert_raises(contains="no decoder"):
         _ = Decoder(Coding.UNKNOWN)
 
@@ -234,17 +219,30 @@ def test_a_coding_we_do_not_implement_has_no_decoder() raises:
 def test_a_coding_writes_itself_under_the_name_a_header_uses() raises:
     assert_equal(String(Coding.GZIP), "gzip")
     assert_equal(String(Coding.DEFLATE), "deflate")
+    assert_equal(String(Coding.BROTLI), "br")
+    assert_equal(String(Coding.ZSTD), "zstd")
     assert_equal(String(Coding.IDENTITY), "identity")
 
 
 def test_accept_encoding_names_only_what_this_process_can_undo() raises:
     """Asking for a coding we cannot decode gets back a body we cannot hand
     over, so the header is built from what loaded rather than from what was
-    compiled in."""
+    compiled in. Which libraries are on the machine is not something a test can
+    assume, so the expectation is assembled the same way the header is."""
+    var expected = String()
     if is_available():
-        assert_equal(accept_encoding(), "gzip, deflate")
-    else:
-        assert_equal(accept_encoding(), "identity")
+        expected += "gzip, deflate"
+    if brotli_available():
+        if expected != "":
+            expected += ", "
+        expected += "br"
+    if zstd_available():
+        if expected != "":
+            expected += ", "
+        expected += "zstd"
+    if expected == "":
+        expected = String("identity")
+    assert_equal(accept_encoding(), expected)
 
 
 def test_zlib_says_which_library_it_loaded() raises:

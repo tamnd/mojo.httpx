@@ -138,7 +138,7 @@ The three iterators stack. `LineChunks` pulls from `TextChunks` pulls from `Byte
 
 The buffered path is the same decoders run over a body that is already in hand, in the `Response` constructor, so a response the transport read to the end and a response streamed off the socket mean the same thing by `Content-Encoding`. That is also why building a `Response` can raise: a body that is not the format its own header claimed has no content to hand over, and the alternative is a response quietly holding compressed bytes and calling them text.
 
-A header naming a coding we cannot undo is refused rather than passed through, because `Accept-Encoding` only ever names what the process can actually decode, so a server sending something else has ignored it. What we can decode is decided at run time by whether zlib loaded, not at build time, which is why a machine without it degrades to plain bodies instead of failing on every response.
+A header naming a coding we cannot undo is refused rather than passed through, because `Accept-Encoding` only ever names what the process can actually decode, so a server sending something else has ignored it. What we can decode is decided at run time by which of zlib, libbrotlidec and libzstd loaded, not at build time, which is why a machine without one of them asks for less and gets larger responses instead of failing on every response.
 
 Every decoder carries a `DecodeLimits`. A compressed body is one where the sender chooses how much memory the receiver spends, so the bound is checked as the body grows rather than once it is in hand, which is the only check worth having.
 

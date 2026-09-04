@@ -17,6 +17,22 @@ mojo = "==1.0.0"
 [feature.dev.dependencies]
 openssl = ">=3.0"
 
+# The content codings, from both ends. `libbrotlidec` and `zstd` carry the two
+# shared libraries the client opens at run time, and `brotli-python` and
+# `zstandard` are what the test server compresses those two codings with. All
+# four are named rather than left to the machine, because otherwise which
+# codings work would depend on what each host happens to have installed and
+# `Accept-Encoding` would say something different on every one of them. zstd is
+# in the environment anyway, since conda's own package format uses it, but a
+# dependency that is only there by accident is one a later solve can take away.
+# `zstandard` is only needed because the environment solves to Python 3.12 on
+# some platforms, and the standard library grew a zstd module in 3.14; the
+# server prefers the standard library one where it exists.
+brotli-python = "*"
+libbrotlidec = "*"
+zstandard = "*"
+zstd = "*"
+
 # The nightly Mojo build. CI runs this as an early warning for language changes
 # and is allowed to fail. Do not develop against it.
 [feature.nightly]

@@ -6,16 +6,19 @@ that `Accept-Encoding` goes out saying what this process can undo, that the
 and that a body large enough to arrive in several reads decodes the same as one
 that arrives in a single read.
 
-Every test returns early when zlib did not load. There is no machine in the test
-fleet without it, but a build that could not find it should report the one
-failure that says so rather than a dozen that look like decoding bugs.
+Every test returns early when the library its coding needs did not load. All
+three are in the pixi environment, so they are there on every machine the suite
+runs on, but a build that could not find one should report the single failure
+that says so rather than a dozen that look like decoding bugs.
 """
 
 from std.testing import assert_equal, assert_raises, assert_true
 
 from httpx._client import Client
 from httpx._codec.decode import accept_encoding
+from httpx._ffi.brotli import is_available as brotli_available
 from httpx._ffi.zlib import is_available
+from httpx._ffi.zstd import is_available as zstd_available
 from httpx._io.deadline import Deadlines
 from httpx._models.request import Request
 from httpx._models.response import Response
@@ -87,6 +90,28 @@ def test_a_deflate_response_is_decoded_too() raises:
     client.close()
 
 
+def test_a_brotli_response_is_decoded_before_the_caller_sees_it() raises:
+    if not brotli_available():
+        return
+    var server = TestServer()
+    var client = Client()
+    var response = _get(client, server, "/brotli")
+    assert_equal(response.headers["content-encoding"], "br")
+    assert_true(response.text().find('"encoding": "br"') >= 0)
+    client.close()
+
+
+def test_a_zstd_response_is_decoded_before_the_caller_sees_it() raises:
+    if not zstd_available():
+        return
+    var server = TestServer()
+    var client = Client()
+    var response = _get(client, server, "/zstd")
+    assert_equal(response.headers["content-encoding"], "zstd")
+    assert_true(response.text().find('"encoding": "zstd"') >= 0)
+    client.close()
+
+
 def test_the_decoded_body_parses_as_what_the_content_type_said() raises:
     """`json()` reads `content`, so this fails if anything on the buffered path
     handed back compressed bytes."""
@@ -107,8 +132,8 @@ def test_accept_encoding_says_what_this_process_can_undo() raises:
     var server = TestServer()
     var client = Client()
     var response = _get(client, server, "/headers")
-    assert_equal(accept_encoding(), "gzip, deflate")
-    assert_true(response.text().find("gzip, deflate") >= 0)
+    assert_true(accept_encoding().startswith("gzip, deflate"))
+    assert_true(response.text().find(accept_encoding()) >= 0)
     client.close()
 
 
@@ -166,6 +191,30 @@ def test_a_large_deflate_body_decodes_the_same_way() raises:
     client.close()
 
 
+def test_a_large_brotli_body_decodes_the_same_way() raises:
+    """Two hundred thousand bytes of text, so the compressed body still spans
+    several socket reads and the decoder is fed on boundaries it did not
+    choose. That is the case the fixtures cannot reach, and it is the one where
+    a streaming binding that mishandles a partial block goes wrong."""
+    if not brotli_available():
+        return
+    var server = TestServer()
+    var client = Client()
+    var response = _get(client, server, "/brotli?size=200000")
+    assert_equal(response.text(), _expected_large())
+    client.close()
+
+
+def test_a_large_zstd_body_decodes_the_same_way() raises:
+    if not zstd_available():
+        return
+    var server = TestServer()
+    var client = Client()
+    var response = _get(client, server, "/zstd?size=200000")
+    assert_equal(response.text(), _expected_large())
+    client.close()
+
+
 def test_the_download_count_stays_on_the_compressed_bytes() raises:
     """What a progress bar is drawn against. The server announced a length for
     the compressed body, so counting the decoded one would run the bar past its
@@ -186,7 +235,7 @@ def test_the_download_count_stays_on_the_compressed_bytes() raises:
 
 
 def test_a_coding_we_did_not_ask_for_is_refused() raises:
-    """The server ignored `Accept-Encoding` and answered in brotli. Handing the
+    """The server ignored `Accept-Encoding` and answered in `exi`. Handing the
     bytes over as content would make `text` and `json` quietly wrong, so this
     fails instead, and says which coding it was."""
     var server = TestServer()
