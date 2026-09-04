@@ -16,10 +16,12 @@ Compiling is the whole check. Running would need a network, a server and a
 tolerance for flakes, and the mistakes people actually make in a code sample
 are the ones a type checker already knows about.
 
-Run it with `pixi run docex`. Give it paths to check only those.
+Run it with `pixi run docex`. Give it paths to check only those, and `--jobs` to
+change how many compilers run at once.
 """
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -28,6 +30,14 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# How many compilers to run at once. Capped rather than left at one per core,
+# because what runs out first is memory and not CPU: a build of the package
+# wants something over a gigabyte, and on a 32 core machine with no swap the
+# default pool started 32 of them and the kernel killed the run with no output
+# at all. Eight is comfortable on a 16 GB machine and still finishes the corpus
+# in about the same time, since the builds are not CPU bound anyway.
+DEFAULT_JOBS = min(8, os.cpu_count() or 1)
 
 # Where the prose lives. README and CONTRIBUTING are in here too, because a
 # broken example on the front page is the worst place to have one.
@@ -95,7 +105,15 @@ def main():
         nargs="*",
         help="markdown files to check, defaulting to all of the docs",
     )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=DEFAULT_JOBS,
+        help=f"compilers to run at once (default {DEFAULT_JOBS})",
+    )
     args = parser.parse_args()
+    if args.jobs < 1:
+        parser.error("--jobs has to be at least 1")
 
     sources = [Path(p).resolve() for p in args.paths] if args.paths else SOURCES
 
@@ -113,9 +131,10 @@ def main():
         print("no examples to compile")
         return 0
 
-    # One compiler per core. Each build is a second or two and there are dozens
-    # of them, so serial is a minute of waiting for no reason.
-    with ThreadPoolExecutor() as pool:
+    # In parallel because each build takes a second or two and there are dozens
+    # of them, so serial is a minute of waiting for no reason. See DEFAULT_JOBS
+    # for why the pool is capped rather than sized from the core count.
+    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         failures = [f for f in pool.map(compile_one, jobs) if f]
 
     for failure in failures:

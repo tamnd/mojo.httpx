@@ -75,7 +75,10 @@ Every ```mojo block in `docs/`, in the README and in CONTRIBUTING is a whole pro
 ```bash
 pixi run docex                       # all of them
 pixi run docex docs/quickstart.md    # one page
+pixi run docex --jobs 2              # on a machine with less memory to spare
 ```
+
+The pool is capped at eight rather than sized from the core count, because what runs out first is memory and not CPU. A build of the package wants something over a gigabyte, and on the 32 core Windows box in the fleet the uncapped pool started 32 of them against 21 GB and no swap, and the kernel killed the run before it printed a single line. A cap that low costs almost nothing in wall clock, since the builds are not CPU bound.
 
 A block with no `main` is a fragment, a signature or a trait declaration or a couple of lines showing a call, and is skipped. Those are deliberate: spelling out a whole program to show one line would bury the line. The count of skipped blocks is printed rather than passed over, so a block that meant to be a program and forgot is visible.
 
