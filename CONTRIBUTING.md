@@ -46,7 +46,7 @@ Four kinds of test live here and they are not interchangeable.
 
 Behaviour tests are the bulk of it and they are ordinary assertions. Conformance tests run a vendored corpus, the WHATWG URL cases, the IDNA test suite, the cookie cases, and they are generated into Mojo by `tools/gen_*.py` from the vendored source. Add a case to the corpus rather than writing a one off test, so it stays covered as the code moves. Language tests, in `tests/unit/test_language.mojo`, pin compiler behaviour we have worked around, so a later Mojo that fixes one shows up as a failing test rather than as a workaround nobody removes. Platform tests check the constants we could get wrong per platform, and everything that cannot be asked from Mojo is in `tools/baseline/` instead.
 
-Three suites are not part of `check` and are not in CI, because they need Docker or the network or a second HTTP client: `pixi run interop-h2`, `pixi run interop-proxy`, `pixi run badssl`, plus `pixi run -e parity parity` and the two fuzzers. [docs/testing.md](docs/testing.md) says what each one covers and where it runs.
+Three suites are not part of `check` and are not in CI, because they need Docker or the network or a second HTTP client: `pixi run interop-h2`, `pixi run interop-proxy`, `pixi run badssl`, plus `pixi run -e parity parity` and the two fuzzers. [docs/testing.md](docs/testing.md) says what each one covers and where it runs. `pixi run bench` is out for a different reason, which is that a five percent regression gate means nothing on a machine shared with whatever else a hosted runner is doing. [docs/benchmarks.md](docs/benchmarks.md) has that one.
 
 ## Documentation
 

@@ -207,6 +207,20 @@ Nothing tells the driver which cases the Mojo side ran. It does not need telling
 
 Like the fuzzer, it is not part of `pixi run check` and not in CI. It needs a second HTTP client installed and it opens real sockets.
 
+## The benchmarks
+
+Ten cases, each measured in its own process, each compared against a baseline recorded on the machine it ran on.
+
+```bash
+pixi run bench                 # every case, against this machine's baseline
+pixi run bench --case parse    # only the cases whose name contains this
+pixi run bench --update        # record what was measured as this machine's baseline
+```
+
+A metric more than five percent worse than the baseline fails the run. Five percent is tight enough to catch a real regression in a parser and loose enough to survive an ordinary machine, which is also why there is a baseline per machine rather than one number for everybody: a laptop and server3 disagree by more than any regression would.
+
+It is not part of `pixi run check` and not in CI. A five percent gate needs a machine nobody else is sharing, and a hosted runner is the opposite of that, so this is the suite server3 has a role for. [Benchmarks](benchmarks.md) has the cases, the units, how a number is taken, and the list of things these numbers deliberately do not measure.
+
 ## The local fleet
 
 Some testing does not belong in CI. Interop against real servers needs Docker and several minutes of wall clock, fuzzing needs hours, and benchmarks need a machine that nobody else is sharing. A hosted runner is bad at all three.
