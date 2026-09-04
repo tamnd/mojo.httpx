@@ -715,7 +715,7 @@ from httpx import AsyncClient
 
 def main() raises:
     with AsyncClient() as client:
-        var r = client.get("https://example.com/")
+        var r = client.get("http://example.com/")
         print(r.status_code, r.text())
 ```
 
@@ -5279,7 +5279,7 @@ def main() raises:
     if offline:
         transport = async_blocked("no network in this run")
     with AsyncClient(transport=transport^) as client:
-        print(client.get("https://example.com/").status_code)
+        print(client.get("http://example.com/").status_code)
 ```
 
 #### `AnyAsyncTransport.__init__`
@@ -5387,7 +5387,7 @@ from httpx import AsyncClient, AsyncHTTPTransport, erase_async_transport
 def main() raises:
     var transport = erase_async_transport(AsyncHTTPTransport())
     with AsyncClient(transport=transport^) as client:
-        print(client.get("https://example.com/").status_code)
+        print(client.get("http://example.com/").status_code)
 ```
 
 | Field | Type |
@@ -6098,9 +6098,9 @@ from httpx import AsyncClient, AsyncMounts, async_blocked
 
 def main() raises:
     var routes = AsyncMounts()
-    routes.mount("http://", async_blocked("plaintext is not allowed here"))
+    routes.mount("all://old.example.com", async_blocked("retired last year"))
     with AsyncClient(mounts=routes^) as client:
-        print(client.get("https://example.com/").status_code)
+        print(client.get("http://example.com/").status_code)
 ```
 
 ### `URLPattern`
