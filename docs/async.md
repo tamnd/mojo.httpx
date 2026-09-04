@@ -1,6 +1,83 @@
-# Async
+# Async support
 
-M6 was written as a maybe. The plan said Mojo has `async def` and `await` but no executor, no event loop and no async I/O, that `Coroutine` is a linear type with nowhere to store it, and that the milestone should open with a go or no go rather than with code. This is that decision and the evidence behind it.
+`AsyncClient` is used exactly like `Client`. There is no `async with`, no `await` on a client method and no `asyncio.gather`, because Mojo's async is not asyncio and a coroutine here cannot be handed to a caller. What you write is ordinary code, and the concurrency is a call.
+
+The first half of this page is how to use it. The second half is the design and the measurements behind it, which is worth reading before deciding how much to lean on it.
+
+## One request
+
+```mojo
+from httpx import AsyncClient, URL
+
+
+def main() raises:
+    with AsyncClient(base_url=URL("http://api.example.com")) as client:
+        var r = client.get("/users")
+        print(r.status_code)
+```
+
+Every option `Client` takes, `AsyncClient` takes, and every method is spelled the same. `close()` and `aclose()` are the same call, since nothing about closing a client suspends.
+
+Sending one request at a time through the async client buys you nothing over the synchronous one. It is a little slower, because each wait goes through the scheduler. The reason to be here is the next section.
+
+## Several at once
+
+```mojo
+import httpx
+from httpx import AsyncClient, URL
+
+
+def main() raises:
+    with AsyncClient(base_url=URL("http://api.example.com")) as client:
+        var pending = List[httpx.Request]()
+        pending.append(client.build_request("GET", "/users/1"))
+        pending.append(client.build_request("GET", "/users/2"))
+        pending.append(client.build_request("GET", "/users/3"))
+
+        var answers = httpx.gather(client, pending^)
+        for i in range(len(answers)):
+            print(answers[i].status_code)
+```
+
+The answers come back in the order the requests went out. Everything the client does for one request it does for each of these: the hooks run per send, the cookie jar is read and written, redirects are followed for anyone who asked, and an auth scheme gets its retry, with each request carrying its own copy of the scheme so a digest challenge answered for one is not an answer the others give too.
+
+`gather` takes a list rather than letting you assemble the requests yourself. That is not a simplification, it is the only shape available: a `Coroutine` in Mojo 1.0 is a linear type, so it cannot be stored in a variable, put in a list or returned, and there is no way to hand you a request in progress to combine with someone else's.
+
+The first failure is raised and the other responses are dropped, which is what `asyncio.gather` does unless told otherwise. Every request still runs to the end first, so no connection is left leased. There is no `return_exceptions` equivalent yet.
+
+## Streaming
+
+Same shape as the synchronous client, with the body coming out through `aiter_bytes`, `aiter_text`, `aiter_lines` and `aiter_raw`.
+
+```mojo
+from httpx import AsyncClient
+
+
+def main() raises:
+    with AsyncClient() as client:
+        with client.stream("GET", "http://example.com/big.log") as r:
+            var lines = r.aiter_lines()
+            while lines.has_next():
+                print(lines.next())
+```
+
+Each of those is the same call as the name without the `a`. That is the honest answer rather than a shortcut: what differs between a synchronous stream and an async one is the source underneath, and neither the response nor the iterator can tell which it has. The names exist so that code ported from httpx2 keeps its shape, and so do `aread` and `aclose`.
+
+A caller sitting on a half read body is holding a connection and no worker at all, which is the property that makes this worth doing. What it does not buy is reading several bodies at once: each `read_chunk` blocks the thread that called it, and there is no `gather` for streams.
+
+## What it will not do
+
+An `https://` URL raises, with a message saying so rather than being sent in the clear. There is no async TLS handshake yet. HTTP/2 is out for the same reason, since it is negotiated in the handshake, and so is a `CONNECT` tunnel or a SOCKS proxy. Forwarding a plain `http://` request through an HTTP proxy does work.
+
+There is no `task.cancel()`, because there is nothing that stands for a request in flight to give you. What stops a request is its deadline, which is checked several times a second rather than at the end of whatever the server is doing, or closing its response. Either way the connection is closed rather than pooled and the pool slot comes back.
+
+Every entry point blocks the calling thread. The point is that a request waiting on a socket does not hold a worker, not that your own thread is free.
+
+[limitations.md](limitations.md) has that list in full, and the rest of this page is why.
+
+## The decision this came out of
+
+M6 was written as a maybe. The plan said Mojo has `async def` and `await` but no executor, no event loop and no async I/O, that `Coroutine` is a linear type with nowhere to store it, and that the milestone should open with a go or no go rather than with code. What follows is that decision and the evidence behind it.
 
 Run the evidence yourself:
 

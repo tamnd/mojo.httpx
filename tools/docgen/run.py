@@ -146,6 +146,8 @@ GROUPS = [
         " that verifies certificates and gives up eventually.",
         [
             "Timeout",
+            "Deadline",
+            "Deadlines",
             "Duration",
             "Limits",
             "SSLVerify",
@@ -198,9 +200,40 @@ GROUPS = [
     (
         "Errors",
         "Mojo has one error type, so what would be a class hierarchy in Python"
-        " is a kind on the error here. `ErrorKind` is how code tells a timeout"
-        " from a refused connection without matching on a message.",
-        ["ErrorKind"],
+        " is a kind on the error here. The predicates are httpx2's classes as"
+        " questions you ask rather than types you catch, and they nest the same"
+        " way: `is_timeout` is true for all four timeouts, `is_transport_error`"
+        " for every network layer failure, `is_http_error` for anything raised"
+        " for a request.",
+        [
+            "kind_of",
+            "message_of",
+            "ErrorKind",
+            "is_http_error",
+            "is_request_error",
+            "is_transport_error",
+            "is_timeout",
+            "is_connect_timeout",
+            "is_read_timeout",
+            "is_write_timeout",
+            "is_pool_timeout",
+            "is_network_error",
+            "is_connect_error",
+            "is_protocol_error",
+            "is_local_protocol_error",
+            "is_remote_protocol_error",
+            "is_proxy_error",
+            "is_unsupported_protocol",
+            "is_decoding_error",
+            "is_too_many_redirects",
+            "is_invalid_url",
+            "is_status_error",
+            "is_stream_error",
+            "is_invalid_header",
+            "is_invalid_argument",
+            "is_cookie_conflict",
+            "new_error",
+        ],
     ),
     (
         "Utilities",

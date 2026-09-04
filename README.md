@@ -295,28 +295,11 @@ There is no `task.cancel()`, for the same reason there is no request in progress
 
 One thing it will not do yet, and it says so rather than doing something almost right: `https://`, because there is no async TLS handshake. `close()` and `aclose()` are the same call, since nothing about closing a client suspends. See [async](docs/async.md) for the whole picture, including what Mojo 1.0.0 does and does not allow a coroutine to do.
 
-## What it will look like
-
-```mojo
-from httpx import get, Client
-
-def main() raises:
-    var r = get("https://api.example.com/users")
-    print(r.status_code)
-    print(r.json()["users"][0]["name"].as_string())
-
-    var client = Client(base_url="https://api.example.com", http2=True)
-    var resp = client.post("/items", json={"name": "widget"})
-    resp.raise_for_status()
-```
-
-Proxies, multipart uploads and custom transports all work the way they do in httpx2.
-
-## Planned feature set
+## Feature set
 
 | Area | Scope |
 | --- | --- |
-| Protocols | HTTP/1.1 and HTTP/2, keep alive, pipelined multiplexing on h2 |
+| Protocols | HTTP/1.1 and HTTP/2, keep alive, chunked framing, trailers |
 | TLS | OpenSSL 3.x via FFI, ALPN, SNI, mTLS, custom CA bundles |
 | Client | Sync `Client`, async `AsyncClient`, top level one shot helpers |
 | Pooling | Connection pool with per host and total limits, keepalive expiry |
@@ -327,6 +310,8 @@ Proxies, multipart uploads and custom transports all work the way they do in htt
 | Content | multipart, form encoding, JSON, gzip, deflate, brotli, zstd |
 | Testing | `MockTransport` and `MockRouter`, no separate package needed |
 | CLI | An `httpx` binary matching httpx2's CLI flag for flag |
+
+What is not there yet is collected in [limitations](docs/limitations.md), and the short version is that the async client does not speak `https://` and HTTP/2 carries one request at a time per connection.
 
 ## Command line
 
@@ -387,7 +372,19 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. It lists 
 
 ## Documentation
 
+[docs/index.md](docs/index.md) is the front door and lists everything. The pages people reach for first:
+
+- [Installation](docs/install.md) for getting the library onto the import path, and why there is no package to download
+- [QuickStart](docs/quickstart.md) for the whole API in one pass, each piece as a program you can run
+- [Advanced usage](docs/advanced.md) for clients, pooling, auth, hooks, custom transports and testing
+- [Async support](docs/async.md) for `AsyncClient` and `gather`, what Mojo's scheduler can and cannot do, measured, and the design that follows
+- [Compatibility guide](docs/deviations.md) for every place this behaves differently from httpx2, and why
+- [Mojo notes](docs/mojo.md) for the language facts that explain why the API looks the way it does
+- [Troubleshooting](docs/troubleshooting.md) indexed by the error message you just read
 - [API reference](docs/api.md) for every name `import httpx` gives you, generated from the source
+
+And the pages about one subject:
+
 - [Architecture](docs/architecture.md) for the layer model and the design decisions behind it
 - [TLS](docs/tls.md) for the defaults, custom CA bundles, client certificates, and reading a handshake failure
 - [Request bodies](docs/content.md) for the six body arguments, the content type each implies, and why passing two raises
@@ -395,10 +392,8 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. It lists 
 - [Proxies](docs/proxies.md) for forward proxying, CONNECT tunnels, SOCKS5, proxy credentials, per pattern mounts, and what goes on the wire
 - [Command line client](docs/cli.md) for the flags, what gets printed, and the exit code table
 - [Limitations](docs/limitations.md) for everything that is missing or does less than it should, in one list
-- [Deviations](docs/deviations.md) for every place this behaves differently from httpx2, and why
-- [Async](docs/async.md) for what Mojo's scheduler can and cannot do, measured, and the design that follows from it
-- [Roadmap](docs/roadmap.md) for milestones M0 through M9
 - [Testing](docs/testing.md) for the test layers, the CI matrix, and the local hardware fleet
+- [Roadmap](docs/roadmap.md) for milestones M0 through M9
 
 ## License
 

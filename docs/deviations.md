@@ -1,6 +1,8 @@
-# Deviations from httpx2
+# Compatibility guide
 
 The goal is that code written against httpx2 reads the same here, and that a request going out over the wire has the same bytes in it. Where that is not possible, the difference is deliberate and it is written down on this page rather than left for somebody to find at three in the morning.
+
+The file is still called `deviations.md` because a lot of code comments point at it by name. This is the page to read when you are porting something.
 
 This page is about behaving differently while doing the same job. Things that are simply not here yet, such as the async TLS handshake, are on [limitations.md](limitations.md) instead.
 

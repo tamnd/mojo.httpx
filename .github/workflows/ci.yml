@@ -58,6 +58,30 @@ jobs:
       # catches a renamed argument that nobody re-rendered the page for.
       - run: pixi run docs-check
 
+  docs:
+    name: docs
+    runs-on: ubuntu-24.04
+    # Sixty odd whole programs, each one a full build of the package. It is a
+    # job of its own rather than a step on lint because it takes about as long
+    # as the test suite does, and it runs beside the suite rather than after it.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@194d461b21b6c5717c722ffc597fa91ed2ff29fa # v0.9.1
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          environments: default
+          locked: true
+          cache: true
+      # Every ```mojo block in the docs is a whole program, and this is what
+      # makes that claim worth anything. It caught two names missing from the
+      # public surface the day it was written, both of which made a documented
+      # extension point impossible to use and neither of which was visible by
+      # reading the code.
+      - run: pixi run docex
+
   test:
     name: test ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
@@ -121,7 +145,7 @@ jobs:
   ci-ok:
     name: ci ok
     runs-on: ubuntu-24.04
-    needs: [format, lint, test]
+    needs: [format, lint, docs, test]
     if: always()
     timeout-minutes: 5
     steps:

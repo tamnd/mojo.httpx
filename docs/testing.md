@@ -68,6 +68,23 @@ The order of the page is a table in the tool, grouped by what a reader is trying
 
 The page is committed so that reading the docs needs no toolchain, and `docs-check` runs in `pixi run check` and in the CI lint job. It is what catches a renamed argument that nobody re-rendered the page for.
 
+## The documentation examples
+
+Every ```mojo block in `docs/`, in the README and in CONTRIBUTING is a whole program, and all of them are compiled.
+
+```bash
+pixi run docex                       # all of them
+pixi run docex docs/quickstart.md    # one page
+```
+
+A block with no `main` is a fragment, a signature or a trait declaration or a couple of lines showing a call, and is skipped. Those are deliberate: spelling out a whole program to show one line would bury the line. The count of skipped blocks is printed rather than passed over, so a block that meant to be a program and forgot is visible.
+
+Compiling is the whole check. Running would need a network, a server and a tolerance for flakes, and the mistakes people actually make in a code sample are the ones a type checker already knows about.
+
+It is a CI job of its own rather than a step on lint, because sixty odd full builds of the package take about as long as the test suite does, and running beside the suite costs no wall clock. It is not in `pixi run check` for the same reason.
+
+The value is not theoretical. It found two real defects the day it was written. `is_timeout` and the rest of the error predicates were not exported from `httpx/__init__.mojo`, so the whole error taxonomy was unaskable from outside the package, and `Deadlines` was not exported either, so `Transport` could not be implemented by anyone who did not already live in the package. Both are documented extension points. Neither was visible by reading the code, and both were obvious the moment an example was handed to the compiler.
+
 ## The badssl suite
 
 Every way of getting TLS wrong, one host per way.
