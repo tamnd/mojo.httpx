@@ -120,6 +120,11 @@ def test_decoding_accepts_either_case() raises:
     assert_equal(_dec("%2f"), "/")
     assert_equal(_dec("%2F"), "/")
     assert_equal(_dec("%c3%bf"), "\xff")
+    # `a` and `A` are the first letter digit, which is where a hex table written
+    # as a range gets its boundary wrong, so they are worth naming rather than
+    # leaving to the letters that happen to appear above.
+    assert_equal(_dec("%6a"), "j")
+    assert_equal(_dec("%6A"), "j")
 
 
 def test_encoding_does_not_try_to_guess_about_an_existing_escape() raises:
@@ -180,9 +185,21 @@ def test_a_truncated_escape_is_rejected() raises:
 def test_a_non_hex_escape_is_rejected() raises:
     # Passing these through is what most implementations do, and it is how two
     # of them come to disagree about where a path segment ends.
-    for text in ["%zz", "%2g", "%g2", "% 0", "%%41"]:
-        with assert_raises():
-            _ = _dec(text)
+    #
+    # These go through `percent_decode` rather than `_dec` on purpose. A half
+    # valid escape decodes to a byte that is usually not UTF-8 on its own, so a
+    # test that went on to build a `String` would raise either way and would
+    # pass with the escape check removed entirely. Only one digit is bad in most
+    # of these, since checking both and complaining only when both are wrong is
+    # the easy mistake to make here.
+    for text in ["%zz", "%2g", "%g2", "% 0", "%0 ", "%%41", "%a!", "%!a"]:
+        var raised = False
+        try:
+            _ = percent_decode(Bytes(text).as_span())
+        except e:
+            raised = True
+            assert_true(is_invalid_url(e))
+        assert_true(raised)
 
 
 def test_a_malformed_escape_reports_an_invalid_url() raises:

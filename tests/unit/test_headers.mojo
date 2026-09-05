@@ -170,6 +170,26 @@ def test_surrounding_whitespace_is_not_part_of_the_value() raises:
     var headers = Headers()
     headers.append("Content-Length", "  5 \t")
     assert_equal(headers["content-length"], "5")
+    # One byte on each side as well as two. A trim that stepped over two at a
+    # time would give the same answer for the run above and eat the digit here.
+    headers.append("X-One", " 5 ")
+    assert_equal(headers["x-one"], "5")
+
+
+def test_a_value_that_is_nothing_but_whitespace_trims_to_empty() raises:
+    # Every byte is whitespace, so both ends of the trim walk the whole value and
+    # meet in the middle. That is the position each one has to stop at rather
+    # than take one more step past, and there is nothing left to stop them.
+    var headers = Headers()
+    headers.append("X-Blank", "   ")
+    assert_equal(headers["x-blank"], "")
+    assert_equal(len(headers.raw_value(0)), 0)
+    # The same value as a view into a longer run, so the byte sitting just past
+    # the end is a space rather than whatever follows a literal in memory.
+    var run = _bytes([0x20, 0x20, 0x20, 0x20])
+    headers.append_raw("X-View".as_bytes(), run.as_span()[0:3])
+    assert_equal(headers["x-view"], "")
+    assert_equal(len(headers.raw_value(1)), 0)
 
 
 def test_a_tab_inside_a_value_survives() raises:
@@ -314,11 +334,22 @@ def test_keys_and_items_collapse_duplicates() raises:
     headers.append("Accept", "a")
     headers.append("Accept", "b")
     headers.append("Host", "example.com")
-    assert_equal(len(headers.keys()), 2)
+    # Naming both keys and not just counting them. A collapse that kept the
+    # first name twice and dropped the second gives the same count.
+    var keys = headers.keys()
+    assert_equal(len(keys), 2)
+    assert_equal(keys[0], "accept")
+    assert_equal(keys[1], "host")
     var items = headers.items()
     assert_equal(len(items), 2)
     assert_equal(items[0][0], "accept")
     assert_equal(items[0][1], "a, b")
+    assert_equal(items[1][0], "host")
+    assert_equal(items[1][1], "example.com")
+    var values = headers.values()
+    assert_equal(len(values), 2)
+    assert_equal(values[0], "a, b")
+    assert_equal(values[1], "example.com")
     assert_equal(len(headers.multi_items()), 3)
 
 
@@ -346,6 +377,21 @@ def test_a_value_that_is_not_utf8_falls_back_to_latin1() raises:
     assert_equal(headers["x-name"], "ñ")
 
 
+def test_the_lowest_byte_that_is_not_ascii_counts_as_one() raises:
+    # 0x80 is the first byte outside ASCII and the only one worth naming, since
+    # a detector that tested the wrong side of the boundary would call this
+    # message ASCII and then hand back a value it cannot represent.
+    var value = _bytes([0x80])
+    var headers = Headers()
+    headers.append_raw("X-Name".as_bytes(), value.as_span())
+    assert_equal(headers.encoding(), "iso-8859-1")
+    # And 0x7F is not, but it cannot appear in a value at all, so the byte below
+    # it stands in for the last one that is still ASCII.
+    var plain = Headers()
+    plain.append_raw("X-Name".as_bytes(), _bytes([0x7E]).as_span())
+    assert_equal(plain.encoding(), "ascii")
+
+
 def test_a_pinned_encoding_wins_over_detection() raises:
     var value = _bytes([0xC3, 0xB1])
     var headers = Headers()
@@ -353,6 +399,15 @@ def test_a_pinned_encoding_wins_over_detection() raises:
     headers.set_encoding("iso-8859-1")
     assert_equal(headers.encoding(), "iso-8859-1")
     assert_equal(headers["x-name"], "Ã±")
+
+
+def test_all_three_supported_encodings_are_accepted() raises:
+    # Named one at a time. The check is a chain of comparisons and a chain has
+    # a way of collapsing to whichever end of it the one test happened to use.
+    for name in ["ascii", "utf-8", "iso-8859-1", "ASCII", "UTF-8"]:
+        var headers = Headers()
+        headers.set_encoding(name)
+        assert_equal(headers.encoding(), name)
 
 
 def test_an_encoding_nobody_supports_is_rejected() raises:
@@ -395,6 +450,21 @@ def test_printing_headers_withholds_credentials() raises:
     assert_true("text/html" in text)
 
 
+def test_printing_headers_writes_one_separator_between_each_pair() raises:
+    # Three of them, and the whole string compared rather than searched. A
+    # separator written before the first pair or missed before the second is
+    # not something a substring check can see.
+    var headers = Headers()
+    headers.append("A", "1")
+    headers.append("B", "2")
+    headers.append("C", "3")
+    assert_equal(String(headers), "Headers([(a, 1), (b, 2), (c, 3)])")
+    var one = Headers()
+    one.append("A", "1")
+    assert_equal(String(one), "Headers([(a, 1)])")
+    assert_equal(String(Headers()), "Headers([])")
+
+
 def test_a_copy_does_not_share_state() raises:
     var headers = Headers()
     headers.append("A", "1")
@@ -430,11 +500,17 @@ def test_an_empty_headers_is_falsey_and_reads_as_missing() raises:
     assert_equal(len(headers), 0)
     with assert_raises():
         _ = headers["accept"]
+    # One field line is enough to be truthy. Worth stating, because the empty
+    # case on its own would still pass if the threshold were anywhere above it.
+    headers.append("A", "1")
+    assert_true(Bool(headers))
 
 
 def test_the_token_predicate_agrees_with_the_name_check() raises:
-    # The two are used from different places, so they are checked against each
-    # other rather than each against my memory of the grammar.
+    # The two are used from different places, so both are checked here. Against
+    # the grammar written out rather than against each other, because
+    # `check_name` is built on `is_token_byte` and comparing them would agree
+    # whatever either one did, including agreeing that no digit is a token byte.
     for code in range(0, 256):
         var byte = UInt8(code)
         var one = Bytes()
@@ -444,7 +520,14 @@ def test_the_token_predicate_agrees_with_the_name_check() raises:
             check_name(one.as_span())
         except:
             accepted = False
-        assert_equal(accepted, is_token_byte(byte))
+        var legal = (
+            (code >= ord("0") and code <= ord("9"))
+            or (code >= ord("A") and code <= ord("Z"))
+            or (code >= ord("a") and code <= ord("z"))
+            or (code < 0x80 and chr(code) in "!#$%&'*+-.^_`|~")
+        )
+        assert_equal(is_token_byte(byte), legal)
+        assert_equal(accepted, legal)
 
 
 def test_the_value_check_accepts_exactly_what_it_should() raises:

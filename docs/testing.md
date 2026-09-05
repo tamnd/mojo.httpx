@@ -356,7 +356,7 @@ The parity layer is the direct defence of the project's goal. Each scenario runs
 
 ## Coverage
 
-Mojo has no coverage tooling. Two things substitute for it. The API census says the whole public surface is mentioned somewhere in the tests, and mutation testing says the mentions mean something. Together they are a stronger claim than a coverage percentage, because one guarantees the surface is covered and the other guarantees the assertions bite. The first of them exists and the second is not written yet.
+Mojo has no coverage tooling. Two things substitute for it. The API census says the whole public surface is mentioned somewhere in the tests, and mutation testing says the mentions mean something. Together they are a stronger claim than a coverage percentage, because one guarantees the surface is covered and the other guarantees the assertions bite.
 
 ```bash
 pixi run census         # the public names no test mentions
@@ -371,4 +371,19 @@ Members with no name at a call site are counted apart rather than probed with so
 
 `SKIPPED` in `tools/census/run.py` holds the names allowed to be missing, each with the reason, and an entry that stops being missing fails the run the same way a missing name does. That is the rule the parity suite uses for its accepted differences, for the same reason: an allowance nobody ever has to justify again is how a gate quietly stops gating.
 
-Mutation testing is the other half and is not built. It would perturb operators, boundaries and constants and assert the suite notices. A mutant that survives marks behaviour that is executed but not actually tested, which is the thing line coverage cannot tell you, and it is what would turn the census from a claim about names into a claim about assertions.
+Mutation testing is the other half.
+
+```bash
+pixi run mutate                          # a sample from every parser
+pixi run mutate --list                   # count the sites and run nothing
+pixi run mutate --target url --limit 0   # every mutant in one file
+pixi run mutate --target h2 --workers 5  # five at once, one tree each
+```
+
+It changes one operator, one boundary or one constant in a parser, runs the tests written for that file, and asks whether they went red. A mutant the tests kill is behaviour somebody actually pinned down. A mutant that survives is a line that runs in every test and is asserted about in none of them, which is exactly what a coverage percentage cannot tell you. The mutations are the small ones that a person makes by accident: comparisons swapped in both directions, `and` against `or`, `True` against `False`, plus against minus, and every integer literal bumped by one. Strings and comments are blanked before the search, since changing a message is not changing a decision.
+
+`TARGETS` in `tools/mutate/run.py` lists the files and, beside each one, the filter that selects its tests. Only the parsers are in it. That is where the M9 gate puts the bar, and it is where a silent wrong answer is worst: a header parser that accepts one byte too many is a security bug and a URL parser off by one is a request to the wrong host. The client and the pool are mostly plumbing over these and their failures are loud. Running the whole suite for every mutant would take the answer from whichever unrelated test happened to notice, at forty times the cost, so the filter is narrow and `--confirm` re-runs a survivor against everything before believing it.
+
+The table is 3325 mutation sites across 27 files, and every one of them is a build and a test run, so a full pass is hours rather than something a commit waits for. It is not part of `pixi run check` and not in CI. It runs on the fleet, deliberately, the way the fuzzers do. Without `--limit` it takes a small sample per target drawn with a fixed seed, which is a few minutes and is the version worth running by hand. Each worker gets a copy of the tree rather than a share of one, because a mutant is a file written and then put back and two of them in one directory would be testing each other's changes.
+
+`ACCEPTED` holds the mutants that survive and should, each with a reason, keyed by the line before and after the change so that editing the line retires the entry. A file with the same line written in it twice needs more than that, so there is a longer form with the nearest line above the change in front of the pair, and that is how one `return True` out of four gets an entry while the other three stay on the hook. They are equivalent mutants: `range(18, -1, -6)` and `range(18, -2, -6)` are the same loop, and a negative sentinel that every caller tests with `< 0` is the same sentinel at any negative value. An accepted mutant that starts being killed fails the run, which is the rule the census and the parity suite both use, and for the same reason.
