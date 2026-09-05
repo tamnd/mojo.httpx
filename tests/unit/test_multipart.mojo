@@ -25,6 +25,7 @@ from httpx._content.multipart import (
     DEFAULT_FILE_TYPE,
     FileUpload,
     MultipartData,
+    _collides,
     choose_boundary,
     escape_form_param,
     generate_boundary,
@@ -55,6 +56,26 @@ def test_a_body_with_nothing_in_it_is_just_the_closing_boundary() raises:
     var data = MultipartData()
     assert_false(data)
     assert_equal(rendered(data, "X"), "--X--\r\n")
+
+
+def test_the_count_covers_fields_and_files_together() raises:
+    # What `__bool__` is asking about, and the reason it is a sum. A form of
+    # nothing but files is not an empty form, and a writer that decided it was
+    # would send a body with the files missing.
+    var data = MultipartData()
+    assert_equal(len(data), 0)
+
+    data.add("title", "holiday")
+    assert_equal(len(data), 1)
+    assert_true(Bool(data))
+
+    data.add_file(FileUpload("f", "a.txt", "content"))
+    assert_equal(len(data), 2)
+
+    var files_only = MultipartData()
+    files_only.add_file(FileUpload("f", "a.txt", "content"))
+    assert_equal(len(files_only), 1)
+    assert_true(Bool(files_only))
 
 
 def test_one_text_field() raises:
@@ -278,6 +299,26 @@ def test_a_few_types_that_people_actually_upload() raises:
     assert_equal(guess_type("a.mp4"), "video/mp4")
 
 
+def test_every_alternative_spelling_in_the_table_is_read() raises:
+    # Each of these shares a line with another spelling of the same type, and a
+    # line that only ever gets tested through its first spelling would pass with
+    # the rest of it deleted.
+    assert_equal(guess_type("a.text"), "text/plain")
+    assert_equal(guess_type("a.log"), "text/plain")
+    assert_equal(guess_type("a.htm"), "text/html")
+    assert_equal(guess_type("a.mjs"), "text/javascript")
+    assert_equal(guess_type("a.jpeg"), "image/jpeg")
+    assert_equal(guess_type("a.tgz"), "application/gzip")
+
+
+def test_a_name_that_is_nothing_but_an_extension_still_has_one() raises:
+    # The rule is what follows the last dot, and here the dot is the first
+    # character. Unix calls this a hidden file with no extension, and reading it
+    # that way would need a second rule about where the dot may not be.
+    assert_equal(guess_type(".txt"), "text/plain")
+    assert_equal(guess_type(".png"), "image/png")
+
+
 def test_an_unknown_or_missing_extension_falls_back() raises:
     # Unspecific rather than wrong. The receiving side may act on the type, so
     # guessing `text/plain` for an unknown extension would be worse than saying
@@ -298,6 +339,31 @@ def test_a_boundary_is_thirty_two_hexadecimal_characters() raises:
         var digit = byte >= UInt8(ord("0")) and byte <= UInt8(ord("9"))
         var letter = byte >= UInt8(ord("a")) and byte <= UInt8(ord("f"))
         assert_true(digit or letter)
+
+
+def test_both_halves_of_every_random_byte_reach_the_boundary() raises:
+    # Sixteen bytes become thirty two characters, and each character is one
+    # nibble. Take the wrong four bits for either half and half the entropy is
+    # gone while the boundary still looks exactly right, so the shape check
+    # above would not notice. Every hex digit has to turn up in both the even
+    # and the odd positions. With this many draws a digit missing by chance is
+    # not something that happens.
+    var high = List[Bool](length=16, fill=False)
+    var low = List[Bool](length=16, fill=False)
+    for _ in range(64):
+        var boundary = generate_boundary()
+        var bytes = boundary.as_bytes()
+        for i in range(32):
+            var value = Int(bytes[i]) - ord("0")
+            if bytes[i] >= UInt8(ord("a")):
+                value = Int(bytes[i]) - ord("a") + 10
+            if i % 2 == 0:
+                high[value] = True
+            else:
+                low[value] = True
+    for i in range(16):
+        assert_true(high[i])
+        assert_true(low[i])
 
 
 def test_two_boundaries_are_not_the_same() raises:
@@ -321,6 +387,47 @@ def test_a_chosen_boundary_does_not_appear_in_the_data() raises:
     assert_true(boundary not in "some value")
     assert_true(boundary not in "some content")
     assert_true(boundary not in rendered(data, "OTHER"))
+
+
+def test_a_boundary_already_in_the_data_is_a_collision() raises:
+    # `choose_boundary` reaches this only by an accident with 128 bits against
+    # it, so the check itself is tested here rather than through it. All five of
+    # these end up in the body, and a boundary in any of them splits a part that
+    # was never sent. The needle is the whole field so that it sits at offset
+    # zero, which is where a search result compared the wrong way stops counting
+    # as a hit.
+    var names = MultipartData()
+    names.add("XX", "value")
+    assert_true(_collides(names, "XX"))
+
+    var values = MultipartData()
+    values.add("name", "XX")
+    assert_true(_collides(values, "XX"))
+
+    var fields = MultipartData()
+    fields.add_file(FileUpload("XX", "a.txt", "content"))
+    assert_true(_collides(fields, "XX"))
+
+    var filenames = MultipartData()
+    filenames.add_file(FileUpload("f", "XX", "content"))
+    assert_true(_collides(filenames, "XX"))
+
+    var contents = MultipartData()
+    contents.add_file(FileUpload("f", "a.txt", "XX"))
+    assert_true(_collides(contents, "XX"))
+
+
+def test_a_collision_counts_wherever_in_the_value_it_falls() raises:
+    var data = MultipartData()
+    data.add("name", "a XX b")
+    assert_true(_collides(data, "XX"))
+
+
+def test_a_boundary_absent_from_the_data_does_not_collide() raises:
+    var data = MultipartData()
+    data.add("name", "value")
+    data.add_file(FileUpload("f", "a.txt", "content"))
+    assert_false(_collides(data, "XX"))
 
 
 def test_the_boundary_never_appears_inside_a_part() raises:

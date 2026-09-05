@@ -165,6 +165,15 @@ fuzz = "python tools/fuzz/h1_diff.py"
 # block taken on its own.
 fuzz-hpack = "python tools/fuzz/hpack_diff.py"
 
+# The other half of the census: one operator or one constant in a parser
+# changed, and the tests for that file expected to go red. A mutant nothing
+# notices is a line no test asserts about, which is what a green suite and a
+# coverage percentage both hide. Every mutant is a build and a test run, so the
+# whole table is hours and it runs on the fleet rather than in `check` or in CI.
+# `--target` picks one file and `--limit 0` takes every mutant instead of the
+# default sample. See docs/testing.md.
+mutate = "python tools/mutate/run.py"
+
 # The same scenarios through this client and through httpx2, comparing the bytes
 # that went out and what each one made of the answer. Needs httpx2 installed, so
 # it is `pixi run -e parity parity`. Not part of `check` and not in CI, for the

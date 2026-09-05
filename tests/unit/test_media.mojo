@@ -96,6 +96,21 @@ def test_an_unterminated_quote_takes_the_rest() raises:
     assert_equal(param('form-data; filename="a.txt', "filename"), "a.txt")
 
 
+def test_an_escaped_quote_does_not_close_the_value() raises:
+    # The last two bytes are a backslash and a quote, so the quote is escaped
+    # and the value runs off the end of the header. Reading it as the closing
+    # quote instead gives back a filename one character short and a header that
+    # is suddenly well formed, which is the wrong answer in the quieter way.
+    assert_equal(param('form-data; filename="a\\"', "filename"), 'a"')
+
+
+def test_a_backslash_ending_a_media_type_escapes_nothing() raises:
+    # There is no next character for it to escape, so it is a literal. The check
+    # that makes it one is also what keeps the parser from reading a byte past
+    # the end of the header.
+    assert_equal(param('form-data; filename="a\\', "filename"), "a\\")
+
+
 def test_junk_after_a_closing_quote_is_skipped() raises:
     # A malformed header should not be read as holding a parameter nobody wrote,
     # so everything between the closing quote and the next semicolon goes.
@@ -103,6 +118,28 @@ def test_junk_after_a_closing_quote_is_skipped() raises:
     assert_equal(media.param("charset").value(), "utf-8")
     assert_equal(media.param("boundary").value(), "X")
     assert_equal(len(media.names), 2)
+
+
+def test_junk_that_looks_like_a_parameter_is_skipped_too() raises:
+    # The junk above has no equals sign in it, so it would be dropped anyway as
+    # a parameter with no value. This one would be kept, and it is the case that
+    # matters: `evil=1` after a closing quote is somebody trying to add a
+    # parameter that the header does not actually contain.
+    var media = parsed('text/html; charset="utf-8" evil=1; boundary=X')
+    assert_equal(media.param("charset").value(), "utf-8")
+    assert_equal(media.param("boundary").value(), "X")
+    assert_false(media.has_param("evil"))
+    assert_equal(len(media.names), 2)
+
+
+def test_a_parameter_needs_no_space_after_the_semicolon() raises:
+    # The space is conventional rather than required, and writing the parser
+    # against headers that all have one is how the separator ends up being read
+    # as two characters.
+    var media = parsed("text/html;charset=utf-8;boundary=X")
+    assert_equal(media.mime, "text/html")
+    assert_equal(media.param("charset").value(), "utf-8")
+    assert_equal(media.param("boundary").value(), "X")
 
 
 def test_several_parameters_are_all_kept() raises:
@@ -132,6 +169,17 @@ def test_a_parameter_with_no_value_is_not_stored() raises:
     assert_false(parsed("text/html; charset").has_param("charset"))
     assert_false(parsed("text/html; charset; boundary=X").has_param("charset"))
     assert_true(parsed("text/html; charset; boundary=X").has_param("boundary"))
+
+
+def test_a_parameter_with_an_empty_value_is_stored_as_empty() raises:
+    # Different from the case above. `charset` is a parameter the server never
+    # finished writing, `charset=` is one it wrote as empty, and the equals sign
+    # is the only thing that says which happened. The end of the header falls
+    # exactly where the value would start, which is the position everything that
+    # walks forward from the equals sign has to stop at.
+    assert_true(parsed("text/html; charset=").has_param("charset"))
+    assert_equal(param("text/html; charset=", "charset"), "")
+    assert_equal(param("text/html; charset=; boundary=X", "boundary"), "X")
 
 
 def test_an_empty_header_parses_to_nothing() raises:

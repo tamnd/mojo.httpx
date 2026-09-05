@@ -49,6 +49,11 @@ def test_domain_matching_needs_a_dot() raises:
     assert_false(domain_matches("example.com.evil.com", "example.com"))
     assert_false(domain_matches("example.com", "www.example.com"))
     assert_false(domain_matches("example.com", ""))
+    # Only an empty domain is turned away for being empty. A domain of one byte
+    # is still a domain, and a host under it matches on the same dot rule as any
+    # other.
+    assert_true(domain_matches("a.m", "m"))
+    assert_false(domain_matches("am", "m"))
 
 
 def test_domain_matching_ignores_case() raises:
@@ -61,6 +66,10 @@ def test_an_address_only_matches_itself() raises:
     assert_true(is_ip_address("2001:db8::1"))
     assert_false(is_ip_address("example.com"))
     assert_false(is_ip_address("1.2.3.4.example.com"))
+    # A host with nothing in it is not an address. The check is about being
+    # empty rather than about being short, so one digit still is one.
+    assert_false(is_ip_address(""))
+    assert_true(is_ip_address("5"))
     # Without the address check this would be true and a response from an
     # address could set a cookie for the fictional domain `3.4`.
     assert_false(domain_matches("1.2.3.4", "3.4"))
@@ -153,6 +162,39 @@ def test_same_site_distinguishes_unset_from_none() raises:
     )
 
 
+def test_the_four_same_site_values_are_four_different_things() raises:
+    # Each one has to be distinct from all the others, since the whole reason
+    # `UNSET` exists is that it says something `NONE` does not. Written against
+    # both operators because a type that answers `==` correctly and `!=` by the
+    # same logic reversed is a type nobody has actually compared.
+    var each = [SameSite.UNSET, SameSite.STRICT, SameSite.LAX, SameSite.NONE]
+    for i in range(len(each)):
+        for j in range(len(each)):
+            if i == j:
+                assert_true(each[i] == each[j])
+                assert_false(each[i] != each[j])
+            else:
+                assert_false(each[i] == each[j])
+                assert_true(each[i] != each[j])
+
+
+def test_same_site_renders_the_spelling_the_header_uses() raises:
+    # These strings go out on the wire in a `Set-Cookie` a caller writes, and
+    # they come back to a caller reading `name()` in a log line, so the exact
+    # spelling is part of the API rather than a detail.
+    assert_equal(SameSite.STRICT.name(), "Strict")
+    assert_equal(SameSite.LAX.name(), "Lax")
+    assert_equal(SameSite.NONE.name(), "None")
+    assert_equal(SameSite.UNSET.name(), "Unset")
+
+
+def test_printing_a_cookie_names_its_same_site_only_when_it_has_one() raises:
+    # An attribute that was never sent should not appear as `SameSite=Unset`,
+    # which reads like a value the server chose.
+    assert_true("SameSite=Lax" in String(_parse("foo=bar; SameSite=Lax")))
+    assert_true("SameSite" not in String(_parse("foo=bar")))
+
+
 def test_max_age_beats_expires() raises:
     # Both present, and Max-Age wins however they are ordered. It is a duration
     # rather than a date, so it survives a client whose clock is wrong.
@@ -165,6 +207,52 @@ def test_max_age_beats_expires() raises:
 def test_max_age_of_zero_or_less_expires_immediately() raises:
     assert_true(_parse("foo=bar; Max-Age=0").is_expired(NOW))
     assert_true(_parse("foo=bar; Max-Age=-1").is_expired(NOW))
+
+
+def test_max_age_counts_forward_from_now_and_zero_does_not() raises:
+    # The boundary is between zero and one, and both sides of it matter. Zero is
+    # how a server deletes a cookie, so it has to land in the past rather than
+    # exactly on the clock, and one second has to be a second of life rather
+    # than a deletion.
+    assert_equal(_parse("foo=bar; Max-Age=1").expires.value(), NOW + 1)
+    assert_false(_parse("foo=bar; Max-Age=1").is_expired(NOW))
+    assert_true(_parse("foo=bar; Max-Age=0").expires.value() < NOW)
+
+
+def test_a_max_age_that_fits_is_kept_rather_than_saturated() raises:
+    # The overflow guard has to fire on what would actually overflow and not a
+    # step before it, since firing early turns a long lived cookie into one with
+    # a different expiry than the server asked for. Nine followed by eighteen
+    # zeros is the largest round number that still fits.
+    var huge = _parse("foo=bar; Max-Age=9000000000000000000")
+    assert_equal(huge.expires.value(), NOW + 9000000000000000000)
+
+
+def test_a_header_that_begins_with_a_semicolon_is_not_a_cookie() raises:
+    # The name and value pair is whatever comes before the first semicolon, and
+    # here that is nothing. Reading past the semicolon instead would take an
+    # attribute for the pair and store a cookie named `; foo`.
+    assert_false(Bool(parse_set_cookie("; foo=bar", "example.com", "/", NOW)))
+    assert_false(Bool(parse_set_cookie(";", "example.com", "/", NOW)))
+
+
+def test_an_attribute_value_of_one_byte_is_still_a_value() raises:
+    # Both of these guards ask whether the attribute had a value at all, and a
+    # value of one byte is the shortest thing that is not nothing.
+    var scoped = parse_set_cookie("foo=bar; Domain=m", "a.m", "/", NOW)
+    var domain = scoped.take()
+    assert_equal(domain.domain, "m")
+    assert_false(domain.host_only)
+    # The request path is deeper than the cookie path on purpose. Dropping the
+    # `Path=/` would fall back to the default, which here is `/a` rather than
+    # `/`, so the two answers are visibly different.
+    var rooted = parse_set_cookie("foo=bar; Path=/", "example.com", "/a/b", NOW)
+    assert_equal(rooted.take().path, "/")
+
+
+def test_a_parsed_cookie_is_not_http_only_unless_the_header_says_so() raises:
+    assert_false(_parse("foo=bar").http_only)
+    assert_true(_parse("foo=bar; HttpOnly").http_only)
 
 
 def test_a_cookie_with_no_expiry_is_a_session_cookie() raises:
@@ -404,6 +492,141 @@ def test_clearing_can_be_narrowed_to_one_domain() raises:
     assert_equal(cookies["two"], "2")
     cookies.clear()
     assert_equal(len(cookies), 0)
+
+
+def test_a_cookie_built_by_hand_takes_the_documented_defaults() raises:
+    # These are the defaults a caller gets by writing nothing, so they are part
+    # of the signature rather than an implementation choice. Host only and not
+    # HttpOnly are the safe directions: the first scopes the cookie to exactly
+    # the host it names, the second leaves it visible to a caller reading it
+    # back, which is what somebody constructing a cookie by hand expects.
+    var cookie = Cookie("session", "abc")
+    assert_true(cookie.host_only)
+    assert_false(cookie.http_only)
+    assert_false(cookie.secure)
+    assert_equal(cookie.path, "/")
+    assert_equal(cookie.creation, 0)
+    assert_true(cookie.same_site == SameSite.UNSET)
+    assert_false(Bool(cookie.expires))
+
+
+def test_a_cookie_is_expired_at_the_instant_it_names() raises:
+    # The expiry is the last moment the cookie is gone rather than the last
+    # moment it is alive. One second either side of it, and the instant itself.
+    var cookie = Cookie("session", "abc", expires=NOW)
+    assert_false(cookie.is_expired(NOW - 1))
+    assert_true(cookie.is_expired(NOW))
+    assert_true(cookie.is_expired(NOW + 1))
+
+
+def test_an_empty_jar_is_false_and_a_full_one_is_true() raises:
+    # `if jar:` is the shortest way to ask whether there is anything to send,
+    # and a jar that is always true would have every caller sending a header
+    # with nothing in it.
+    var jar = CookieJar()
+    assert_false(Bool(jar))
+    jar.store(Cookie("session", "abc", domain="example.com"))
+    assert_true(Bool(jar))
+    var cookies = Cookies()
+    assert_false(Bool(cookies))
+    cookies.set("session", "abc")
+    assert_true(Bool(cookies))
+
+
+def test_removing_reports_whether_it_removed_anything() raises:
+    # The answer is what tells a caller apart from a caller who asked for a
+    # cookie that was never there, and `__delitem__` raises on the strength of
+    # it, so it cannot be the same answer both ways.
+    var jar = CookieJar()
+    jar.store(Cookie("session", "abc", domain="example.com"))
+    assert_false(jar.remove("other", "example.com", "/"))
+    assert_false(jar.remove("session", "other.com", "/"))
+    assert_equal(len(jar), 1)
+    assert_true(jar.remove("session", "example.com", "/"))
+    assert_equal(len(jar), 0)
+
+
+def test_a_header_that_is_not_a_cookie_at_all_is_not_stored() raises:
+    # `set_cookie` returns whether it stored one, and `extract` counts with it,
+    # so a header the parser rejected has to come back false rather than being
+    # counted as a cookie that stuck.
+    var jar = CookieJar()
+    var url = URL("https://example.com/")
+    assert_false(jar.set_cookie(url, "novalue", NOW))
+    assert_equal(len(jar), 0)
+
+
+def test_reading_can_be_narrowed_to_one_path() raises:
+    # The same name under two paths is ambiguous until the lookup says which
+    # path it meant, and then it is not.
+    var cookies = Cookies()
+    cookies.set("session", "shallow", path="/")
+    cookies.set("session", "deep", path="/admin")
+    with assert_raises():
+        _ = cookies["session"]
+    assert_equal(cookies.get("session", path="/"), "shallow")
+    assert_equal(cookies.get("session", path="/admin"), "deep")
+
+
+def test_a_cookie_whose_value_is_empty_still_reads_back() raises:
+    # An empty value is a value. Reading it must not be mistaken for the name
+    # being absent, which is the one case where the two checks in `__getitem__`
+    # disagree with each other.
+    var cookies = Cookies()
+    cookies.set("session", "")
+    assert_equal(cookies["session"], "")
+    with assert_raises():
+        _ = cookies["nothing"]
+
+
+def test_deleting_can_be_narrowed_to_a_domain_or_a_path() raises:
+    # Deleting by name alone takes every copy, which is already covered. This is
+    # the narrowed form, where the point is that the copies not named are left
+    # exactly where they were.
+    var cookies = Cookies()
+    cookies.set("session", "a", domain="a.example.com")
+    cookies.set("session", "b", domain="b.example.com")
+    assert_true(cookies.delete("session", domain="a.example.com"))
+    assert_equal(len(cookies), 1)
+    assert_equal(cookies["session"], "b")
+    var paths = Cookies()
+    paths.set("session", "shallow", path="/")
+    paths.set("session", "deep", path="/admin")
+    assert_true(paths.delete("session", path="/admin"))
+    assert_equal(len(paths), 1)
+    assert_equal(paths["session"], "shallow")
+    assert_false(paths.delete("session", path="/admin"))
+
+
+def test_clearing_can_be_narrowed_to_one_path() raises:
+    var cookies = Cookies()
+    cookies.set("one", "1", path="/")
+    cookies.set("two", "2", path="/admin")
+    cookies.clear(path="/admin")
+    assert_equal(len(cookies), 1)
+    assert_equal(cookies["one"], "1")
+
+
+def test_cookies_can_be_built_from_a_list_of_pairs() raises:
+    # The pair is name then value, in that order, which is the one thing this
+    # constructor can get wrong.
+    var items = List[Tuple[String, String]]()
+    items.append((String("session"), String("abc")))
+    items.append((String("theme"), String("dark")))
+    var cookies = Cookies(items)
+    assert_equal(len(cookies), 2)
+    assert_equal(cookies["session"], "abc")
+    assert_equal(cookies["theme"], "dark")
+
+
+def test_a_url_with_no_path_still_gets_its_cookies() raises:
+    # A request written without a path is a request for the root, and a cookie
+    # scoped to `/` belongs on it.
+    var cookies = Cookies()
+    cookies.set("session", "abc", domain="example.com")
+    assert_equal(
+        cookies.jar.header_for(URL("https://example.com"), NOW), "session=abc"
+    )
 
 
 def test_update_merges_another_set() raises:

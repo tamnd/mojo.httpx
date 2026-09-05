@@ -9,6 +9,7 @@ which the corpus does not say anywhere.
 
 from std.testing import assert_equal, assert_false, assert_true
 
+from httpx._util._psl_data import PSL_RULES
 from httpx._util.idna import encode_host
 from httpx._util.psl import (
     is_public_suffix,
@@ -86,6 +87,65 @@ def test_the_reference_corpus_passes() raises:
     # The corpus is around eighty cases. Anything far below that means the
     # parsing above stopped matching the file and the run proved nothing.
     assert_true(checked > 70)
+
+
+def test_every_rule_in_the_table_is_reachable() raises:
+    # The lookup binary searches the blob and walks back to the newline before
+    # wherever it lands, so a rule is found through its neighbours rather than
+    # through an offset of its own. That makes the first and last lines the ones
+    # the walk has to stop at, and neither the corpus nor a case written by hand
+    # names either of them. This asks the table about every rule it holds.
+    var plain = 0
+    var wildcards = 0
+    var exceptions = 0
+    for rule in String(PSL_RULES).split("\n"):
+        if rule.startswith("!"):
+            # An exception pulls one name back out of the wildcard above it, so
+            # the name is registrable rather than a suffix of its own.
+            var body = rule[byte = 1 : rule.byte_length()]
+            assert_false(is_public_suffix(body.as_bytes()))
+            exceptions += 1
+        elif rule.startswith("*."):
+            # A wildcard makes every name directly under it a suffix. The label
+            # put under it is nonsense on purpose, so that no exception rule in
+            # the list can be naming the same one.
+            var under = String("zzqqx.", rule[byte = 2 : rule.byte_length()])
+            assert_true(is_public_suffix(under.as_bytes()))
+            wildcards += 1
+        else:
+            assert_true(is_public_suffix(rule.as_bytes()))
+            plain += 1
+    assert_equal(plain + wildcards + exceptions, rule_count())
+    assert_true(wildcards > 0)
+    assert_true(exceptions > 0)
+
+
+def test_an_empty_host_has_no_suffix_to_speak_of() raises:
+    # Both of these are public and a caller reaches them without going through
+    # `registrable_domain`, which is the one that turns an empty name away
+    # earlier. The offset has to stay something the caller can slice with, and
+    # the answer has to be no, since an empty name is not a suffix.
+    var empty = String("")
+    assert_equal(public_suffix_start(empty.as_bytes()), 0)
+    assert_false(is_public_suffix(empty.as_bytes()))
+
+
+def test_a_one_byte_host_is_an_unknown_top_level_domain() raises:
+    # Nothing in the list is one byte long, so this falls to the implicit `*`
+    # and the whole host is the suffix. Worth naming because one byte is the
+    # shortest host the walk over the labels ever gets handed.
+    assert_true(is_public_suffix("x".as_bytes()))
+    assert_equal(public_suffix_start("x".as_bytes()), 0)
+    assert_equal(_registrable("a.x"), "a.x")
+
+
+def test_an_empty_label_matches_no_rule() raises:
+    # A trailing dot leaves an empty last label. No rule is empty, so the lookup
+    # for one has to come back no rather than match whatever the search last
+    # landed on. Matching would make `com.` a public suffix, and then a cookie
+    # for it would be dropped for every site under `com`.
+    assert_false(is_public_suffix("com.".as_bytes()))
+    assert_equal(public_suffix_start("com.".as_bytes()), 4)
 
 
 def test_a_bare_suffix_has_no_registrable_domain() raises:
