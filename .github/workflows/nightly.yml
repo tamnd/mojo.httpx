@@ -35,10 +35,10 @@ jobs:
           - name: linux-arm64
             runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.0.0
         with:
           persist-credentials: false
-      - uses: prefix-dev/setup-pixi@194d461b21b6c5717c722ffc597fa91ed2ff29fa # v0.9.1
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: v0.78.0
           environments: nightly
@@ -53,7 +53,7 @@ jobs:
         id: result
         if: always()
         run: echo "failed=${{ steps.run.outcome == 'failure' }}" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: nightly-log-${{ matrix.name }}
@@ -70,7 +70,7 @@ jobs:
       issues: write
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.0.0
         with:
           persist-credentials: false
       - name: Write the issue body
@@ -84,7 +84,7 @@ jobs:
             echo "is coming that this project needs to handle. Check the logs on the run,"
             echo "then re-run the toolchain probes to see which assumption moved."
           } > issue.md
-      - uses: peter-evans/create-issue-from-file@e8ef132d6df98ed982188e460ebb3b5d4ef3a9cd # v5.0.1
+      - uses: peter-evans/create-issue-from-file@fca9117c27cdc29c6c4db3b86c48e4115a786710 # v6.0.0
         with:
           title: "Nightly Mojo build is failing"
           content-filepath: issue.md
